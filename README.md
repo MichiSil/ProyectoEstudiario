@@ -116,15 +116,61 @@ cp .env.example .env        # variables locales; los secretos reales nunca se su
 docker compose up --build
 ```
 
+La primera vez tarda unos minutos porque descarga las imágenes y compila los servicios. Las bases, los usuarios de cada servicio, el bucket de MinIO y el core de Solr se crean solos.
+
 Para detenerlo:
 
 ```bash
 docker compose down         # agregar -v para borrar también los datos locales
 ```
 
-> Los servicios se van incorporando entrega a entrega. Esta sección se actualiza junto con el `docker-compose.yml` cada vez que se suma un componente nuevo, e indicará los puertos y URLs de acceso.
+### Puertos y URLs
 
-> Las credenciales del proveedor de IA y del servidor de mail se configuran sólo en el `.env` local y nunca se suben al repositorio.
+**Servicios propios**
+
+| Componente | URL local | Para qué |
+|---|---|---|
+| api-gateway | http://localhost:8080 | Punto de entrada del frontend |
+| users-service | http://localhost:8081 | Cuentas y JWT |
+| planner-service | http://localhost:8082 | Plan de estudio y capacidad publicada para otros grupos |
+| forum-service | http://localhost:8083 | Foro de resúmenes |
+| notification-service | http://localhost:8084 | Mails de moderación |
+| Mock de la capacidad (Prism) | http://localhost:4010 | Contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
+
+Cada servicio responde `GET /health`. Por ejemplo:
+
+```bash
+curl http://localhost:8082/health
+```
+
+**Almacenamiento y mensajería**
+
+| Componente | Puerto | Consola web | Usuario y contraseña locales |
+|---|---|---|---|
+| PostgreSQL (bases `users` y `planner`) | 5432 | — | Variables `POSTGRES_*` del `.env` |
+| MongoDB (bases `forum` y `notifications`) | 27017 | — | Variables `MONGO_ROOT_*` del `.env` |
+| MinIO (bucket `summaries`) | 9000 | http://localhost:9001 | Variables `MINIO_ROOT_*` del `.env` |
+| RabbitMQ | 5672 | http://localhost:15672 | Variables `RABBITMQ_*` del `.env` |
+| Apache Solr (core `summaries`) | 8983 | http://localhost:8983/solr | — |
+| Memcached | 11211 | — | — |
+
+Los puertos de las bases y del broker se exponen sólo para inspeccionarlos durante el desarrollo: los servicios se conectan entre sí por la red interna de Docker. Si algún puerto ya está ocupado en tu máquina, cambiá el número de la izquierda en el `docker-compose.yml` (por ejemplo, `"5433:5432"`).
+
+Para levantar sólo el mock de la capacidad publicada:
+
+```bash
+docker compose up planner-mock
+```
+
+> Las credenciales del proveedor de IA y del servidor de mail se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
+
+### Estructura del repositorio
+
+| Carpeta | Contenido |
+|---|---|
+| `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), cada uno con su `Dockerfile` |
+| `deploy/` | Scripts que inicializan PostgreSQL y MongoDB con una base y un usuario por servicio |
+| `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
 
 ### Entorno desplegado
 
