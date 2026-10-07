@@ -1,0 +1,14 @@
+{
+  "exam": {
+    "date": "2026-10-28",
+    "difficulty": 7,
+    "topics": []
+  },
+  "availability": {
+    "weeklySlots": [
+      { "weekday": "lunes", "startTime": "18:00", "endTime": "9pm" }
+    ],
+    "maxDailyMinutes": 120,
+    "preferredSessionMinutes": 90
+  }
+}

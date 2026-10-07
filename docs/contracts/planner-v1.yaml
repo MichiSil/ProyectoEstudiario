@@ -1,0 +1,888 @@
+openapi: 3.0.3
+
+info:
+  title: Estudiario – Generar un plan de estudio
+  version: 1.0.0
+  description: |
+    Capacidad publicada por **Estudiario** para que el sistema de otro grupo genere
+    un **plan de estudio** a partir de los datos de un examen y de una disponibilidad
+    horaria (RF-13 del [SPEC](../../SPEC.md)).
+
+    La expone directamente **planner-service** (no pasa por el api-gateway de Estudiario).
+    La guía de uso, la política de versionado y los ejemplos con `curl` están en
+    [`docs/contracts/README.md`](README.md). Las decisiones de diseño están en el
+    [ADR-008](../adr/ADR-008-contrato-propio.md).
+
+    ## Qué devuelve
+
+    Una **propuesta** de sesiones de estudio (fecha, horario, duración, tema, objetivo y
+    explicación). Es sólo una sugerencia: Estudiario **no guarda ni reserva** las sesiones
+    del consumidor (RN-08) y **no conoce su calendario**, así que cada pedido es
+    independiente. Evitar choques con otras actividades del usuario es responsabilidad
+    del sistema consumidor.
+
+    ## Garantías de cada propuesta
+
+    Toda respuesta `200` cumple siempre, sin importar si la armó la IA o el motor de reglas:
+
+    1. **Ventana de estudio (RN-06).** Las sesiones caen entre `window.from` y `window.to`.
+       `window.to` es el día anterior al examen y `window.from` es el más tardío entre
+       `startDate` y la fecha del examen menos la anticipación según la dificultad:
+       fácil 5 días, media 10, difícil 15 y muy difícil 21.
+    2. **Dentro de la disponibilidad.** Cada sesión empieza y termina dentro de una de las
+       franjas semanales enviadas, en la zona horaria `timezone`.
+    3. **Sin superposiciones.** Ninguna sesión de la propuesta se superpone con otra.
+    4. **Capacidad diaria.** La suma de minutos de un mismo día no supera `maxDailyMinutes`.
+    5. **Duración fija.** Cada sesión dura `preferredSessionMinutes`, o `maxDailyMinutes`
+       si es menor. En v1 no se proponen sesiones más cortas.
+    6. **Cantidad y repaso (RN-07).** La cantidad de sesiones crece con la dificultad y con
+       la cantidad de temas. Las sesiones están en orden cronológico y, desde 3 sesiones,
+       las últimas son de `simulacro` o `repaso`.
+
+    Si la IA no responde a tiempo o propone algo que no cumple estas garantías, la
+    propuesta se arma con el motor de reglas (RN-09): la respuesta sigue siendo `200`,
+    con `generatedBy: reglas` y la advertencia `AI_FALLBACK`.
+
+    ## Convenciones
+
+    - Fechas en formato `YYYY-MM-DD` y horas en formato `HH:mm` (24 h), siempre **locales**
+      a la zona horaria `timezone` del pedido.
+    - Los errores siguen el formato *Problem Details* (RFC 9457) con un `code` estable que
+      es el que hay que usar para decidir qué hacer.
+    - **Lector tolerante:** el consumidor debe ignorar los campos que no conozca y aceptar
+      valores nuevos en `warnings[].code` y `sessions[].kind`. Agregarlos no es un cambio
+      incompatible (ver la política de versionado).
+  contact:
+    name: Grupo Estudiario – Arquitectura de Software 2026 (UCC)
+    url: https://github.com/MichiSil/ProyectoEstudiario
+
+servers:
+  - url: http://localhost:4010
+    description: Mock (Prism) generado a partir de este contrato
+  - url: http://localhost:8082
+    description: planner-service local (docker compose)
+
+tags:
+  - name: Plan de estudio
+    description: Generación de propuestas de plan de estudio
+  - name: Estado
+    description: Disponibilidad del servicio
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /v1/study-plan-proposals:
+    post:
+      tags: [Plan de estudio]
+      operationId: generateStudyPlan
+      summary: Generar una propuesta de plan de estudio
+      description: |
+        Recibe un examen y una disponibilidad y devuelve las sesiones propuestas.
+
+        **Idempotencia.** El encabezado `Idempotency-Key` es obligatorio. Si se repite un
+        pedido con la misma clave y el mismo cuerpo dentro de las 24 h, se devuelve
+        exactamente la misma respuesta (mismo `proposalId`) con el encabezado
+        `Idempotent-Replayed: true`, sin volver a llamar a la IA ni consumir cupo de uso.
+        Así un reintento por timeout nunca genera una propuesta distinta. Sólo se guardan las
+        respuestas `200` y `422`; los errores `5xx` no se guardan, para que un reintento pueda
+        tener éxito.
+
+        **Tiempo de respuesta.** El servicio responde en menos de 10 s en el peor caso
+        (si la IA no contesta, recurre al motor de reglas). Se recomienda un timeout de
+        cliente de 12 s.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GeneratePlanRequest'
+            examples:
+              parcialDificil:
+                summary: Parcial de una materia difícil, con todos los campos
+                value:
+                  exam:
+                    subjectName: Análisis Matemático II
+                    type: parcial
+                    date: '2026-10-28'
+                    difficulty: 3
+                    topics:
+                      - Integrales dobles
+                      - Integrales triples
+                      - Cambio de variables
+                  availability:
+                    weeklySlots:
+                      - { weekday: lunes, startTime: '18:00', endTime: '21:00' }
+                      - { weekday: miercoles, startTime: '18:00', endTime: '21:00' }
+                      - { weekday: jueves, startTime: '18:00', endTime: '21:00' }
+                      - { weekday: sabado, startTime: '10:00', endTime: '13:00' }
+                    maxDailyMinutes: 120
+                    preferredSessionMinutes: 90
+                  timezone: America/Argentina/Cordoba
+                  startDate: '2026-10-08'
+              minimo:
+                summary: Sólo los campos obligatorios
+                value:
+                  exam:
+                    date: '2026-11-18'
+                    difficulty: 1
+                    topics: [Normalización]
+                  availability:
+                    weeklySlots:
+                      - { weekday: martes, startTime: '20:00', endTime: '22:00' }
+                    maxDailyMinutes: 60
+                    preferredSessionMinutes: 60
+      responses:
+        '200':
+          description: |
+            Propuesta generada. También es la respuesta a un reintento con la misma
+            `Idempotency-Key` (en ese caso incluye `Idempotent-Replayed: true`).
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/X-Correlation-Id'
+            Idempotent-Replayed:
+              $ref: '#/components/headers/Idempotent-Replayed'
+            RateLimit-Limit:
+              $ref: '#/components/headers/RateLimit-Limit'
+            RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimit-Remaining'
+            RateLimit-Reset:
+              $ref: '#/components/headers/RateLimit-Reset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudyPlanProposal'
+              examples:
+                generadoPorIA:
+                  summary: Propuesta armada por la IA
+                  value:
+                    proposalId: 0f6c2a5e-6d1b-4c1e-9a43-2b7f0d4e8a11
+                    generatedBy: ia
+                    generatedAt: '2026-10-07T21:15:42Z'
+                    timezone: America/Argentina/Cordoba
+                    exam:
+                      subjectName: Análisis Matemático II
+                      type: parcial
+                      date: '2026-10-28'
+                      difficulty: 3
+                    window:
+                      from: '2026-10-13'
+                      to: '2026-10-27'
+                      anticipationDays: 15
+                    totals:
+                      sessionCount: 7
+                      totalMinutes: 630
+                    explanation: >-
+                      Análisis Matemático II es difícil y entran 3 temas, así que el estudio
+                      empieza 15 días antes del parcial con 7 sesiones: primero teoría, después
+                      ejercicios y al final un simulacro y un repaso.
+                    sessions:
+                      - order: 1
+                        date: '2026-10-14'
+                        startTime: '18:00'
+                        endTime: '19:30'
+                        durationMinutes: 90
+                        topic: Integrales dobles
+                        objective: Leer teoría de integrales dobles
+                        kind: teoria
+                        explanation: Es la base de los otros dos temas, por eso va primero.
+                      - order: 2
+                        date: '2026-10-15'
+                        startTime: '18:00'
+                        endTime: '19:30'
+                        durationMinutes: 90
+                        topic: Integrales triples
+                        objective: Leer teoría de integrales triples
+                        kind: teoria
+                        explanation: Extiende lo visto el día anterior a tres variables.
+                      - order: 3
+                        date: '2026-10-17'
+                        startTime: '10:00'
+                        endTime: '11:30'
+                        durationMinutes: 90
+                        topic: Cambio de variables
+                        objective: Leer teoría de cambio de variables
+                        kind: teoria
+                        explanation: Completa la teoría antes de pasar a la práctica.
+                      - order: 4
+                        date: '2026-10-19'
+                        startTime: '18:00'
+                        endTime: '19:30'
+                        durationMinutes: 90
+                        topic: Integrales dobles
+                        objective: Resolver ejercicios de integrales dobles
+                        kind: ejercicios
+                        explanation: Primera práctica, sobre el tema que se estudió hace más tiempo.
+                      - order: 5
+                        date: '2026-10-21'
+                        startTime: '18:00'
+                        endTime: '19:30'
+                        durationMinutes: 90
+                        topic: Integrales triples
+                        objective: Resolver ejercicios de integrales triples
+                        kind: ejercicios
+                        explanation: Práctica del segundo tema con una semana de margen antes del parcial.
+                      - order: 6
+                        date: '2026-10-24'
+                        startTime: '10:00'
+                        endTime: '11:30'
+                        durationMinutes: 90
+                        topic: Repaso general
+                        objective: Simulacro de parcial con tiempo controlado
+                        kind: simulacro
+                        explanation: El sábado previo permite simular el parcial completo.
+                      - order: 7
+                        date: '2026-10-26'
+                        startTime: '18:00'
+                        endTime: '19:30'
+                        durationMinutes: 90
+                        topic: Repaso general
+                        objective: Repasar los errores del simulacro
+                        kind: repaso
+                        explanation: Repaso liviano en el último día disponible antes del parcial.
+                    warnings: []
+                generadoPorReglas:
+                  summary: La IA no respondió y la propuesta la armó el motor de reglas
+                  value:
+                    proposalId: 7b9e1d24-3f0a-4f7c-8c55-91d2e6a0b3c7
+                    generatedBy: reglas
+                    generatedAt: '2026-10-07T21:16:03Z'
+                    timezone: America/Argentina/Cordoba
+                    exam:
+                      date: '2026-11-18'
+                      difficulty: 1
+                      type: parcial
+                    window:
+                      from: '2026-11-13'
+                      to: '2026-11-17'
+                      anticipationDays: 5
+                    totals:
+                      sessionCount: 1
+                      totalMinutes: 60
+                    explanation: >-
+                      La materia es fácil, así que el estudio empieza 5 días antes del examen.
+                      Sólo hay una franja disponible en esa ventana (martes), por eso se propone
+                      una única sesión.
+                    sessions:
+                      - order: 1
+                        date: '2026-11-17'
+                        startTime: '20:00'
+                        endTime: '21:00'
+                        durationMinutes: 60
+                        topic: Normalización
+                        objective: Leer teoría de normalización
+                        kind: teoria
+                        explanation: Única franja disponible dentro de la ventana de estudio.
+                    warnings:
+                      - code: AI_FALLBACK
+                        message: La IA no respondió a tiempo; la propuesta se armó con el motor de reglas.
+                      - code: REDUCED_SESSIONS
+                        message: Se proponen 1 de 3 sesiones porque no hay más franjas disponibles en la ventana de estudio.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /health:
+    get:
+      tags: [Estado]
+      operationId: getHealth
+      summary: Estado del servicio
+      description: |
+        Indica si planner-service está en condiciones de atender pedidos. No requiere
+        API key ni consume cupo de uso. Sirve para chequeos de disponibilidad del consumidor.
+      security: []
+      responses:
+        '200':
+          description: El servicio está disponible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+                service: planner-service
+                contractVersion: 1.0.0
+        '503':
+          description: El servicio no puede atender pedidos en este momento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: unavailable
+                service: planner-service
+                contractVersion: 1.0.0
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Clave entregada por el grupo Estudiario a cada grupo consumidor por un canal privado.
+        Nunca se publica en repositorios. Una clave identifica al consumidor para el cupo de
+        uso y para el alcance de las claves de idempotencia.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Identificador único del pedido generado por el consumidor (se recomienda un UUID v4).
+        Se reutiliza **la misma** clave al reintentar el mismo pedido. Vale 24 h y su
+        alcance es la API key: dos consumidores distintos pueden usar la misma clave sin
+        interferir.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9_-]+$'
+      example: 3f1e9c2a-8b7d-4e6f-9a01-5c2d7e8f9b10
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: |
+        Identificador para seguir el pedido en los logs de ambos sistemas. Si no se envía,
+        lo genera planner-service. Siempre se devuelve en la respuesta.
+      schema:
+        type: string
+        maxLength: 128
+      example: grupo-x-7d2c41
+
+  headers:
+    X-Correlation-Id:
+      description: Identificador de correlación del pedido (el enviado o uno generado).
+      schema:
+        type: string
+    Idempotent-Replayed:
+      description: Vale `true` cuando la respuesta es la repetición de un pedido ya procesado con la misma `Idempotency-Key`.
+      schema:
+        type: boolean
+    RateLimit-Limit:
+      description: Pedidos permitidos por ventana de 60 s para esta API key.
+      schema:
+        type: integer
+        example: 30
+    RateLimit-Remaining:
+      description: Pedidos que quedan en la ventana actual.
+      schema:
+        type: integer
+        example: 29
+    RateLimit-Reset:
+      description: Segundos que faltan para que se renueve la ventana.
+      schema:
+        type: integer
+        example: 42
+    Retry-After:
+      description: Segundos que conviene esperar antes de reintentar.
+      schema:
+        type: integer
+        example: 20
+
+  schemas:
+    GeneratePlanRequest:
+      type: object
+      additionalProperties: false
+      required: [exam, availability]
+      properties:
+        exam:
+          $ref: '#/components/schemas/ExamInput'
+        availability:
+          $ref: '#/components/schemas/AvailabilityInput'
+        timezone:
+          type: string
+          description: Zona horaria IANA en la que se interpretan todas las fechas y horas.
+          default: America/Argentina/Cordoba
+          example: America/Argentina/Cordoba
+        startDate:
+          type: string
+          format: date
+          description: |
+            Primer día en el que se pueden proponer sesiones. Por defecto, la fecha actual
+            en `timezone`. No puede ser anterior a la fecha actual.
+          example: '2026-10-08'
+
+    ExamInput:
+      type: object
+      additionalProperties: false
+      required: [date, difficulty, topics]
+      properties:
+        subjectName:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Nombre de la materia. Se usa en los textos de la explicación.
+          example: Análisis Matemático II
+        type:
+          type: string
+          enum: [parcial, final, recuperatorio, entrega]
+          default: parcial
+          description: Tipo de instancia evaluativa.
+        date:
+          type: string
+          format: date
+          description: Fecha del examen. No puede estar en el pasado (RN-04). Las sesiones se proponen siempre en días anteriores.
+          example: '2026-10-28'
+        difficulty:
+          type: integer
+          minimum: 1
+          maximum: 4
+          description: 1 fácil, 2 media, 3 difícil, 4 muy difícil. Define la anticipación (RN-06) y la cantidad de sesiones (RN-07).
+          example: 3
+        topics:
+          type: array
+          minItems: 1
+          maxItems: 30
+          description: Temas que entran en el examen, en el orden en que conviene estudiarlos.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          example: [Integrales dobles, Integrales triples, Cambio de variables]
+
+    AvailabilityInput:
+      type: object
+      additionalProperties: false
+      required: [weeklySlots, maxDailyMinutes, preferredSessionMinutes]
+      properties:
+        weeklySlots:
+          type: array
+          minItems: 1
+          maxItems: 28
+          description: Franjas semanales en las que se puede estudiar. Las de un mismo día no pueden superponerse (RN-05).
+          items:
+            $ref: '#/components/schemas/WeeklySlot'
+        maxDailyMinutes:
+          type: integer
+          minimum: 15
+          maximum: 720
+          description: Máximo de minutos de estudio por día.
+          example: 120
+        preferredSessionMinutes:
+          type: integer
+          minimum: 15
+          maximum: 240
+          description: Duración deseada de cada sesión. Si supera `maxDailyMinutes`, se usa `maxDailyMinutes` y se avisa con `SESSION_DURATION_ADJUSTED`.
+          example: 90
+
+    WeeklySlot:
+      type: object
+      additionalProperties: false
+      required: [weekday, startTime, endTime]
+      properties:
+        weekday:
+          $ref: '#/components/schemas/Weekday'
+        startTime:
+          $ref: '#/components/schemas/LocalTime'
+        endTime:
+          $ref: '#/components/schemas/LocalTime'
+
+    Weekday:
+      type: string
+      enum: [lunes, martes, miercoles, jueves, viernes, sabado, domingo]
+      description: Día de la semana, en minúsculas y sin tildes.
+
+    LocalTime:
+      type: string
+      pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+      description: Hora local en formato `HH:mm` (24 h).
+      example: '18:00'
+
+    StudyPlanProposal:
+      type: object
+      required: [proposalId, generatedBy, generatedAt, timezone, exam, window, totals, explanation, sessions, warnings]
+      properties:
+        proposalId:
+          type: string
+          format: uuid
+          description: Identificador de la propuesta. Es el mismo si el pedido se repite con la misma `Idempotency-Key`.
+        generatedBy:
+          type: string
+          enum: [ia, reglas]
+          description: Quién armó la propuesta. `reglas` indica el motor de reglas fijas (RN-09).
+        generatedAt:
+          type: string
+          format: date-time
+          description: Momento de generación, en UTC.
+        timezone:
+          type: string
+          description: Zona horaria de todas las fechas y horas de la propuesta.
+        exam:
+          $ref: '#/components/schemas/ExamSummary'
+        window:
+          $ref: '#/components/schemas/StudyWindow'
+        totals:
+          type: object
+          required: [sessionCount, totalMinutes]
+          properties:
+            sessionCount:
+              type: integer
+              minimum: 1
+            totalMinutes:
+              type: integer
+              minimum: 15
+        explanation:
+          type: string
+          description: Explicación general de por qué el plan se armó así.
+        sessions:
+          type: array
+          minItems: 1
+          description: Sesiones propuestas, en orden cronológico.
+          items:
+            $ref: '#/components/schemas/ProposedSession'
+        warnings:
+          type: array
+          description: Avisos que no impiden generar el plan. Puede estar vacía.
+          items:
+            $ref: '#/components/schemas/Warning'
+
+    ExamSummary:
+      type: object
+      description: Datos del examen tal como se usaron para planificar.
+      required: [date, difficulty, type]
+      properties:
+        subjectName:
+          type: string
+        type:
+          type: string
+          enum: [parcial, final, recuperatorio, entrega]
+        date:
+          type: string
+          format: date
+        difficulty:
+          type: integer
+          minimum: 1
+          maximum: 4
+
+    StudyWindow:
+      type: object
+      description: Rango de días en el que se propusieron sesiones (RN-06).
+      required: [from, to, anticipationDays]
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+          description: Siempre el día anterior al examen.
+        anticipationDays:
+          type: integer
+          description: Anticipación que corresponde a la dificultad (5, 10, 15 o 21 días).
+
+    ProposedSession:
+      type: object
+      required: [order, date, startTime, endTime, durationMinutes, topic, objective, kind, explanation]
+      properties:
+        order:
+          type: integer
+          minimum: 1
+          description: Posición de la sesión en el plan (1 es la primera).
+        date:
+          type: string
+          format: date
+        startTime:
+          $ref: '#/components/schemas/LocalTime'
+        endTime:
+          $ref: '#/components/schemas/LocalTime'
+        durationMinutes:
+          type: integer
+          minimum: 15
+          maximum: 240
+        topic:
+          type: string
+          description: Tema de la sesión. En las sesiones de cierre vale `Repaso general`.
+        objective:
+          type: string
+          description: Qué se busca lograr en la sesión.
+        kind:
+          type: string
+          enum: [teoria, ejercicios, simulacro, repaso]
+          description: Tipo de sesión. Pueden agregarse valores en versiones menores; tratar los desconocidos como genéricos.
+        explanation:
+          type: string
+          description: Por qué la sesión se propuso en ese lugar del plan.
+
+    Warning:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Código estable del aviso. Lista abierta; los valores vigentes son:
+            - `AI_FALLBACK`: la propuesta la armó el motor de reglas (la IA no respondió o su propuesta no cumplía las garantías).
+            - `SHORT_WINDOW`: el examen está más cerca que la anticipación recomendada; se usa el tiempo que queda.
+            - `REDUCED_SESSIONS`: no entran todas las sesiones recomendadas en la disponibilidad enviada.
+            - `SESSION_DURATION_ADJUSTED`: `preferredSessionMinutes` superaba `maxDailyMinutes` y se ajustó.
+          example: AI_FALLBACK
+        message:
+          type: string
+          description: Texto para personas. Puede cambiar; no usarlo para tomar decisiones.
+
+    Health:
+      type: object
+      required: [status, service, contractVersion]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        service:
+          type: string
+        contractVersion:
+          type: string
+
+    Problem:
+      type: object
+      description: Error en formato Problem Details (RFC 9457).
+      required: [type, title, status, code, correlationId]
+      properties:
+        type:
+          type: string
+          description: URI que identifica el tipo de problema (apunta a la tabla de errores del README).
+        title:
+          type: string
+          description: Resumen corto, para personas.
+        status:
+          type: integer
+          description: Código HTTP repetido en el cuerpo.
+        detail:
+          type: string
+          description: Explicación para personas de este caso puntual.
+        code:
+          type: string
+          description: Código estable para decidir qué hacer. Ver la tabla de errores del README.
+        correlationId:
+          type: string
+          description: Identificador para pedir soporte o buscar el pedido en los logs.
+        errors:
+          type: array
+          description: Detalle por campo (sólo en errores de validación).
+          items:
+            $ref: '#/components/schemas/FieldError'
+
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Ruta del campo con notación de puntos, por ejemplo `availability.weeklySlots[1].endTime`.
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: |
+        El pedido no se puede interpretar: JSON mal formado, `Content-Type` distinto de
+        `application/json` o falta o es inválida la `Idempotency-Key`. No reintentar sin corregirlo.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            jsonMalFormado:
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#malformed_request
+                title: Pedido mal formado
+                status: 400
+                detail: El cuerpo no es un JSON válido.
+                code: MALFORMED_REQUEST
+                correlationId: grupo-x-7d2c41
+            faltaIdempotencyKey:
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#idempotency_key_missing
+                title: Falta la clave de idempotencia
+                status: 400
+                detail: El encabezado Idempotency-Key es obligatorio.
+                code: IDEMPOTENCY_KEY_MISSING
+                correlationId: 5a0f3c9e2b
+    Unauthorized:
+      description: Falta la API key o no es válida. No reintentar con la misma clave.
+      headers:
+        WWW-Authenticate:
+          description: Esquema de autenticación esperado.
+          schema:
+            type: string
+            example: ApiKey header="X-API-Key"
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#unauthenticated
+            title: No autenticado
+            status: 401
+            detail: La API key no es válida o fue revocada.
+            code: UNAUTHENTICATED
+            correlationId: grupo-x-7d2c41
+    Conflict:
+      description: |
+        Hay otro pedido con la misma `Idempotency-Key` que todavía se está procesando.
+        Reintentar con la misma clave después de `Retry-After`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#idempotency_request_in_progress
+            title: Pedido en curso
+            status: 409
+            detail: Ya hay un pedido con esta Idempotency-Key en proceso.
+            code: IDEMPOTENCY_REQUEST_IN_PROGRESS
+            correlationId: grupo-x-7d2c41
+    UnprocessableEntity:
+      description: |
+        El JSON es válido pero sus datos no cumplen el esquema o las reglas de negocio.
+        No reintentar sin cambiar los datos. El `code` indica el motivo:
+        `VALIDATION_ERROR`, `EXAM_DATE_IN_PAST`, `INVALID_SLOT`, `OVERLAPPING_SLOTS`,
+        `INVALID_TIMEZONE`, `INVALID_START_DATE`, `NO_AVAILABLE_TIME` o `IDEMPOTENCY_KEY_REUSED`.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            validacion:
+              summary: Campos faltantes o fuera de rango
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#validation_error
+                title: Datos inválidos
+                status: 422
+                detail: Hay 2 campos con errores.
+                code: VALIDATION_ERROR
+                correlationId: grupo-x-7d2c41
+                errors:
+                  - field: exam.difficulty
+                    message: debe estar entre 1 y 4
+                  - field: availability.weeklySlots[0].endTime
+                    message: debe tener el formato HH:mm
+            examenEnElPasado:
+              summary: RN-04
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#exam_date_in_past
+                title: Examen en el pasado
+                status: 422
+                detail: La fecha del examen (2026-09-30) es anterior a la fecha actual.
+                code: EXAM_DATE_IN_PAST
+                correlationId: grupo-x-7d2c41
+            franjasSuperpuestas:
+              summary: RN-05
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#overlapping_slots
+                title: Franjas superpuestas
+                status: 422
+                detail: Las franjas del lunes 18:00-21:00 y 20:00-22:00 se superponen.
+                code: OVERLAPPING_SLOTS
+                correlationId: grupo-x-7d2c41
+                errors:
+                  - field: availability.weeklySlots[1]
+                    message: se superpone con availability.weeklySlots[0]
+            sinTiempoDisponible:
+              summary: No entra ninguna sesión
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#no_available_time
+                title: Sin tiempo disponible
+                status: 422
+                detail: Ninguna franja disponible entre 2026-10-13 y 2026-10-27 alcanza para una sesión de 90 minutos.
+                code: NO_AVAILABLE_TIME
+                correlationId: grupo-x-7d2c41
+            claveReutilizada:
+              summary: Misma Idempotency-Key con otro cuerpo
+              value:
+                type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#idempotency_key_reused
+                title: Clave de idempotencia reutilizada
+                status: 422
+                detail: La Idempotency-Key ya se usó con un cuerpo distinto. Usar una clave nueva para un pedido nuevo.
+                code: IDEMPOTENCY_KEY_REUSED
+                correlationId: grupo-x-7d2c41
+    TooManyRequests:
+      description: Se superó el cupo de pedidos de la API key. Reintentar después de `Retry-After`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+        RateLimit-Limit:
+          $ref: '#/components/headers/RateLimit-Limit'
+        RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimit-Remaining'
+        RateLimit-Reset:
+          $ref: '#/components/headers/RateLimit-Reset'
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#rate_limited
+            title: Demasiados pedidos
+            status: 429
+            detail: Se superó el límite de 30 pedidos por minuto.
+            code: RATE_LIMITED
+            correlationId: grupo-x-7d2c41
+    InternalError:
+      description: Error inesperado de planner-service. Se puede reintentar con la misma `Idempotency-Key`.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#internal_error
+            title: Error interno
+            status: 500
+            detail: Ocurrió un error inesperado. Informar el correlationId al grupo Estudiario.
+            code: INTERNAL_ERROR
+            correlationId: grupo-x-7d2c41
+    ServiceUnavailable:
+      description: |
+        planner-service no puede atender pedidos temporalmente (por ejemplo, su base de datos
+        no responde). Reintentar con la misma `Idempotency-Key` después de `Retry-After`.
+        **No** se usa cuando falla la IA: en ese caso la respuesta es `200` con `generatedBy: reglas`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+        X-Correlation-Id:
+          $ref: '#/components/headers/X-Correlation-Id'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://github.com/MichiSil/ProyectoEstudiario/blob/main/docs/contracts/README.md#service_unavailable
+            title: Servicio no disponible
+            status: 503
+            detail: El servicio no puede procesar pedidos en este momento.
+            code: SERVICE_UNAVAILABLE
+            correlationId: grupo-x-7d2c41
