@@ -1,6 +1,6 @@
 # ADR-003: Persistencia
 
-- **Estado:** Propuesta (versión inicial, se valida en la Entrega 2)
+- **Estado:** Aceptada (versión inicial acordada por el grupo; se valida en la Entrega 2)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D3
 - **Reemplaza a:** —
