@@ -12,6 +12,7 @@ Combina dos partes:
 | Legajo | Integrante |
 |---|---|
 | 2405404 | Acuña, Isabela |
+| 2417714 | Ainete, Tobías |
 | 2418092 | Chamaza, Florencia |
 | 2411741 | Silvestrini, Mia |
 
