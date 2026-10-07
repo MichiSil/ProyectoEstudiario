@@ -1,0 +1,4 @@
+# Los scripts que se ejecutan dentro de los contenedores (Linux) tienen que
+# tener fin de línea LF aunque se clonen en Windows; con CRLF fallan.
+*.sh text eol=lf
+deploy/** text eol=lf
