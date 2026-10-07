@@ -21,7 +21,7 @@ Todo el sistema se levanta localmente con `docker compose up --build` (ver el [R
 | **api-gateway** | Punto de entrada único: valida el JWT, enruta cada request al servicio correspondiente, aplica límites de tráfico y propaga el identificador de correlación. No tiene lógica de negocio. | Go |
 | **users-service** | Registro, inicio de sesión, emisión del JWT y roles (`estudiante` / `admin`). | Go + PostgreSQL |
 | **planner-service** | Materias del estudiante y su dificultad, calendario de exámenes y entregas, disponibilidad horaria, generación del plan de estudio con el agente de IA, **confirmación del plan** (acción principal) y seguimiento de sesiones. Expone la **capacidad publicada para otros grupos: generar un plan de estudio**. | Go + PostgreSQL |
-| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Publica los eventos de moderación. | Go + MongoDB + Apache Solr + Memcached |
+| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. | Go + MongoDB + MinIO + Apache Solr + Memcached |
 | **notification-service** | Consume los eventos de moderación y le envía el mail al autor exactamente una vez. Trata los mensajes que no se pueden procesar. | Go + MongoDB |
 
 Los criterios para separar los servicios están en el [ADR-001](adr/ADR-001-limites-de-servicios.md).
@@ -35,6 +35,7 @@ Cada entidad tiene **un único servicio dueño**, que es el único que la escrib
 | users-service | Usuarios, hash de contraseñas, roles | PostgreSQL (base `users`) |
 | planner-service | Materias, dificultad, exámenes y eventos del calendario, disponibilidad semanal, planes de estudio, sesiones, claves de idempotencia de las confirmaciones | PostgreSQL (base `planner`) |
 | forum-service | Resúmenes y su estado de moderación, calificaciones, eventos pendientes de publicar (*outbox*) | MongoDB (base `forum`) |
+| forum-service (archivos) | Archivo PDF de cada resumen | MinIO (bucket `summaries`) |
 | forum-service (derivados) | Índice de búsqueda de resúmenes aprobados; caché del listado y del detalle | Apache Solr; Memcached |
 | notification-service | Registro de notificaciones enviadas (para no enviar dos veces el mismo mail) | MongoDB (base `notifications`) |
 
@@ -134,6 +135,7 @@ flowchart TB
         notifDb[("<b>notifications</b><br/>[MongoDB]")]
         solr[("<b>Índice de resúmenes</b><br/>[Apache Solr]")]
         cache[("<b>Caché</b><br/>[Memcached]")]
+        files[("<b>Archivos PDF</b><br/>[MinIO]")]
         rabbit{{"<b>Broker de mensajes</b><br/>[RabbitMQ]<br/>exchange forum.events + DLQ"}}
     end
 
@@ -159,6 +161,7 @@ flowchart TB
     forum -- "Lee/escribe" --> forumDb
     forum -- "Indexa y busca [HTTP]" --> solr
     forum -- "Cache-aside" --> cache
+    forum -- "Guarda y lee PDFs [S3 API]" --> files
     forum -- "Publica summary.* [AMQP]" --> rabbit
 
     rabbit -- "Consume summary.approved / rejected [AMQP]" --> notification
@@ -171,7 +174,7 @@ flowchart TB
     classDef external fill:#999,stroke:#6b6b6b,color:#fff
     class estudiante,admin person
     class frontend,gateway,users,planner,forum,notification container
-    class usersDb,plannerDb,forumDb,notifDb,solr,cache,rabbit store
+    class usersDb,plannerDb,forumDb,notifDb,solr,cache,files,rabbit store
     class ia,mail,grupoConsumidor,grupoProveedor external
 ```
 
