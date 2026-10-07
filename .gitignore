@@ -1,0 +1,22 @@
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+
+# Go
+*.exe
+*.test
+*.out
+bin/
+coverage.*
+
+# Node
+node_modules/
+dist/
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
