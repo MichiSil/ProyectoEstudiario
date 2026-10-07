@@ -1,0 +1,9 @@
+go 1.24
+
+use (
+	./services/api-gateway
+	./services/forum-service
+	./services/notification-service
+	./services/planner-service
+	./services/users-service
+)
