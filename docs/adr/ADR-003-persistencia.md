@@ -31,7 +31,7 @@ Los patrones de acceso de cada servicio son muy distintos:
 |---|---|---|
 | users-service | **PostgreSQL** (base `users`) | — |
 | planner-service | **PostgreSQL** (base `planner`) | — |
-| forum-service | **MongoDB** (base `forum`) | **Apache Solr** (índice de resúmenes aprobados) y **Memcached** (caché de lectura) |
+| forum-service | **MongoDB** (base `forum`) | **MinIO** (archivos PDF), **Apache Solr** (índice de resúmenes aprobados) y **Memcached** (caché de lectura) |
 | notification-service | **MongoDB** (base `notifications`) | — |
 
 En el entorno local, PostgreSQL y MongoDB corren una sola vez cada uno en `docker compose`, pero **cada servicio tiene su propia base y su propio usuario**: ningún servicio tiene credenciales para la base de otro. Así se mantiene la propiedad de los datos sin multiplicar contenedores.
@@ -52,9 +52,10 @@ Es donde vive la acción principal (confirmar el plan), así que se elige el mot
 
 El detalle del tratamiento de la concurrencia se documenta en el ADR-004 (D4).
 
-### forum-service: MongoDB + Apache Solr + Memcached
+### forum-service: MongoDB + MinIO + Apache Solr + Memcached
 
-- **MongoDB** guarda cada resumen como un documento: título, materia (etiqueta), contenido, autor (id, nombre y mail copiados al publicar), estado de moderación, motivo de rechazo y el promedio y la cantidad de calificaciones. Un resumen se lee casi siempre entero, y su forma puede variar (con o sin adjunto, con distintas etiquetas), lo que encaja con el modelo documental.
+- **MongoDB** guarda cada resumen como un documento: título, materia (etiqueta), descripción, referencia al archivo PDF (clave en MinIO, tamaño y tipo), autor (id, nombre y mail copiados al publicar), estado de moderación, motivo de rechazo y el promedio y la cantidad de calificaciones. Un resumen se lee casi siempre entero, y su forma puede variar (con distintas etiquetas o metadatos), lo que encaja con el modelo documental.
+- **MinIO** guarda el archivo PDF de cada resumen (máximo 10 MB, según RN-20 del [SPEC](../../SPEC.md)). Es un almacenamiento de objetos compatible con la API de S3, que corre en `docker compose` y permite pasar a un servicio en la nube (por ejemplo, S3) sin cambiar el código. Los binarios no se guardan en MongoDB para no agrandar los documentos que se leen en cada listado. Al publicar, forum-service valida el tipo y el tamaño, sube el archivo y recién después crea el documento; si la creación falla, el archivo queda huérfano y se elimina con una limpieza periódica. La descarga pasa por forum-service, que sólo entrega archivos de resúmenes aprobados (o al autor y al administrador).
 - **Transiciones de estado atómicas:** moderar es una actualización condicional sobre un único documento (por ejemplo, "pasar a `aprobada` sólo si está en `pendiente`"). Si dos administradores moderan a la vez, sólo una de las dos actualizaciones tiene efecto.
 - **Una calificación por usuario:** colección `ratings` con índice único `(summaryId, userId)`. El promedio del resumen se recalcula al calificar.
 - **Apache Solr** indexa sólo los resúmenes aprobados para la búsqueda por texto, con filtros por materia, paginación y orden por fecha o por calificación. Es un **almacén derivado**: si se pierde, se reconstruye desde MongoDB. La sincronización y el retraso tolerable se definen en el ADR-006 (D6).
@@ -67,7 +68,7 @@ El detalle del tratamiento de la concurrencia se documenta en el ADR-004 (D4).
 
 ### Lo que no se persiste en este hito
 
-- **Archivos adjuntos de los resúmenes** (PDF o imágenes): en esta versión los resúmenes son de texto. Si se agregan adjuntos, se evaluará un almacenamiento de objetos (por ejemplo, MinIO) en lugar de guardar binarios en la base.
+- **Imágenes u otros formatos de archivo** en los resúmenes: en esta versión sólo se aceptan PDF.
 - **RabbitMQ** no se considera almacenamiento de datos de negocio: los mensajes son transitorios y la fuente de verdad siempre es la base del servicio que publica.
 
 ## Consecuencias
@@ -80,7 +81,8 @@ El detalle del tratamiento de la concurrencia se documenta en el ADR-004 (D4).
 
 **Negativas / limitaciones aceptadas**
 
-- Hay dos motores de base de datos más un índice y una caché para operar, respaldar y observar.
+- Hay dos motores de base de datos, un almacenamiento de objetos, un índice y una caché para operar, respaldar y observar.
+- La creación de un resumen escribe en dos almacenamientos (MinIO y MongoDB) sin una transacción común. Se acepta que pueda quedar un archivo huérfano, que se limpia periódicamente; nunca queda un resumen sin archivo.
 - Solr y Memcached pueden quedar momentáneamente desactualizados respecto de MongoDB (consistencia eventual en la búsqueda y en la caché).
 - En MongoDB, la actualización de un resumen y la de su promedio de calificaciones no están en la misma transacción. Se acepta que el promedio quede brevemente desfasado; el índice único sobre `ratings` sigue garantizando que nadie califique dos veces.
 - Las restricciones de exclusión con `gist` atan el diseño a PostgreSQL. Cambiar de motor relacional implicaría reimplementarlas.
