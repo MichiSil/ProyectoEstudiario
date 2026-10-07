@@ -1,0 +1,21 @@
+{
+  "exam": {
+    "subjectName": "Análisis Matemático II",
+    "type": "parcial",
+    "date": "2026-10-28",
+    "difficulty": 3,
+    "topics": ["Integrales dobles", "Integrales triples", "Cambio de variables"]
+  },
+  "availability": {
+    "weeklySlots": [
+      { "weekday": "lunes", "startTime": "18:00", "endTime": "21:00" },
+      { "weekday": "miercoles", "startTime": "18:00", "endTime": "21:00" },
+      { "weekday": "jueves", "startTime": "18:00", "endTime": "21:00" },
+      { "weekday": "sabado", "startTime": "10:00", "endTime": "13:00" }
+    ],
+    "maxDailyMinutes": 120,
+    "preferredSessionMinutes": 90
+  },
+  "timezone": "America/Argentina/Cordoba",
+  "startDate": "2026-10-08"
+}
