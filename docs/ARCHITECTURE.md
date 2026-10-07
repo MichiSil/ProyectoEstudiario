@@ -21,7 +21,7 @@ Todo el sistema se levanta localmente con `docker compose up --build` (ver el [R
 | **api-gateway** | Punto de entrada único: valida el JWT, enruta cada request al servicio correspondiente, aplica límites de tráfico y propaga el identificador de correlación. No tiene lógica de negocio. | Go |
 | **users-service** | Registro, inicio de sesión, emisión del JWT y roles (`estudiante` / `admin`). | Go + PostgreSQL |
 | **planner-service** | Materias del estudiante y su dificultad, calendario de exámenes y entregas, disponibilidad horaria, generación del plan de estudio con el agente de IA, **confirmación del plan** (acción principal) y seguimiento de sesiones. Expone la **capacidad publicada para otros grupos: generar un plan de estudio**. | Go + PostgreSQL |
-| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. | Go + MongoDB + MinIO + Apache Solr + Memcached |
+| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. Corre en **dos instancias** detrás del balanceo de carga. | Go + MongoDB + MinIO + Apache Solr + Memcached |
 | **notification-service** | Consume los eventos de moderación y le envía el mail al autor exactamente una vez. Trata los mensajes que no se pueden procesar. | Go + MongoDB |
 
 Los criterios para separar los servicios están en el [ADR-001](adr/ADR-001-limites-de-servicios.md).
@@ -73,6 +73,16 @@ El detalle de por qué se eligió cada almacenamiento está en el [ADR-003](adr/
 - Los mensajes que fallan se reintentan con espera y, si no se pueden procesar, van a una **dead letter queue** (`notifications.dlq`).
 
 Los valores concretos de timeouts, reintentos y formato de eventos se documentan en el ADR-005 (D5).
+
+### Balanceo de carga
+
+**forum-service corre en dos instancias** (`forum-service-1` y `forum-service-2`). Es el servicio con más tráfico de lectura (listado, búsqueda y detalle de resúmenes), y al no guardar estado en memoria (los datos están en MongoDB, MinIO, Solr y Memcached) cualquier instancia puede atender cualquier pedido.
+
+- El **api-gateway** reparte los pedidos al foro entre las dos instancias (*round robin*).
+- Consulta periódicamente el `GET /health` de cada instancia. Si una no responde, deja de enviarle pedidos hasta que vuelva, y el foro sigue funcionando con la otra.
+- Cada respuesta indica qué instancia la atendió, y las métricas se separan por instancia, así la distribución y el estado de cada una se pueden comprobar en el tablero de observabilidad.
+
+Esta es la versión preliminar. La estrategia de distribución, la verificación de disponibilidad y el comportamiento ante la caída de una instancia se definen en el ADR-012 (D12).
 
 ## 5. Diagramas (modelo C4)
 
@@ -126,7 +136,7 @@ flowchart TB
 
         users["<b>users-service</b><br/>[Go]<br/>Registro, login, roles"]
         planner["<b>planner-service</b><br/>[Go]<br/>Materias, calendario, disponibilidad,<br/>plan con IA y confirmación"]
-        forum["<b>forum-service</b><br/>[Go]<br/>Resúmenes, moderación,<br/>calificaciones, búsqueda"]
+        forum["<b>forum-service</b><br/>[Go] × 2 instancias<br/>Resúmenes, moderación,<br/>calificaciones, búsqueda"]
         notification["<b>notification-service</b><br/>[Go]<br/>Mails de moderación"]
 
         usersDb[("<b>users</b><br/>[PostgreSQL]")]
@@ -150,7 +160,7 @@ flowchart TB
 
     gateway -- "[HTTP/JSON]" --> users
     gateway -- "[HTTP/JSON]" --> planner
-    gateway -- "[HTTP/JSON]" --> forum
+    gateway -- "Balanceo round robin<br/>[HTTP/JSON]" --> forum
 
     users -- "Lee/escribe [SQL]" --> usersDb
     planner -- "Lee/escribe [SQL]" --> plannerDb
@@ -163,6 +173,7 @@ flowchart TB
     forum -- "Cache-aside" --> cache
     forum -- "Guarda y lee PDFs [S3 API]" --> files
     forum -- "Publica summary.* [AMQP]" --> rabbit
+    rabbit -- "Indexador: consume summary.approved / deleted [AMQP]" --> forum
 
     rabbit -- "Consume summary.approved / rejected [AMQP]" --> notification
     notification -- "Registra eventos procesados" --> notifDb
@@ -182,4 +193,6 @@ flowchart TB
 
 - Las líneas que salen del **api-gateway** son síncronas. La única comunicación entre servicios propios es **asíncrona**, a través de RabbitMQ.
 - El **sistema de otro grupo** entra directo a planner-service (el servicio dueño de la capacidad), por el punto que se publique para la integración. El frontend propio no participa de esa comunicación.
+- **forum-service** aparece una sola vez, pero corre en **dos instancias**: el api-gateway reparte los pedidos entre ellas (ver *Balanceo de carga* en la sección 4).
+- La flecha de RabbitMQ hacia forum-service es el **indexador**, un componente interno del foro que consume sus propios eventos para mantener actualizado el índice de Solr. No es una comunicación con otro servicio.
 - **Solr** y **Memcached** son almacenes derivados: si se pierden, se reconstruyen desde MongoDB.
