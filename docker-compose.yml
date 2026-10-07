@@ -1,0 +1,269 @@
+# Levanta todo Estudiario en local con un único comando:
+#
+#   cp .env.example .env
+#   docker compose up --build
+#
+# Puertos y URLs: ver "Cómo levantar el sistema" en el README.
+
+name: estudiario
+
+x-go-service: &go-service
+  restart: unless-stopped
+  init: true
+
+services:
+  # ---------------------------------------------------------------
+  # Servicios propios (Go)
+  # ---------------------------------------------------------------
+  api-gateway:
+    <<: *go-service
+    build: ./services/api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      USERS_SERVICE_URL: http://users-service:8081
+      PLANNER_SERVICE_URL: http://planner-service:8082
+      FORUM_SERVICE_URL: http://forum-service:8083
+      JWT_SECRET: ${JWT_SECRET:?falta el archivo .env (copiá .env.example a .env)}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      users-service:
+        condition: service_healthy
+      planner-service:
+        condition: service_healthy
+      forum-service:
+        condition: service_healthy
+
+  users-service:
+    <<: *go-service
+    build: ./services/users-service
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      DATABASE_URL: postgres://users_svc:${USERS_DB_PASSWORD}@postgres:5432/users?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  planner-service:
+    <<: *go-service
+    build: ./services/planner-service
+    # Publicado directamente: la capacidad para otros grupos no pasa por el api-gateway (ADR-008).
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      DATABASE_URL: postgres://planner_svc:${PLANNER_DB_PASSWORD}@postgres:5432/planner?sslmode=disable
+      EXTERNAL_API_KEYS: ${PLANNER_EXTERNAL_API_KEYS}
+      AI_PROVIDER_URL: ${AI_PROVIDER_URL}
+      AI_API_KEY: ${AI_API_KEY}
+      AI_MODEL: ${AI_MODEL}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  forum-service:
+    <<: *go-service
+    build: ./services/forum-service
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      MONGO_URI: mongodb://forum_svc:${FORUM_DB_PASSWORD}@mongo:27017/forum?authSource=forum
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY}
+      MINIO_BUCKET: summaries
+      SOLR_URL: http://solr:8983/solr/summaries
+      MEMCACHED_ADDR: memcached:11211
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      solr:
+        condition: service_started
+      memcached:
+        condition: service_started
+
+  notification-service:
+    <<: *go-service
+    build: ./services/notification-service
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      MONGO_URI: mongodb://notification_svc:${NOTIFICATIONS_DB_PASSWORD}@mongo:27017/notifications?authSource=notifications
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------
+  # Mock de la capacidad publicada (docs/contracts/)
+  # ---------------------------------------------------------------
+  planner-mock:
+    image: stoplight/prism:5
+    command: mock -h 0.0.0.0 -p 4010 /contracts/planner-v1.yaml
+    ports:
+      - "4010:4010"
+    volumes:
+      - ./docs/contracts:/contracts:ro
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Almacenamiento y mensajería
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?falta el archivo .env (copiá .env.example a .env)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+      USERS_DB_PASSWORD: ${USERS_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+      PLANNER_DB_PASSWORD: ${PLANNER_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d planner"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?falta el archivo .env (copiá .env.example a .env)}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+      FORUM_DB_PASSWORD: ${FORUM_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+      NOTIFICATIONS_DB_PASSWORD: ${NOTIFICATIONS_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+    volumes:
+      - mongo-data:/data/db
+      - ./deploy/mongo:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # API S3
+      - "9001:9001" # consola web
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?falta el archivo .env (copiá .env.example a .env)}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Crea el bucket de resúmenes y el usuario propio de forum-service. Corre una vez y termina.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      FORUM_MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY:?falta el archivo .env (copiá .env.example a .env)}
+      FORUM_MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY:?falta el archivo .env (copiá .env.example a .env)}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing local/summaries
+        mc admin user add local "$$FORUM_MINIO_ACCESS_KEY" "$$FORUM_MINIO_SECRET_KEY"
+        mc admin policy attach local readwrite --user "$$FORUM_MINIO_ACCESS_KEY" || true
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # consola web
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?falta el archivo .env (copiá .env.example a .env)}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  solr:
+    image: solr:9
+    # Crea el core "summaries" la primera vez (ADR-006 define su esquema).
+    command: solr-precreate summaries
+    ports:
+      - "8983:8983"
+    volumes:
+      - solr-data:/var/solr
+    restart: unless-stopped
+
+  memcached:
+    image: memcached:1.6-alpine
+    command: memcached -m 64
+    ports:
+      - "11211:11211"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  mongo-data:
+  minio-data:
+  rabbitmq-data:
+  solr-data:
