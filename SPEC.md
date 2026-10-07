@@ -141,3 +141,79 @@ stateDiagram-v2
 ```
 
 Una **sesión** confirmada puede estar *pendiente*, *completada* o *pospuesta*. Una sesión pospuesta libera su horario y su tema vuelve a considerarse en la próxima replanificación.
+
+## 7. Foro de resúmenes
+
+### 7.1 Requisitos funcionales
+
+| ID | Requisito |
+|---|---|
+| RF-14 | El estudiante puede subir un resumen indicando título, materia, descripción y un archivo PDF. |
+| RF-15 | El estudiante puede ver el estado de sus propias publicaciones (pendiente, aprobada o rechazada) y, si fue rechazada, el motivo. |
+| RF-16 | El administrador puede ver la lista de publicaciones pendientes, ordenadas de la más antigua a la más reciente. |
+| RF-17 | El administrador puede aprobar o rechazar una publicación pendiente. Al rechazarla, indica el motivo. |
+| RF-18 | El administrador puede eliminar cualquier publicación, esté en el estado que esté. |
+| RF-19 | Cualquier estudiante puede buscar resúmenes aprobados por texto (título y descripción), con resultados paginados. |
+| RF-20 | La búsqueda permite filtrar por materia y por calificación mínima, y ordenar por relevancia, calificación promedio o fecha de publicación. |
+| RF-21 | Cualquier estudiante puede ver el detalle de un resumen aprobado y descargar su archivo. |
+| RF-22 | El estudiante puede calificar un resumen aprobado con un puntaje de 1 a 5. |
+
+### 7.2 Reglas de negocio
+
+**Publicación y moderación**
+
+| ID | Regla |
+|---|---|
+| RN-19 | Toda publicación nueva empieza en estado *pendiente*. |
+| RN-20 | El archivo tiene que ser PDF y pesar como máximo 10 MB. |
+| RN-21 | Sólo se puede aprobar o rechazar una publicación *pendiente*. Una publicación ya aprobada o rechazada no vuelve a moderarse. |
+| RN-22 | Rechazar una publicación exige un motivo. |
+| RN-23 | Si dos administradores moderan la misma publicación al mismo tiempo, sólo una decisión es válida. La otra recibe un error indicando que la publicación ya fue moderada. |
+| RN-24 | Sólo las publicaciones *aprobadas* aparecen en la búsqueda y en el foro. Una publicación eliminada deja de aparecer, aunque haya estado aprobada. |
+| RN-25 | La materia de un resumen es un texto libre (por ejemplo, "Análisis Matemático II"). No depende de las materias personales del autor, para que cualquier estudiante pueda encontrarlo. |
+
+**Búsqueda**
+
+| ID | Regla |
+|---|---|
+| RN-26 | Un resumen aprobado aparece en la búsqueda en, como máximo, 1 minuto desde su aprobación. Un resumen eliminado deja de aparecer en el mismo plazo. |
+| RN-27 | Una página de resultados tiene como máximo 50 resúmenes. |
+
+**Calificación**
+
+| ID | Regla |
+|---|---|
+| RN-28 | Sólo se califican publicaciones aprobadas. |
+| RN-29 | Un estudiante no puede calificar sus propios resúmenes. |
+| RN-30 | Cada estudiante califica un resumen una sola vez. Si vuelve a calificarlo, se reemplaza su puntaje anterior: nunca cuenta dos veces. |
+| RN-31 | La calificación de un resumen es el promedio de los puntajes recibidos, junto con la cantidad de calificaciones. |
+
+### 7.3 Estados de una publicación
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pendiente: el estudiante sube el resumen
+    Pendiente --> Aprobada: el admin la aprueba
+    Pendiente --> Rechazada: el admin la rechaza (con motivo)
+    Aprobada --> Eliminada: el admin la elimina
+    Rechazada --> Eliminada: el admin la elimina
+    Pendiente --> Eliminada: el admin la elimina
+```
+
+## 8. Notificaciones
+
+### 8.1 Requisitos funcionales
+
+| ID | Requisito |
+|---|---|
+| RF-23 | Cuando una publicación es aprobada, el sistema le envía un mail al autor avisándole que su resumen fue publicado. |
+| RF-24 | Cuando una publicación es rechazada, el sistema le envía un mail al autor con el motivo del rechazo. |
+
+### 8.2 Reglas de negocio
+
+| ID | Regla |
+|---|---|
+| RN-32 | Cada decisión de moderación genera exactamente un mail: no se puede perder ni enviar duplicado. |
+| RN-33 | La moderación no depende del envío del mail. Si el servicio de mail está caído, la publicación queda aprobada o rechazada igual, y el mail se envía cuando el servicio vuelva. |
+| RN-34 | Si un mail no puede enviarse después de varios reintentos, queda registrado como fallido para revisarlo, sin bloquear al resto de las notificaciones. |
+| RN-35 | La eliminación de una publicación no genera mail. |
