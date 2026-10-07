@@ -217,3 +217,54 @@ stateDiagram-v2
 | RN-33 | La moderación no depende del envío del mail. Si el servicio de mail está caído, la publicación queda aprobada o rechazada igual, y el mail se envía cuando el servicio vuelva. |
 | RN-34 | Si un mail no puede enviarse después de varios reintentos, queda registrado como fallido para revisarlo, sin bloquear al resto de las notificaciones. |
 | RN-35 | La eliminación de una publicación no genera mail. |
+
+## 9. Criterios de aceptación
+
+Cada criterio indica entre paréntesis las reglas o requisitos que verifica. Los criterios marcados como **[crítico]** son los que se usan para demostrar la acción principal y el comportamiento ante fallas.
+
+### 9.1 Cuentas
+
+| ID | Criterio |
+|---|---|
+| CA-01 | **Dado** un mail ya registrado, **cuando** alguien intenta registrarse con ese mail, **entonces** el sistema rechaza el registro e informa que el mail ya está en uso. *(RN-01)* |
+| CA-02 | **Dado** un estudiante con sesión iniciada, **cuando** intenta ver o modificar una materia de otro estudiante, **entonces** el sistema responde que el recurso no existe y no revela sus datos. *(RN-03)* |
+| CA-03 | **Dado** un estudiante sin rol de administrador, **cuando** intenta aprobar una publicación, **entonces** el sistema rechaza la operación por falta de permisos. *(RF-03, RF-17)* |
+
+### 9.2 Plan de estudio
+
+| ID | Criterio |
+|---|---|
+| CA-04 | **Dado** un examen de una materia muy difícil dentro de 30 días, **cuando** el estudiante pide una propuesta, **entonces** las sesiones empiezan como mucho 21 días antes del examen y las últimas son de repaso o simulacro. *(RN-06, RN-07)* |
+| CA-05 | **Dado** que el agente de IA no responde, **cuando** el estudiante pide una propuesta, **entonces** recibe igual una propuesta armada por reglas fijas y un aviso de que no la generó la IA. *(RN-09)* **[crítico]** |
+| CA-06 | **Dado** una propuesta válida, **cuando** el estudiante la confirma, **entonces** todas sus sesiones quedan reservadas en el calendario y el plan pasa a *confirmado*. *(RF-09)* **[crítico]** |
+| CA-07 | **Dado** una propuesta con una sesión fuera de las franjas disponibles, **cuando** el estudiante la confirma, **entonces** el sistema rechaza la confirmación, indica qué sesión incumple la regla y no reserva ninguna sesión. *(RN-10, todo o nada)* **[crítico]** |
+| CA-08 | **Dado** una sesión ya reservada el martes de 18:00 a 19:00, **cuando** el estudiante confirma un plan con una sesión el martes de 18:30 a 19:30, **entonces** la confirmación se rechaza por superposición. *(RN-12)* **[crítico]** |
+| CA-09 | **Dado** un estudiante con capacidad diaria de 120 minutos y 90 minutos ya reservados el jueves, **cuando** confirma un plan que agrega 60 minutos ese jueves, **entonces** la confirmación se rechaza por superar la capacidad diaria. *(RN-13)* **[crítico]** |
+| CA-10 | **Dado** una confirmación ya procesada, **cuando** llega otra vez la misma confirmación (reintento), **entonces** el sistema devuelve el mismo resultado y la cantidad de sesiones reservadas no cambia. *(RN-14)* **[crítico]** |
+| CA-11 | **Dado** dos confirmaciones del mismo plan enviadas al mismo tiempo desde dos dispositivos, **cuando** el sistema las procesa, **entonces** se reserva un único conjunto de sesiones. *(RN-14, RN-15)* **[crítico]** |
+| CA-12 | **Dado** un examen con plan confirmado, **cuando** el estudiante cambia la fecha del examen, **entonces** el plan pasa a *desactualizado* y sus sesiones pendientes se muestran marcadas como desactualizadas. *(RN-16)* |
+| CA-13 | **Dado** un examen con sesiones completadas y pendientes, **cuando** el estudiante lo cancela, **entonces** las pendientes se liberan y las completadas se conservan. *(RN-17)* |
+| CA-14 | **Dado** un sistema externo con credenciales válidas, **cuando** pide un plan con los datos de un examen y una disponibilidad, **entonces** recibe las sesiones propuestas en el formato definido en el contrato publicado. *(RF-13)* |
+
+### 9.3 Foro
+
+| ID | Criterio |
+|---|---|
+| CA-15 | **Dado** un estudiante, **cuando** sube un resumen en PDF de menos de 10 MB, **entonces** la publicación queda *pendiente* y no aparece en la búsqueda. *(RN-19, RN-24)* |
+| CA-16 | **Dado** un estudiante, **cuando** intenta subir un archivo que no es PDF o que pesa más de 10 MB, **entonces** el sistema lo rechaza indicando el motivo. *(RN-20)* |
+| CA-17 | **Dado** una publicación pendiente, **cuando** el administrador la rechaza sin indicar motivo, **entonces** el sistema no permite el rechazo. *(RN-22)* |
+| CA-18 | **Dado** una publicación pendiente, **cuando** dos administradores la moderan al mismo tiempo, **entonces** sólo una decisión queda registrada y la otra recibe un error de publicación ya moderada. *(RN-23)* **[crítico]** |
+| CA-19 | **Dado** un resumen recién aprobado, **cuando** pasa 1 minuto, **entonces** el resumen aparece en los resultados de búsqueda. *(RN-26)* |
+| CA-20 | **Dado** un resumen aprobado que aparece en la búsqueda, **cuando** el administrador lo elimina, **entonces** en 1 minuto como máximo deja de aparecer. *(RN-24, RN-26)* |
+| CA-21 | **Dado** varios resúmenes aprobados de distintas materias, **cuando** un estudiante busca filtrando por una materia y ordenando por calificación, **entonces** sólo ve resúmenes de esa materia, del mejor al peor calificado, paginados. *(RF-19, RF-20)* |
+| CA-22 | **Dado** un resumen aprobado que el estudiante ya calificó con 2, **cuando** lo califica con 5, **entonces** el promedio considera sólo el 5 y la cantidad de calificaciones no cambia. *(RN-30, RN-31)* |
+| CA-23 | **Dado** un estudiante, **cuando** intenta calificar su propio resumen, **entonces** el sistema rechaza la calificación. *(RN-29)* |
+
+### 9.4 Notificaciones
+
+| ID | Criterio |
+|---|---|
+| CA-24 | **Dado** una publicación pendiente, **cuando** el administrador la aprueba, **entonces** el autor recibe un único mail avisando que su resumen fue publicado. *(RF-23, RN-32)* |
+| CA-25 | **Dado** una publicación pendiente, **cuando** el administrador la rechaza con un motivo, **entonces** el autor recibe un único mail que incluye ese motivo. *(RF-24, RN-32)* |
+| CA-26 | **Dado** que el servicio de mail está caído, **cuando** el administrador aprueba una publicación, **entonces** la aprobación se registra igual y, cuando el servicio de mail vuelve, el autor recibe el mail una sola vez. *(RN-33)* **[crítico]** |
+| CA-27 | **Dado** un mail que falla en todos sus reintentos, **cuando** se agotan los intentos, **entonces** queda registrado como fallido y las demás notificaciones se siguen enviando. *(RN-34)* **[crítico]** |
