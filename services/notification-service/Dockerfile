@@ -4,7 +4,7 @@ WORKDIR /src
 COPY go.* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/notification-service .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/notification-service ./cmd/notification-service
 
 # Imagen final: sólo el binario, sin el código ni el compilador
 FROM alpine:3.20
