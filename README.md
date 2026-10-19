@@ -100,7 +100,9 @@ Ninguna de las dos es una simple alta de registros. La confirmación del plan ti
 
 ## Cómo levantar el sistema
 
-Todo el sistema (servicios, bases de datos y mensajería) se levanta con **un único comando** usando Docker, sin configuraciones manuales.
+Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.
+
+En la Entrega 2 funciona **planner-service** (pedir y confirmar el plan de estudio) con PostgreSQL. Los demás servicios son esqueletos que sólo responden `GET /health`.
 
 ### Requisitos
 
@@ -116,7 +118,7 @@ cp .env.example .env        # variables locales; los secretos reales nunca se su
 docker compose up --build
 ```
 
-La primera vez tarda unos minutos porque descarga las imágenes y compila los servicios. Las bases, los usuarios de cada servicio, el bucket de MinIO y el core de Solr se crean solos.
+La primera vez tarda unos minutos porque descarga las imágenes y compila los servicios. La base `planner` se crea sola con el usuario y la contraseña del `.env`.
 
 Para detenerlo:
 
@@ -126,35 +128,24 @@ docker compose down         # agregar -v para borrar también los datos locales
 
 ### Puertos y URLs
 
-**Servicios propios**
-
 | Componente | URL local | Para qué |
 |---|---|---|
-| api-gateway | http://localhost:8080 | Punto de entrada del frontend |
-| users-service | http://localhost:8081 | Cuentas y JWT |
-| planner-service | http://localhost:8082 | Plan de estudio y capacidad publicada para otros grupos |
-| forum-service | http://localhost:8083 | Foro de resúmenes |
-| notification-service | http://localhost:8084 | Mails de moderación |
-| Mock de la capacidad (Prism) | http://localhost:4010 | Contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
+| **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
+| planner-service | http://localhost:8082 | Plan de estudio (publicado también para la capacidad de otros grupos, ADR-008) |
+| users-service | http://localhost:8081 | Esqueleto: sólo `GET /health` |
+| forum-service | http://localhost:8083 | Esqueleto: sólo `GET /health` |
+| notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
+| **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
+| **Mock de la capacidad (Prism)** | http://localhost:4010 | Contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
+| PostgreSQL (base `planner`) | `localhost:5432` | Usuario y contraseña: variables `PLANNER_DB_*` del `.env` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
 
 ```bash
-curl http://localhost:8082/health
+curl http://localhost:8080/health
 ```
 
-**Almacenamiento y mensajería**
-
-| Componente | Puerto | Consola web | Usuario y contraseña locales |
-|---|---|---|---|
-| PostgreSQL (bases `users` y `planner`) | 5432 | — | Variables `POSTGRES_*` del `.env` |
-| MongoDB (bases `forum` y `notifications`) | 27017 | — | Variables `MONGO_ROOT_*` del `.env` |
-| MinIO (bucket `summaries`) | 9000 | http://localhost:9001 | Variables `MINIO_ROOT_*` del `.env` |
-| RabbitMQ | 5672 | http://localhost:15672 | Variables `RABBITMQ_*` del `.env` |
-| Apache Solr (core `summaries`) | 8983 | http://localhost:8983/solr | — |
-| Memcached | 11211 | — | — |
-
-Los puertos de las bases y del broker se exponen sólo para inspeccionarlos durante el desarrollo: los servicios se conectan entre sí por la red interna de Docker. Si algún puerto ya está ocupado en tu máquina, cambiá el número de la izquierda en el `docker-compose.yml` (por ejemplo, `"5433:5432"`).
+El puerto de PostgreSQL se expone sólo para inspeccionar la base durante el desarrollo: los servicios se conectan entre sí por la red interna de Docker. Si algún puerto ya está ocupado en tu máquina, cambiá el número de la izquierda en el `docker-compose.yml` (por ejemplo, `"5433:5432"`).
 
 Para levantar sólo el mock de la capacidad publicada:
 
@@ -162,14 +153,13 @@ Para levantar sólo el mock de la capacidad publicada:
 docker compose up planner-mock
 ```
 
-> Las credenciales del proveedor de IA y del servidor de mail se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
+> Las credenciales del proveedor de IA se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
 
 ### Estructura del repositorio
 
 | Carpeta | Contenido |
 |---|---|
-| `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), cada uno con su `Dockerfile` |
-| `deploy/` | Scripts que inicializan PostgreSQL y MongoDB con una base y un usuario por servicio |
+| `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), con el ejecutable en `cmd/<nombre>/` y su `Dockerfile` |
 | `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
 
 ### Entorno desplegado
