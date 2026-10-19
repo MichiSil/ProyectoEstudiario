@@ -155,6 +155,7 @@ type Plan struct {
 	ExamID      string
 	Status      PlanStatus
 	GeneratedBy GeneratedBy
+	Warnings    []string
 	Drafts      []SessionDraft
 	CreatedAt   time.Time
 }

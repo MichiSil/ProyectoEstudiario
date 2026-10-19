@@ -23,10 +23,23 @@ type ProposalInput struct {
 	Booked []domain.Session
 }
 
+// Proposal es el resultado de un generador: las sesiones propuestas, quién
+// las armó y los avisos para el usuario (por ejemplo "AI_FALLBACK" cuando la
+// IA no respondió y se usó el motor de reglas, RN-09).
+type Proposal struct {
+	Drafts      []domain.SessionDraft
+	GeneratedBy domain.GeneratedBy
+	Warnings    []string
+}
+
+// WarningAIFallback indica que la propuesta la armó el motor de reglas porque
+// el agente de IA no estaba disponible (RN-09).
+const WarningAIFallback = "AI_FALLBACK"
+
 // PlanGenerator propone las sesiones de un plan. Lo implementan el motor de
 // reglas (adapters/rules) y el agente de IA (adapters/ai).
 type PlanGenerator interface {
-	Generate(ctx context.Context, in ProposalInput) ([]domain.SessionDraft, error)
+	Generate(ctx context.Context, in ProposalInput) (Proposal, error)
 }
 
 // ConfirmResult es la respuesta de una confirmación. Se guarda junto con la
