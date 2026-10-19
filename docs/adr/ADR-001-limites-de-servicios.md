@@ -1,6 +1,6 @@
 # ADR-001: Límites de los servicios
 
-- **Estado:** Propuesta
+- **Estado:** Aceptada (acordada por el grupo; se valida en la Entrega 2)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D1
 - **Reemplaza a:** —
