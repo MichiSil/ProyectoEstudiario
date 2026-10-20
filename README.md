@@ -98,6 +98,15 @@ Ninguna de las dos es una simple alta de registros. La confirmación del plan ti
 4. **Consulta.** Los estudiantes buscan resúmenes aprobados por materia o por texto.
 5. **Calificación.** Cada estudiante puede calificar un resumen publicado una sola vez.
 
+## Desafíos adicionales
+
+Además de lo obligatorio, el grupo encara dos desafíos adicionales. El alcance y los criterios de aceptación están en la sección 10 del [`SPEC.md`](SPEC.md#10-desafíos-adicionales).
+
+| Desafío | Qué agrega |
+|---|---|
+| **Agente que opera el sistema mediante MCP** | El agente de IA consulta las materias y los exámenes del estudiante y propone planes de estudio a través de herramientas expuestas con el *Model Context Protocol* (MCP), un protocolo estándar para que un agente ejecute operaciones de un sistema. El agente propone, pero nunca confirma: la confirmación sigue siendo del estudiante. |
+| **Tests end-to-end del flujo principal** | Pruebas automáticas que recorren el flujo del plan de estudio de punta a punta contra el sistema levantado con `docker compose`: desde el registro hasta la confirmación del plan y su reintento. |
+
 ## Cómo levantar el sistema
 
 Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.

@@ -268,3 +268,42 @@ Cada criterio indica entre paréntesis las reglas o requisitos que verifica. Los
 | CA-25 | **Dado** una publicación pendiente, **cuando** el administrador la rechaza con un motivo, **entonces** el autor recibe un único mail que incluye ese motivo. *(RF-24, RN-32)* |
 | CA-26 | **Dado** que el servicio de mail está caído, **cuando** el administrador aprueba una publicación, **entonces** la aprobación se registra igual y, cuando el servicio de mail vuelve, el autor recibe el mail una sola vez. *(RN-33)* **[crítico]** |
 | CA-27 | **Dado** un mail que falla en todos sus reintentos, **cuando** se agotan los intentos, **entonces** queda registrado como fallido y las demás notificaciones se siguen enviando. *(RN-34)* **[crítico]** |
+
+## 10. Desafíos adicionales
+
+Además del alcance obligatorio, el grupo encara estos dos desafíos adicionales.
+
+### 10.1 Agente que ejecuta operaciones del sistema mediante MCP
+
+El agente de IA puede operar Estudiario a través del **Model Context Protocol (MCP)**, un protocolo estándar para que un agente descubra y ejecute operaciones de un sistema. planner-service expone un servidor MCP con herramientas que llaman a los mismos casos de uso que la API REST, así que se aplican las mismas reglas de negocio.
+
+| Herramienta | Qué hace |
+|---|---|
+| `listar_materias` | Devuelve las materias del estudiante, con su dificultad. |
+| `listar_examenes` | Devuelve los próximos exámenes del estudiante, con su fecha y sus temas. |
+| `proponer_plan` | Pide una propuesta de plan para un examen (RF-08). |
+
+| ID | Regla |
+|---|---|
+| RN-36 | El agente actúa siempre en nombre de un estudiante autenticado y sólo accede a sus datos (RN-03). |
+| RN-37 | El agente puede proponer planes, pero no confirmarlos: la confirmación sigue siendo una acción del estudiante (RN-08). |
+
+| ID | Criterio |
+|---|---|
+| CA-28 | **Dado** un estudiante con una materia y un examen cargados, **cuando** el agente usa `listar_examenes` y después `proponer_plan` por MCP, **entonces** obtiene una propuesta en estado *propuesto* y no se reserva ninguna sesión hasta que el estudiante la confirma. *(RN-08, RN-37)* |
+| CA-29 | **Dado** el agente conectado por MCP en nombre de un estudiante, **cuando** pide los exámenes de otro estudiante, **entonces** no recibe datos de ese estudiante. *(RN-36)* |
+
+### 10.2 Tests end-to-end del flujo principal
+
+Pruebas automáticas que recorren el flujo del plan de estudio de punta a punta, contra el sistema levantado con `docker compose` y a través del api-gateway, sin simular servicios internos:
+
+1. Registro e inicio de sesión del estudiante.
+2. Alta de una materia, carga de un examen y declaración de la disponibilidad.
+3. Pedido de una propuesta de plan.
+4. Confirmación del plan y verificación de que las sesiones quedaron reservadas en el calendario (CA-06).
+5. Reintento de la misma confirmación con la misma `Idempotency-Key`, sin sesiones duplicadas (CA-10).
+6. Pedido de una propuesta con la IA no disponible, que llega armada por reglas con el aviso `AI_FALLBACK` (CA-05).
+
+| ID | Criterio |
+|---|---|
+| CA-30 | **Dado** el sistema levantado desde cero con `docker compose up --build`, **cuando** se ejecutan los tests end-to-end, **entonces** recorren el flujo anterior completo y terminan sin errores. |
