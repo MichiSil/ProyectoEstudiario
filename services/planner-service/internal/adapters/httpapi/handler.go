@@ -1,12 +1,14 @@
 // Package httpapi es el adaptador de entrada HTTP de planner-service.
 //
 // La identidad del estudiante llega en el encabezado X-User-Id, que completa
-// el api-gateway después de validar el JWT (ADR-001). Mientras users-service
-// no esté operativo, el encabezado lo envía directamente quien llama.
+// el api-gateway después de validar el JWT (ADR-001). Como el puerto de
+// planner-service también queda publicado (ADR-008), X-User-Id sólo se acepta
+// si el pedido trae X-Internal-Token con el secreto que comparte con el gateway.
 package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -26,7 +28,13 @@ type Handler struct {
 	Svc    *app.Service
 	DB     Pinger
 	Logger *slog.Logger
+	// InternalToken es el secreto que el api-gateway manda en X-Internal-Token.
+	// Vacío, ningún pedido de estudiante se acepta.
+	InternalToken string
 }
+
+// InternalTokenHeader es el encabezado con el secreto compartido con el gateway.
+const InternalTokenHeader = "X-Internal-Token"
 
 // Routes devuelve el router. Acepta las rutas con y sin el prefijo
 // /api/planner, para funcionar igual detrás del api-gateway o llamado directo.
@@ -56,6 +64,10 @@ type studentHandler func(w http.ResponseWriter, r *http.Request, studentID strin
 
 func (h *Handler) withStudent(next studentHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !h.fromGateway(r) {
+			h.problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "el pedido no pasó por el api-gateway", nil)
+			return
+		}
 		id := strings.TrimSpace(r.Header.Get("X-User-Id"))
 		if id == "" {
 			h.problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "falta la identidad del estudiante (X-User-Id)", nil)
@@ -63,6 +75,14 @@ func (h *Handler) withStudent(next studentHandler) http.HandlerFunc {
 		}
 		next(w, r, id)
 	}
+}
+
+// fromGateway compara el secreto interno en tiempo constante, para no dar
+// pistas sobre su valor con el tiempo de respuesta.
+func (h *Handler) fromGateway(r *http.Request) bool {
+	got := r.Header.Get(InternalTokenHeader)
+	return h.InternalToken != "" && got != "" &&
+		subtle.ConstantTimeCompare([]byte(got), []byte(h.InternalToken)) == 1
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

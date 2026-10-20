@@ -27,6 +27,9 @@ services:
       PORT: "8080"
       PLANNER_SERVICE_URL: http://planner-service:8082
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Secreto para validar los JWT y secreto compartido con planner-service.
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -48,6 +51,8 @@ services:
       PORT: "8082"
       DATABASE_URL: postgres://${PLANNER_DB_USER}:${PLANNER_DB_PASSWORD}@postgres:5432/planner?sslmode=disable
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
       # Agente de IA (Groq). Sin AI_API_KEY, el plan se arma con el motor de reglas (RN-09).
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
