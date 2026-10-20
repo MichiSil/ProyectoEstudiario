@@ -39,7 +39,7 @@ func env(key, def string) string {
 
 func main() {
 	logger := slog.New(httpapi.ContextHandler{Handler: slog.NewJSONHandler(os.Stdout, nil)}).
-		With("service", serviceName, "instance", env("HOSTNAME", "local"))
+		With("service", serviceName, "instance", env("INSTANCE", env("HOSTNAME", "local")))
 	slog.SetDefault(logger)
 
 	if err := run(logger); err != nil {
@@ -78,7 +78,11 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	svc := &app.Service{Repo: repo, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
+	// Cada operación contra PostgreSQL tiene un tiempo máximo y, si la base no
+	// responde, la API devuelve 503 en lugar de 500 (ADR-010).
+	guarded := postgres.Guarded{Repo: repo, Timeout: postgres.DefaultTimeout}
+
+	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
 	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger}
 
 	srv := &http.Server{
@@ -87,6 +91,7 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

@@ -288,6 +288,10 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		h.problem(w, r, http.StatusConflict, "REQUEST_IN_PROGRESS", err.Error(), nil)
 	case errors.Is(err, domain.ErrIdempotencyReused):
 		h.problem(w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REUSED", err.Error(), nil)
+	case errors.Is(err, domain.ErrUnavailable):
+		h.Logger.ErrorContext(r.Context(), "dependencia no disponible", "error", err.Error())
+		w.Header().Set("Retry-After", "5")
+		h.problem(w, r, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "el servicio no está disponible en este momento, probá de nuevo en unos segundos", nil)
 	case errors.Is(err, context.DeadlineExceeded):
 		h.problem(w, r, http.StatusServiceUnavailable, "TIMEOUT", "la operación tardó demasiado", nil)
 	default:

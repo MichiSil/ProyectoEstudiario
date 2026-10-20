@@ -1,6 +1,6 @@
 # ADR-005: Comunicación entre servicios
 
-- **Estado:** Propuesta (versión inicial, se valida en la Entrega 2)
+- **Estado:** Aceptada (validada parcialmente en la Entrega 2: comunicación síncrona de planner-service)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D5
 - **Reemplaza a:** —
@@ -224,3 +224,31 @@ Queda una ventana mínima en la que el mail se envió pero el proceso se cayó a
 - Que la librería de RabbitMQ de clase permita reintentos diferidos mediante la cola de espera, sin bloquear el consumo.
 - Medir el tiempo entre una aprobación y su aparición en la búsqueda, contra el plazo de 1 minuto de RN-26.
 - Definir la comunicación con la capacidad del otro grupo (ADR-009, D9).
+
+## Validación (Entrega 2, 2026-10-19)
+
+**Resultado: la parte síncrona de planner-service se mantiene, con un ajuste en la concurrencia. La parte asíncrona todavía no está implementada.**
+
+### Lo que se implementó y cómo se verificó
+
+| Decisión | Implementación | Evidencia |
+|---|---|---|
+| `Idempotency-Key` obligatoria al confirmar (2.4) | Sin clave, `422` con la regla RN-14. Misma clave y mismo plan: devuelve el resultado guardado. Misma clave con otro plan: `422 IDEMPOTENCY_KEY_REUSED`. | Tests de casos de uso e integración; prueba de carga con un reintento por flujo. |
+| Errores en *Problem Details* con `code` estable y `correlationId` (2.2) | `internal/adapters/httpapi`: cada error indica además la regla del SPEC incumplida (por ejemplo `RN-12`). | Probado a mano con curl (401, 409, 422). |
+| Correlación (2.5) | planner-service respeta el `X-Correlation-Id` que recibe, o lo genera, y lo devuelve en la respuesta. Los logs son JSON con `correlationId`, `traceId`, servicio e instancia. Las trazas se exportan por OTLP a Jaeger. | Trazas `POST .../confirm` → `postgres.confirm_plan` visibles en Jaeger. |
+| Presupuesto de 8 s y fallback para la IA (2.1) | Adaptador de Groq con *circuit breaker* y fallback al motor de reglas ([ADR-010](ADR-010-resiliencia.md)). | Tests del adaptador con un servidor falso: respuesta inválida, un reintento ante `5xx`, ningún reintento ante `4xx`, fallback y *circuit breaker*. |
+
+**Ajuste respecto de la decisión original.** La tabla 2.4 y el contrato prevén un `409` cuando llegan a la vez dos confirmaciones con la misma clave. Como la confirmación bloquea la fila del estudiante ([ADR-003](ADR-003-persistencia.md)), el segundo pedido espera a que termine el primero y recibe el resultado ya guardado (`200`), que es lo que el cliente quería. El `409 REQUEST_IN_PROGRESS` queda como resguardo si la clave primaria de `confirmations` llegara a chocar.
+
+**Agregado.** Al arrancar, planner-service reintenta la conexión a PostgreSQL con espera exponencial (1, 2, 4, 8 y 16 s), como en la demo de la clase 4, para no fallar si la base todavía está iniciando.
+
+### Diferencias detectadas que hay que corregir
+
+- Los servidores HTTP tienen que configurar también `IdleTimeout` (2.3). planner-service configura `ReadHeaderTimeout`, `ReadTimeout` y `WriteTimeout`, pero todavía no `IdleTimeout`.
+- El [ADR-010](ADR-010-resiliencia.md) fija 3 s por consulta a PostgreSQL y `503 SERVICE_UNAVAILABLE` si la base no responde. Hoy las consultas usan el contexto del pedido, sin un límite propio, y una base caída se informa como `500`.
+- La IA está implementada pero todavía no está conectada en el arranque del servicio (`cmd/planner-service/main.go`).
+- Los timeouts del api-gateway hacia los servicios (5 s y 12 s para la propuesta) dependen de la rama de observabilidad del gateway.
+
+### Pendiente
+
+La comunicación asíncrona (sección 3: *outbox* en forum-service, RabbitMQ, consumidor idempotente en notification-service y *dead letter queues*) se implementa con el foro y las notificaciones, para la presentación final.

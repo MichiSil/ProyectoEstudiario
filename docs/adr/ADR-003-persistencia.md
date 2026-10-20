@@ -1,6 +1,6 @@
 # ADR-003: Persistencia
 
-- **Estado:** Aceptada (versión inicial acordada por el grupo; se valida en la Entrega 2)
+- **Estado:** Aceptada (validada para planner-service en la Entrega 2)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D3
 - **Reemplaza a:** —
@@ -91,3 +91,29 @@ El detalle del tratamiento de la concurrencia se documenta en el ADR-004 (D4).
 
 - Con datos reales, que los índices definidos cubran las consultas del calendario y del foro.
 - Confirmar que el *outbox* dentro del mismo documento, definido en el ADR-005 (D5), alcanza para publicar eventos sin perderlos y sin necesitar transacciones de varios documentos (que en MongoDB exigen un *replica set*).
+
+## Validación (Entrega 2, 2026-10-19)
+
+**Resultado: la decisión se mantiene para planner-service, con un ajuste en el bloqueo.** El resto de los almacenamientos se valida cuando sus servicios estén operativos.
+
+### planner-service: PostgreSQL
+
+Implementado en `services/planner-service/internal/adapters/postgres/schema.sql`.
+
+| Garantía | Cómo quedó | Evidencia |
+|---|---|---|
+| Sin sesiones superpuestas (RN-12) | Restricción `sessions_no_overlap EXCLUDE USING gist (student_id WITH =, tstzrange(starts_at, ends_at) WITH &&)`, que ignora las sesiones pospuestas. | `TestIntegration_RestriccionDeSuperposicion`: la base rechaza una sesión superpuesta aunque se inserte saltando la aplicación. |
+| Confirmación sin duplicados (RN-14) | Tabla `confirmations` con clave primaria `(student_id, idempotency_key)` y el resultado guardado en la misma transacción. | `TestIntegration_ConfirmarYReintentar` y prueba de carga: 46.387 reintentos sin duplicar sesiones. |
+| Un plan confirmado por examen (RN-15) | Índice único parcial `plans_one_confirmed_per_exam ON plans (exam_id) WHERE status = 'confirmado'`. | Prueba de carga: 0 exámenes con dos planes confirmados. |
+| Capacidad diaria (RN-13) | Se valida dentro de la transacción, contra las sesiones del estudiante. | Tests unitarios de `domain.ValidatePlan` (CA-09). |
+
+**Ajuste respecto de la decisión original.** Este ADR proponía bloquear *las filas del estudiante para esos días*. Se implementó algo más simple: una tabla `students` con una fila por estudiante, que la confirmación bloquea con `SELECT ... FOR UPDATE`. Así todas las confirmaciones del mismo estudiante se procesan de a una, sin riesgo de *deadlocks* por bloquear varias filas en distinto orden. El costo es que dos confirmaciones del mismo estudiante para días distintos también esperan una a la otra; se acepta porque es un caso raro (lo hace una misma persona) y entre estudiantes distintos no hay espera. `TestIntegration_ConfirmacionesConcurrentes` (5 confirmaciones simultáneas del mismo plan) termina con una sola confirmación exitosa.
+
+**Índices.** Las consultas del calendario se resuelven con `sessions (student_id, starts_at)` y `exams (student_id, starts_at)`, en lugar del `(student_id, date)` previsto, porque las sesiones guardan fecha y hora.
+
+**Rendimiento.** Con 1 vCPU, la base sostiene unos 250 flujos completos por segundo, y su CPU es el principal límite del sistema ([ADR-013](ADR-013-capacidad-y-costos.md)).
+
+### Pendiente de validar
+
+- **users-service** (PostgreSQL) y **forum-service** (MongoDB, MinIO, Solr y Memcached) siguen en esqueleto, y **notification-service** (MongoDB) todavía no consume eventos. Sus almacenamientos se validan para la presentación final.
+- En el `docker-compose.yml` de esta entrega, el usuario de la base `planner` es también el usuario administrador del contenedor, porque es la única base. Cuando se sume la base `users`, cada servicio tiene que tener su propio usuario sin permisos sobre la otra.

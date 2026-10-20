@@ -27,6 +27,9 @@ func (s *Service) CreateSubject(ctx context.Context, sub domain.Subject) (domain
 	if len(verr.Violations) > 0 {
 		return domain.Subject{}, verr
 	}
+	if sub.Professors == nil {
+		sub.Professors = []string{} // en la API se devuelve [] y no null
+	}
 	sub.ID = s.IDs.NewID()
 	return sub, s.Repo.CreateSubject(ctx, sub)
 }
