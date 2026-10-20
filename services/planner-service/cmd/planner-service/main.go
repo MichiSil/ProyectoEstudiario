@@ -38,7 +38,7 @@ func env(key, def string) string {
 
 func main() {
 	logger := slog.New(httpapi.ContextHandler{Handler: slog.NewJSONHandler(os.Stdout, nil)}).
-		With("service", serviceName, "instance", env("HOSTNAME", "local"))
+		With("service", serviceName, "instance", env("INSTANCE", env("HOSTNAME", "local")))
 	slog.SetDefault(logger)
 
 	if err := run(logger); err != nil {
@@ -89,6 +89,7 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()
