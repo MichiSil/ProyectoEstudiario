@@ -103,7 +103,7 @@ flowchart LR
 
 **Desvíos temporales aceptados**
 
-- **Identidad.** Mientras users-service esté en esqueleto, planner-service recibe la identidad del estudiante en el encabezado `X-User-Id`. Cuando el api-gateway valide el JWT, será él quien complete ese encabezado, y planner-service no cambia.
+- **Identidad.** El api-gateway ya valida el JWT (HS256, emisor `users-service`), descarta el `X-User-Id` que mande el cliente y lo completa desde el token. Como el puerto de planner-service queda publicado para otros grupos, planner-service sólo acepta `X-User-Id` si el pedido trae el secreto interno que le manda el gateway (`X-Internal-Token`). Lo que sigue pendiente es que users-service emita los tokens: mientras tanto, para probar en local se generan con `go run ./cmd/devtoken` en `services/api-gateway`.
 - **Capacidad para otro grupo.** Por indicación de la cátedra, su implementación se pospone. En esta entrega están el contrato y el mock ([ADR-008](ADR-008-contrato-propio.md)).
 
 **Queda por validar** con users-service, forum-service y notification-service operativos: la comunicación por eventos entre el foro y las notificaciones, y el consumo de la capacidad de otro grupo (ADR-009).
