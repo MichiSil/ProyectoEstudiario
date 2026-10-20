@@ -164,6 +164,21 @@ docker compose up planner-mock
 
 > Las credenciales del proveedor de IA se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
 
+### Identidad y tokens de prueba
+
+Todo pedido a `/api/planner/*` pasa por el api-gateway y necesita un **JWT** en `Authorization: Bearer <token>`. El gateway lo valida, borra cualquier `X-User-Id` que mande el cliente y completa la identidad a partir del token ([ADR-001](docs/adr/ADR-001-limites-de-servicios.md)). planner-service sólo acepta `X-User-Id` si el pedido trae además el secreto interno que le manda el gateway, así que llamarlo directo a su puerto con el id de otro estudiante devuelve `401`.
+
+Mientras users-service no emita tokens, se genera uno de prueba con el mismo `JWT_SECRET` del `.env`:
+
+```bash
+cd services/api-gateway
+export TOKEN=$(JWT_SECRET=$(grep ^JWT_SECRET= ../../.env | cut -d= -f2 | tr -d '\r') go run ./cmd/devtoken -sub estudiante-1)
+cd ../..
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/planner/sessions
+```
+
+> Si ya tenías un `.env` de antes, agregale `JWT_SECRET` e `INTERNAL_TOKEN` copiándolos de `.env.example`: sin ellos, `docker compose` no levanta.
+
 ### Logs y trazas
 
 El api-gateway y planner-service escriben **un log JSON por pedido** con `time`, `level`, `service`, `correlationId`, `method`, `path`, `status` y `durationMs`. Cada pedido lleva un `X-Correlation-Id`: si el cliente no lo manda, lo genera el gateway, lo reenvía al servicio y lo devuelve en la respuesta. La estrategia completa está en el [ADR-011](docs/adr/ADR-011-observabilidad.md).
@@ -177,7 +192,7 @@ docker compose logs -f api-gateway planner-service
 Para seguir un pedido puntual, mandalo con tu propio identificador y filtrá por él:
 
 ```bash
-curl -H "X-Correlation-Id: prueba-1" -H "X-User-Id: estudiante-1" http://localhost:8080/api/planner/sessions
+curl -H "X-Correlation-Id: prueba-1" -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/planner/sessions
 docker compose logs api-gateway planner-service | grep prueba-1
 ```
 
@@ -202,14 +217,15 @@ Después de cambiar el `.env`, recreá el servicio con `docker compose up -d pla
 | Con una clave válida | `generatedBy: "ia"`: el plan lo armó Groq y pasó las mismas reglas que la confirmación. |
 | Con una clave inválida, o si Groq falla, tarda más de 8 s o responde algo inválido | `generatedBy: "reglas"` y `warnings: ["AI_FALLBACK"]`. En `docker compose logs planner-service` queda un `WARN` en JSON con el `correlationId` del pedido, el motivo y el error. Después de 3 fallas seguidas, el *circuit breaker* deja de llamar a Groq durante 30 s. |
 
-Para probarlo directo contra planner-service, sin pasar por el gateway:
+Para probarlo a través del gateway, con el `TOKEN` de prueba de la sección anterior:
 
 ```bash
-H='-H Content-Type:application/json -H X-User-Id:estudiante-1 -H X-Correlation-Id:prueba-ia'
-curl $H -X POST localhost:8082/subjects -d '{"name":"Análisis II","difficulty":3}'          # devuelve el id de la materia
-curl $H -X PUT localhost:8082/availability -d '{"weeklySlots":[{"weekday":1,"startTime":"18:00","endTime":"21:00"},{"weekday":3,"startTime":"18:00","endTime":"21:00"}],"maxDailyMinutes":120,"preferredSessionMinutes":90,"timezone":"America/Argentina/Cordoba"}'
-curl $H -X POST localhost:8082/exams -d '{"subjectId":"<id de la materia>","type":"parcial","startsAt":"2026-11-10T09:00:00-03:00","topics":["Integrales dobles","Series"]}'
-curl $H -X POST localhost:8082/exams/<id del examen>/proposals
+H=(-H Content-Type:application/json -H X-Correlation-Id:prueba-ia -H "Authorization: Bearer $TOKEN")
+G=localhost:8080/api/planner
+curl "${H[@]}" -X POST $G/subjects -d '{"name":"Análisis II","difficulty":3}'          # devuelve el id de la materia
+curl "${H[@]}" -X PUT $G/availability -d '{"weeklySlots":[{"weekday":1,"startTime":"18:00","endTime":"21:00"},{"weekday":3,"startTime":"18:00","endTime":"21:00"}],"maxDailyMinutes":120,"preferredSessionMinutes":90,"timezone":"America/Argentina/Cordoba"}'
+curl "${H[@]}" -X POST $G/exams -d '{"subjectId":"<id de la materia>","type":"parcial","startsAt":"2026-11-10T09:00:00-03:00","topics":["Integrales dobles","Series"]}'
+curl "${H[@]}" -X POST $G/exams/<id del examen>/proposals
 docker compose logs planner-service | grep prueba-ia
 ```
 
