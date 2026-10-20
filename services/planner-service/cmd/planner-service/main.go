@@ -76,7 +76,11 @@ func run(logger *slog.Logger) error {
 	// envuelve con fallback cuando está configurado (RN-09).
 	var generator app.PlanGenerator = rules.Engine{}
 
-	svc := &app.Service{Repo: repo, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
+	// Cada operación contra PostgreSQL tiene un tiempo máximo y, si la base no
+	// responde, la API devuelve 503 en lugar de 500 (ADR-010).
+	guarded := postgres.Guarded{Repo: repo, Timeout: postgres.DefaultTimeout}
+
+	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
 	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger}
 
 	srv := &http.Server{
