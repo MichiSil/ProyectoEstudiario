@@ -183,6 +183,36 @@ docker compose logs api-gateway planner-service | grep prueba-1
 
 **Ver las trazas:** abrí Jaeger en http://localhost:16686, elegí el servicio `api-gateway` y tocá *Find Traces*. Cada traza muestra el pedido completo: el span del gateway y, adentro, el de planner-service, con la duración de cada uno. Para encontrar un pedido puntual, buscá por el tag `correlation.id=prueba-1`.
 
+### Agente de IA
+
+planner-service arma las propuestas de plan con un agente de IA sobre [Groq](https://console.groq.com) y, si la IA falla, con el motor de reglas (RN-09, [ADR-010](docs/adr/ADR-010-resiliencia.md)). Se configura en el `.env` local:
+
+| Variable | Valor por defecto | Para qué |
+|---|---|---|
+| `AI_API_KEY` | *(vacía)* | Clave de Groq, de https://console.groq.com/keys. **Va sólo en tu `.env`**, nunca en el repositorio. |
+| `AI_MODEL` | `llama-3.3-70b-versatile` | Modelo de Groq |
+| `AI_BASE_URL` | `https://api.groq.com/openai/v1` | API de Groq compatible con OpenAI |
+| `AI_TIMEOUT` | `8s` | Presupuesto total de la llamada, reintento incluido (ADR-005) |
+
+Después de cambiar el `.env`, recreá el servicio con `docker compose up -d planner-service`.
+
+| Configuración | Qué devuelve `POST /exams/{id}/proposals` |
+|---|---|
+| Sin `AI_API_KEY` | `generatedBy: "reglas"`, sin avisos. Al arrancar, planner-service avisa una vez en el log que usa sólo el motor de reglas. |
+| Con una clave válida | `generatedBy: "ia"`: el plan lo armó Groq y pasó las mismas reglas que la confirmación. |
+| Con una clave inválida, o si Groq falla, tarda más de 8 s o responde algo inválido | `generatedBy: "reglas"` y `warnings: ["AI_FALLBACK"]`. En `docker compose logs planner-service` queda un `WARN` en JSON con el `correlationId` del pedido, el motivo y el error. Después de 3 fallas seguidas, el *circuit breaker* deja de llamar a Groq durante 30 s. |
+
+Para probarlo directo contra planner-service, sin pasar por el gateway:
+
+```bash
+H='-H Content-Type:application/json -H X-User-Id:estudiante-1 -H X-Correlation-Id:prueba-ia'
+curl $H -X POST localhost:8082/subjects -d '{"name":"Análisis II","difficulty":3}'          # devuelve el id de la materia
+curl $H -X PUT localhost:8082/availability -d '{"weeklySlots":[{"weekday":1,"startTime":"18:00","endTime":"21:00"},{"weekday":3,"startTime":"18:00","endTime":"21:00"}],"maxDailyMinutes":120,"preferredSessionMinutes":90,"timezone":"America/Argentina/Cordoba"}'
+curl $H -X POST localhost:8082/exams -d '{"subjectId":"<id de la materia>","type":"parcial","startsAt":"2026-11-10T09:00:00-03:00","topics":["Integrales dobles","Series"]}'
+curl $H -X POST localhost:8082/exams/<id del examen>/proposals
+docker compose logs planner-service | grep prueba-ia
+```
+
 ### Estructura del repositorio
 
 | Carpeta | Contenido |

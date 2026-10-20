@@ -48,9 +48,11 @@ services:
       PORT: "8082"
       DATABASE_URL: postgres://${PLANNER_DB_USER}:${PLANNER_DB_PASSWORD}@postgres:5432/planner?sslmode=disable
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
-      AI_PROVIDER_URL: ${AI_PROVIDER_URL:-}
+      # Agente de IA (Groq). Sin AI_API_KEY, el plan se arma con el motor de reglas (RN-09).
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_TIMEOUT: ${AI_TIMEOUT:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
       interval: 10s
