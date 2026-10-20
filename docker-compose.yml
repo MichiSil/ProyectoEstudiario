@@ -1,0 +1,150 @@
+# Levanta todo Estudiario en local con un único comando:
+#
+#   cp .env.example .env
+#   docker compose up --build
+#
+# Puertos y URLs: ver "Cómo levantar el sistema" en el README.
+#
+# En la Entrega 2 sólo funciona planner-service (pedir y confirmar el plan) con
+# PostgreSQL. Los demás servicios son esqueletos que responden GET /health.
+
+name: estudiario
+
+x-go-service: &go-service
+  restart: unless-stopped
+  init: true
+
+services:
+  # ---------------------------------------------------------------
+  # Servicios propios (Go)
+  # ---------------------------------------------------------------
+  api-gateway:
+    <<: *go-service
+    build: ./services/api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      PLANNER_SERVICE_URL: http://planner-service:8082
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      planner-service:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  planner-service:
+    <<: *go-service
+    build: ./services/planner-service
+    # Publicado directamente: la capacidad para otros grupos no pasa por el api-gateway (ADR-008).
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      DATABASE_URL: postgres://${PLANNER_DB_USER}:${PLANNER_DB_PASSWORD}@postgres:5432/planner?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      AI_PROVIDER_URL: ${AI_PROVIDER_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  users-service:
+    <<: *go-service
+    build: ./services/users-service
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  forum-service:
+    <<: *go-service
+    build: ./services/forum-service
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  notification-service:
+    <<: *go-service
+    build: ./services/notification-service
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------
+  # Mock de la capacidad publicada (docs/contracts/)
+  # ---------------------------------------------------------------
+  planner-mock:
+    image: stoplight/prism:5
+    command: mock -h 0.0.0.0 -p 4010 --multiprocess=false /contracts/planner-v1.yaml
+    ports:
+      - "4010:4010"
+    volumes:
+      - ./docs/contracts:/contracts:ro
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Almacenamiento
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: planner
+      POSTGRES_USER: ${PLANNER_DB_USER:?falta el archivo .env (copiá .env.example a .env)}
+      POSTGRES_PASSWORD: ${PLANNER_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d planner"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Observabilidad
+  # ---------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    ports:
+      - "16686:16686" # interfaz web
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
