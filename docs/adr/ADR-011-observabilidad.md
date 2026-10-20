@@ -70,17 +70,17 @@ El flujo principal de esta entrega es **pedir una propuesta de plan y confirmarl
 | Caché del foro (cuando exista) | Aciertos y fallos por operación | Medición antes y después que pide el enunciado (ADR-007) |
 | Mensajería (cuando exista) | Mensajes en cada cola y en cada *dead letter queue* | Alerta del ADR-005 |
 
-### 5. Objetivo de servicio (SLO) inicial *(propuesta)*
+### 5. Objetivo de servicio (SLO) inicial
 
-Se mide sobre los pedidos a `/api/planner/*` que pasan por el api-gateway, en ventanas de 7 días:
+Se mide sobre los pedidos a `/api/planner/*` que pasan por el api-gateway, en ventanas de 7 días. Los valores salen de los umbrales que ya fijaron otros ADR:
 
 | Objetivo | Valor inicial | De dónde sale |
 |---|---|---|
-| **Disponibilidad** | 99 % de los pedidos sin respuesta `5xx` (los `4xx` son errores del pedido y no cuentan) | — |
-| **Latencia de la propuesta** | p95 por debajo de **10 s** | Lo que se le compromete al consumidor en el [ADR-008](ADR-008-contrato-propio.md) |
-| **Latencia del resto de las operaciones**, incluida la confirmación | p95 por debajo de **1 s** | Muy por debajo del timeout de 5 s del gateway ([ADR-005](ADR-005-comunicacion.md)) |
+| **Disponibilidad** | 99 % de los pedidos sin respuesta `5xx` (los `4xx` son errores del pedido y no cuentan) | Menos de 1 % de errores, umbral de la prueba de carga del [ADR-013](ADR-013-capacidad-y-costos.md) |
+| **Latencia de proponer y confirmar** cuando el plan lo arma el motor de reglas | p95 por debajo de **500 ms** | Umbral de aceptación del [ADR-013](ADR-013-capacidad-y-costos.md) |
+| **Latencia de la propuesta** cuando interviene la IA | p95 por debajo de **10 s** | Lo que se le compromete al consumidor en el [ADR-008](ADR-008-contrato-propio.md) |
 
-Son valores iniciales: se ajustan con los resultados de las pruebas de carga (D13).
+Se revisan si cambian los umbrales del ADR-013 o el presupuesto de la IA del [ADR-010](ADR-010-resiliencia.md).
 
 ### 6. Criterios de alerta *(propuesta)*
 
@@ -88,7 +88,7 @@ Son valores iniciales: se ajustan con los resultados de las pruebas de carga (D1
 |---|---|---|
 | Errores altos | Más del 5 % de respuestas `5xx` en 5 minutos | Se está consumiendo el margen del SLO de disponibilidad |
 | Servicio no disponible | Algún `503 UPSTREAM_UNAVAILABLE` sostenido por 1 minuto, o una instancia que no responde su healthcheck | Un servicio o una instancia del foro está caído |
-| Latencia | p95 de la propuesta por encima de 10 s, o del resto por encima de 1 s, durante 10 minutos | Se incumple el SLO de latencia |
+| Latencia | p95 de proponer o confirmar por encima de 500 ms (o de 10 s cuando interviene la IA) durante 10 minutos | Se incumple el SLO de latencia |
 | IA degradada | Más de la mitad de las propuestas armadas por `reglas` en 15 minutos | El proveedor de IA está fallando (RN-09) |
 | Mensajes no procesados | Algún mensaje en una *dead letter queue* | Pedido del ADR-005 |
 
@@ -118,4 +118,4 @@ Un tablero de estado general con: pedidos por segundo, porcentaje de errores y l
 - Armar el tablero y configurar al menos la alerta que se va a mostrar en la presentación.
 - Agregar las métricas por instancia de forum-service (ADR-012), las de la caché (ADR-007) y las de las colas (ADR-005) a medida que esos componentes se implementen.
 - Instrumentar el resto de los servicios con el mismo paquete de observabilidad, y sumar spans de las consultas a PostgreSQL y de la llamada a la IA en planner-service.
-- Ajustar el SLO y los umbrales de alerta con los resultados de las pruebas de carga (D13).
+- Revisar el SLO y los umbrales de alerta con nuevas pruebas de carga (ADR-013), en especial si se suman instancias o se cambia el tamaño de la base.
