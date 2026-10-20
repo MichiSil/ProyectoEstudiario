@@ -28,13 +28,24 @@ func CorrelationID(ctx context.Context) string {
 type ContextHandler struct{ slog.Handler }
 
 func (h ContextHandler) Handle(ctx context.Context, r slog.Record) error {
-	if id := CorrelationID(ctx); id != "" {
+	if id := CorrelationID(ctx); id != "" && !hasAttr(r, "correlationId") {
 		r.AddAttrs(slog.String("correlationId", id))
 	}
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 		r.AddAttrs(slog.String("traceId", sc.TraceID().String()), slog.String("spanId", sc.SpanID().String()))
 	}
 	return h.Handler.Handle(ctx, r)
+}
+
+// hasAttr indica si el registro ya trae el atributo (por ejemplo, el log de
+// fallo de la IA escribe su propio correlationId), para no repetir la clave.
+func hasAttr(r slog.Record, key string) bool {
+	found := false
+	r.Attrs(func(a slog.Attr) bool {
+		found = a.Key == key
+		return !found
+	})
+	return found
 }
 
 func (h ContextHandler) WithAttrs(a []slog.Attr) slog.Handler {

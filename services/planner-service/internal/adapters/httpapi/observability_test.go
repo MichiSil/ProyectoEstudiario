@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/correlation"
@@ -54,5 +56,18 @@ func TestObserve_GeneraCorrelationID(t *testing.T) {
 
 	if seen == "" || rec.Header().Get(correlation.Header) != seen {
 		t.Fatalf("se esperaba un id generado igual en el contexto y en la respuesta: %q / %q", seen, rec.Header().Get(correlation.Header))
+	}
+}
+
+// Un log que ya trae su correlationId (como el de fallo de la IA) no lo repite.
+func TestContextHandler_NoRepiteCorrelationID(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(ContextHandler{Handler: slog.NewJSONHandler(&logs, nil)})
+	ctx := correlation.WithID(context.Background(), "corr-1")
+
+	logger.WarnContext(ctx, "fallo de la IA", "correlationId", correlation.ID(ctx))
+
+	if n := strings.Count(logs.String(), `"correlationId"`); n != 1 {
+		t.Fatalf("se esperaba correlationId una sola vez, aparece %d:\n%s", n, logs.String())
 	}
 }
