@@ -11,14 +11,15 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/correlation"
 )
 
-type ctxKey struct{}
-
-// CorrelationID devuelve el identificador de correlación del pedido.
+// CorrelationID devuelve el identificador de correlación del pedido. Lo guarda
+// el paquete correlation, así lo leen igual los logs, el handler y los
+// adaptadores de salida (por ejemplo, el de IA).
 func CorrelationID(ctx context.Context) string {
-	id, _ := ctx.Value(ctxKey{}).(string)
-	return id
+	return correlation.ID(ctx)
 }
 
 // ContextHandler agrega a cada log el correlationId y el traceId del pedido,
@@ -58,13 +59,13 @@ func (s *statusRecorder) WriteHeader(code int) {
 // traceparent) y un log estructurado por pedido.
 func Observe(next http.Handler, logger *slog.Logger) http.Handler {
 	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+		id := strings.TrimSpace(r.Header.Get(correlation.Header))
 		if id == "" {
 			id = strings.ToLower(rand.Text())
 		}
-		ctx := context.WithValue(r.Context(), ctxKey{}, id)
+		ctx := correlation.WithID(r.Context(), id)
 		trace.SpanFromContext(ctx).SetAttributes(attribute.String("correlation.id", id))
-		w.Header().Set("X-Correlation-Id", id)
+		w.Header().Set(correlation.Header, id)
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
