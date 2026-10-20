@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/auth"
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/proxy"
 )
@@ -90,7 +91,7 @@ func main() {
 func newRouter(planner http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.Handle(proxy.PlannerPrefix+"/", planner)
+	mux.Handle(proxy.PlannerPrefix+"/", auth.StripIdentity(planner))
 	return mux
 }
 
