@@ -4,12 +4,22 @@
 // disponibilidad, carga un examen, pide una propuesta, la confirma y reintenta
 // la confirmación con la misma Idempotency-Key (RN-14).
 //
-//   docker run --rm -i -e BASE_URL=http://host.docker.internal:8082 grafana/k6 run - < tests/load/plan-flow.js
+// Le pega directo a planner-service (sin el gateway), así que manda el mismo
+// INTERNAL_TOKEN del .env que usa el api-gateway:
+//
+//   docker run --rm -i -e BASE_URL=http://host.docker.internal:8082 \
+//     -e INTERNAL_TOKEN=$(grep ^INTERNAL_TOKEN= .env | cut -d= -f2 | tr -d '\r') \
+//     grafana/k6 run - < tests/load/plan-flow.js
 import http from 'k6/http';
 import { check, fail } from 'k6';
 import { Trend } from 'k6/metrics';
 
 const BASE = __ENV.BASE_URL || 'http://localhost:8082';
+const INTERNAL_TOKEN = __ENV.INTERNAL_TOKEN;
+
+export function setup() {
+  if (!INTERNAL_TOKEN) fail('falta INTERNAL_TOKEN (pasalo con -e INTERNAL_TOKEN=..., ver el comentario de arriba)');
+}
 
 export const options = {
   scenarios: {
@@ -35,7 +45,7 @@ const flujo = new Trend('flujo_completo_ms', true);
 
 export default function () {
   const student = `lt-${__VU}-${__ITER}-${Date.now()}`;
-  const headers = { 'Content-Type': 'application/json', 'X-User-Id': student };
+  const headers = { 'Content-Type': 'application/json', 'X-User-Id': student, 'X-Internal-Token': INTERNAL_TOKEN };
   const t0 = Date.now();
 
   let r = http.post(`${BASE}/subjects`, JSON.stringify({ name: 'Análisis II', difficulty: 3 }), { headers, tags: { name: 'materia' } });
