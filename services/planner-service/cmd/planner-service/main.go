@@ -83,7 +83,13 @@ func run(logger *slog.Logger) error {
 	guarded := postgres.Guarded{Repo: repo, Timeout: postgres.DefaultTimeout}
 
 	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
-	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger}
+	// Secreto compartido con el api-gateway: sin él, cualquiera podría llamar
+	// directo al puerto de planner-service con el X-User-Id de otro estudiante.
+	internalToken := os.Getenv("INTERNAL_TOKEN")
+	if len(internalToken) < 32 {
+		return errors.New("INTERNAL_TOKEN falta o tiene menos de 32 caracteres")
+	}
+	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8082"),
