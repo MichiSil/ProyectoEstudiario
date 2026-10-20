@@ -320,3 +320,15 @@ func TestCreateExam_EnElPasado(t *testing.T) {
 		t.Fatalf("se esperaba RN-04, llegó %v", err)
 	}
 }
+
+// Una materia creada sin profesores devuelve una lista vacía, no nil (en JSON: [] y no null).
+func TestCreateSubject_SinProfesores(t *testing.T) {
+	svc, _, _ := setup(t)
+	sub, err := svc.CreateSubject(context.Background(), domain.Subject{StudentID: "est-1", Name: "Química", Difficulty: domain.DifficultyMedium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Professors == nil {
+		t.Fatal("Professors debería ser una lista vacía, no nil")
+	}
+}
