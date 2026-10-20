@@ -62,7 +62,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	router := newRouter(verifier, logger, proxy.Planner(plannerTarget, logger))
+	// planner-service sólo acepta X-User-Id si el pedido trae el secreto interno.
+	planner, err := auth.WithInternalToken(os.Getenv("INTERNAL_TOKEN"), proxy.Planner(plannerTarget, logger))
+	if err != nil {
+		logger.Error("no se puede llamar a los servicios internos", "error", err)
+		os.Exit(1)
+	}
+
+	router := newRouter(verifier, logger, planner)
 
 	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
 	srv := &http.Server{
