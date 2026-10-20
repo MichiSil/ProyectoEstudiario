@@ -190,7 +190,7 @@ planner-service arma las propuestas de plan con un agente de IA sobre [Groq](htt
 | Variable | Valor por defecto | Para qué |
 |---|---|---|
 | `AI_API_KEY` | *(vacía)* | Clave de Groq, de https://console.groq.com/keys. **Va sólo en tu `.env`**, nunca en el repositorio. |
-| `AI_MODEL` | `llama-3.3-70b-versatile` | Modelo de Groq |
+| `AI_MODEL` | `openai/gpt-oss-120b` | Modelo de Groq. Los modelos disponibles cambian: se listan con `GET https://api.groq.com/openai/v1/models` |
 | `AI_BASE_URL` | `https://api.groq.com/openai/v1` | API de Groq compatible con OpenAI |
 | `AI_TIMEOUT` | `8s` | Presupuesto total de la llamada, reintento incluido (ADR-005) |
 

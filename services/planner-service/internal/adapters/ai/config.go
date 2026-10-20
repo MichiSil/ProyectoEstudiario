@@ -12,7 +12,7 @@ import (
 // de 8 s del ADR-005.
 const (
 	DefaultBaseURL = "https://api.groq.com/openai/v1"
-	DefaultModel   = "llama-3.3-70b-versatile"
+	DefaultModel   = "openai/gpt-oss-120b"
 	DefaultTimeout = 8 * time.Second
 )
 

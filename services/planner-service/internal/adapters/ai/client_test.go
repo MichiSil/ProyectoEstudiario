@@ -111,7 +111,7 @@ func TestClient_RespuestaValida(t *testing.T) {
 		t.Errorf("pedido inesperado: %+v", got)
 	}
 	prompt := got.Messages[1].Content
-	for _, want := range []string{"Integrales dobles", "Integrales triples", "difícil", "lunes de 18:00 a 21:00", "90 minutos", "2026-11-02 10:00"} {
+	for _, want := range []string{"Integrales dobles", "Integrales triples", "difícil", "lunes de 18:00 a 21:00", "2026-10-20 (martes): 18:00 a 21:00", "90 minutos", "2026-11-02 10:00"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("el prompt no menciona %q:\n%s", want, prompt)
 		}
