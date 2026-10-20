@@ -89,3 +89,21 @@ flowchart LR
 
 - Que ninguna operación del flujo principal necesite llamadas síncronas en cadena entre servicios propios.
 - Qué capacidad externa se consume y desde qué servicio (ADR-009).
+
+## Validación (Entrega 2, 2026-10-19)
+
+**Resultado: la decisión se mantiene.** Se validó con el primer servicio operativo, planner-service, que resuelve la acción principal.
+
+| Lo que decía este ADR | Evidencia |
+|---|---|
+| La confirmación del plan es una operación **local** de planner-service, en una única transacción y sin coordinación distribuida. | Implementada en `services/planner-service/internal/adapters/postgres` (`Confirm`). Los tests de integración contra PostgreSQL real y la prueba de carga ([ADR-013](ADR-013-capacidad-y-costos.md): 46.387 confirmaciones) no muestran duplicados ni planes inconsistentes. |
+| Ningún servicio accede a la base de otro. | planner-service es el único que usa la base `planner`, con su propio usuario (`PLANNER_DB_USER` en `docker-compose.yml`). |
+| El agente de IA es un **componente** de planner-service, no un servicio. | El adaptador de Groq (`internal/adapters/ai`) implementa el mismo puerto `PlanGenerator` que el motor de reglas (`internal/adapters/rules`). Cambiar de proveedor o caer al motor de reglas no afecta al resto del sistema. |
+| No hay llamadas síncronas en cadena entre servicios propios. | En el flujo principal, planner-service sólo habla con PostgreSQL y con el proveedor de IA. |
+
+**Desvíos temporales aceptados**
+
+- **Identidad.** Mientras users-service esté en esqueleto, planner-service recibe la identidad del estudiante en el encabezado `X-User-Id`. Cuando el api-gateway valide el JWT, será él quien complete ese encabezado, y planner-service no cambia.
+- **Capacidad para otro grupo.** Por indicación de la cátedra, su implementación se pospone. En esta entrega están el contrato y el mock ([ADR-008](ADR-008-contrato-propio.md)).
+
+**Queda por validar** con users-service, forum-service y notification-service operativos: la comunicación por eventos entre el foro y las notificaciones, y el consumo de la capacidad de otro grupo (ADR-009).

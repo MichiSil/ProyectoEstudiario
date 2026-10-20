@@ -194,6 +194,8 @@ docker compose logs api-gateway planner-service | grep prueba-1
 
 La capacidad que publicamos para otros grupos va a estar desplegada en la nube con una URL pública. La vamos a publicar acá cuando esté disponible.
 
+> **Estado en la Entrega 2:** por indicación de la cátedra, la implementación de la capacidad compartida (generar un plan de estudio para otro grupo) se pospone para una entrega posterior. Lo que ya está disponible es el [contrato versionado](docs/contracts/) y su **mock** (Prism, puerto `4010`), para que el grupo consumidor pueda integrarse desde ahora. La lógica que va a respaldar la capacidad (el motor de reglas y el agente de IA de planner-service) ya funciona para los estudiantes.
+
 ## Documentación
 
 | Documento | Contenido |
