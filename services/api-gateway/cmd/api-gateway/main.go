@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,6 +45,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Los JWT los firma users-service con este secreto compartido (HS256).
+	// Sin un secreto válido el gateway no arranca: nunca acepta pedidos sin validar.
+	verifier, err := auth.NewVerifier(os.Getenv("JWT_SECRET"))
+	if err != nil {
+		logger.Error("no se puede validar el JWT", "error", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -53,7 +62,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	router := newRouter(proxy.Planner(plannerTarget, logger))
+	router := newRouter(verifier, logger, proxy.Planner(plannerTarget, logger))
 
 	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
 	srv := &http.Server{
@@ -88,10 +97,11 @@ func main() {
 	logger.Info("servidor detenido")
 }
 
-func newRouter(planner http.Handler) http.Handler {
+// newRouter arma las rutas. Todo lo que va a planner-service exige un JWT válido.
+func newRouter(verifier *auth.Verifier, logger *slog.Logger, planner http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.Handle(proxy.PlannerPrefix+"/", auth.StripIdentity(planner))
+	mux.Handle(proxy.PlannerPrefix+"/", auth.Require(verifier, logger, planner))
 	return mux
 }
 
