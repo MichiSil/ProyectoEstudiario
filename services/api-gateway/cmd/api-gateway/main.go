@@ -1,45 +1,68 @@
 // Command api-gateway es el punto de entrada único del frontend de Estudiario: valida el JWT, enruta cada pedido al servicio que corresponde, aplica límites de tráfico y propaga el identificador de correlación.
 //
-// Por ahora sólo expone GET /health. La funcionalidad se agrega a partir de la Entrega 2.
+// En la Entrega 2 expone GET /health y reenvía /api/planner/* a planner-service, con logs JSON,
+// X-Correlation-Id y trazas OpenTelemetry (ver internal/observability).
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/observability"
+	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/proxy"
 )
 
 const (
-	serviceName = "api-gateway"
-	defaultPort = "8080"
+	serviceName       = "api-gateway"
+	defaultPort       = "8080"
+	defaultPlannerURL = "http://localhost:8082"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", serviceName)
+	logger := observability.NewLogger(serviceName)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = defaultPort
 	}
 
+	plannerURL := os.Getenv("PLANNER_SERVICE_URL")
+	if plannerURL == "" {
+		plannerURL = defaultPlannerURL
+	}
+	plannerTarget, err := url.Parse(plannerURL)
+	if err != nil {
+		logger.Error("PLANNER_SERVICE_URL no es una URL válida", "error", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	shutdownTracing, err := observability.SetupTracing(ctx, serviceName)
+	if err != nil {
+		logger.Error("no se pudo configurar el tracing", "error", err)
+		os.Exit(1)
+	}
+
+	router := newRouter(proxy.Planner(plannerTarget, logger))
+
 	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           newRouter(),
+		Handler:           observability.Middleware(serviceName, logger, router),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		logger.Info("servidor iniciado", "port", port)
@@ -58,12 +81,16 @@ func main() {
 		logger.Error("no se pudo apagar el servidor de forma ordenada", "error", err)
 		os.Exit(1)
 	}
+	if err := shutdownTracing(shutdownCtx); err != nil {
+		logger.Error("no se pudieron enviar las últimas trazas", "error", err)
+	}
 	logger.Info("servidor detenido")
 }
 
-func newRouter() http.Handler {
+func newRouter(planner http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.Handle(proxy.PlannerPrefix+"/", planner)
 	return mux
 }
 

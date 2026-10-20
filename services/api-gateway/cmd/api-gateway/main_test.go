@@ -9,7 +9,7 @@ import (
 
 func TestHealthRespondeOK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	newRouter(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, se esperaba %d", rec.Code, http.StatusOK)
@@ -29,7 +29,7 @@ func TestHealthRespondeOK(t *testing.T) {
 
 func TestHealthRechazaOtrosMetodos(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
+	newRouter(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, se esperaba %d", rec.Code, http.StatusMethodNotAllowed)

@@ -164,6 +164,25 @@ docker compose up planner-mock
 
 > Las credenciales del proveedor de IA se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
 
+### Logs y trazas
+
+El api-gateway y planner-service escriben **un log JSON por pedido** con `time`, `level`, `service`, `correlationId`, `method`, `path`, `status` y `durationMs`. Cada pedido lleva un `X-Correlation-Id`: si el cliente no lo manda, lo genera el gateway, lo reenvía al servicio y lo devuelve en la respuesta. La estrategia completa está en el [ADR-011](docs/adr/ADR-011-observabilidad.md).
+
+**Ver los logs:**
+
+```bash
+docker compose logs -f api-gateway planner-service
+```
+
+Para seguir un pedido puntual, mandalo con tu propio identificador y filtrá por él:
+
+```bash
+curl -H "X-Correlation-Id: prueba-1" -H "X-User-Id: estudiante-1" http://localhost:8080/api/planner/sessions
+docker compose logs api-gateway planner-service | grep prueba-1
+```
+
+**Ver las trazas:** abrí Jaeger en http://localhost:16686, elegí el servicio `api-gateway` y tocá *Find Traces*. Cada traza muestra el pedido completo: el span del gateway y, adentro, el de planner-service, con la duración de cada uno. Para encontrar un pedido puntual, buscá por el tag `correlation.id=prueba-1`.
+
 ### Estructura del repositorio
 
 | Carpeta | Contenido |
