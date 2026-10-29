@@ -78,6 +78,13 @@ services:
       PORT: "8081"
       # Base propia `users` con su propio usuario (ADR-001, ADR-003).
       DATABASE_URL: postgres://${USERS_DB_USER}:${USERS_DB_PASSWORD}@postgres:5432/users?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Firma los JWT con el mismo secreto que usa el api-gateway para validarlos.
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
+      # GET /me sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
+      # Mails que reciben el rol admin al registrarse (RF-03).
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
       interval: 10s
@@ -86,6 +93,8 @@ services:
     depends_on:
       users-db-init:
         condition: service_completed_successfully
+      jaeger:
+        condition: service_started
 
   forum-service:
     <<: *go-service
