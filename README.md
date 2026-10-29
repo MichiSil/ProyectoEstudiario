@@ -111,7 +111,7 @@ Además de lo obligatorio, el grupo encara dos desafíos adicionales. El alcance
 
 Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.
 
-En la Entrega 2 funciona **planner-service** (pedir y confirmar el plan de estudio) con PostgreSQL. Los demás servicios son esqueletos que sólo responden `GET /health`.
+En la Entrega 2 funciona **planner-service** (pedir y confirmar el plan de estudio) con PostgreSQL, y el **frontend web** para usarlo. Los demás servicios son esqueletos que sólo responden `GET /health`.
 
 ### Requisitos
 
@@ -139,6 +139,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 
 | Componente | URL local | Para qué |
 |---|---|---|
+| **frontend** | http://localhost:5173 | Interfaz web de Estudiario. Reenvía `/api` al api-gateway |
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
 | planner-service | http://localhost:8082 | Plan de estudio (publicado también para la capacidad de otros grupos, ADR-008) |
 | users-service | http://localhost:8081 | Esqueleto: sólo `GET /health` |
@@ -183,11 +184,24 @@ docker compose logs api-gateway planner-service | grep prueba-1
 
 **Ver las trazas:** abrí Jaeger en http://localhost:16686, elegí el servicio `api-gateway` y tocá *Find Traces*. Cada traza muestra el pedido completo: el span del gateway y, adentro, el de planner-service, con la duración de cada uno. Para encontrar un pedido puntual, buscá por el tag `correlation.id=prueba-1`.
 
+### Frontend
+
+El frontend (`frontend/`, React + TypeScript con Vite y Tailwind) sólo habla con el api-gateway, en `/api`. Con `docker compose` lo sirve nginx, que reenvía `/api` al gateway. Para desarrollarlo con recarga en caliente, con el backend levantado:
+
+```bash
+cd frontend
+npm install
+npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
+```
+
+Mientras users-service sea un esqueleto, el ingreso pide sólo nombre y mail: el mail viaja como `X-User-Id`, que es la identidad que hoy acepta planner-service. planner-service todavía no expone `GET /exams` ni `GET /availability`, así que el frontend recuerda en el navegador los exámenes y la disponibilidad que el servidor le devolvió al guardarlos.
+
 ### Estructura del repositorio
 
 | Carpeta | Contenido |
 |---|---|
 | `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), con el ejecutable en `cmd/<nombre>/` y su `Dockerfile` |
+| `frontend/` | Interfaz web (React + TypeScript, Vite) con su `Dockerfile` y la configuración de nginx |
 | `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
 
 ### Entorno desplegado

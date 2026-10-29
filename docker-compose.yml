@@ -16,6 +16,18 @@ x-go-service: &go-service
 
 services:
   # ---------------------------------------------------------------
+  # Frontend (React + Vite, servido por nginx)
+  # ---------------------------------------------------------------
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
   # Servicios propios (Go)
   # ---------------------------------------------------------------
   api-gateway:
