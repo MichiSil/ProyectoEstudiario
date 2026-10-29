@@ -76,11 +76,16 @@ services:
       - "8081:8081"
     environment:
       PORT: "8081"
+      # Base propia `users` con su propio usuario (ADR-001, ADR-003).
+      DATABASE_URL: postgres://${USERS_DB_USER}:${USERS_DB_PASSWORD}@postgres:5432/users?sslmode=disable
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      users-db-init:
+        condition: service_completed_successfully
 
   forum-service:
     <<: *go-service
@@ -139,6 +144,25 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+
+  # Crea la base `users` y su usuario. Corre una vez en cada `up` y termina; el
+  # script es idempotente, así sirve también con un volumen que ya existía.
+  users-db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGDATABASE: planner
+      PGUSER: ${PLANNER_DB_USER}
+      PGPASSWORD: ${PLANNER_DB_PASSWORD}
+      USERS_DB_USER: ${USERS_DB_USER:?falta USERS_DB_USER en el .env (ver .env.example)}
+      USERS_DB_PASSWORD: ${USERS_DB_PASSWORD:?falta USERS_DB_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/postgres:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-users-db.sh"]
+    restart: "no"
 
   # ---------------------------------------------------------------
   # Observabilidad
