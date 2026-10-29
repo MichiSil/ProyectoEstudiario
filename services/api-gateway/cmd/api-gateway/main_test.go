@@ -20,7 +20,7 @@ func testRouter(t *testing.T, planner http.Handler) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), planner)
+	return newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), planner, http.NotFoundHandler())
 }
 
 func TestHealthRespondeOK(t *testing.T) {
