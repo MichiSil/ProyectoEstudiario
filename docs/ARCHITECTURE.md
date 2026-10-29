@@ -20,8 +20,8 @@ Todo el sistema se levanta localmente con `docker compose up --build` (ver el [R
 | **frontend** | Interfaz web: centraliza toda la interacción del estudiante y del administrador. Sólo habla con el api-gateway. | React + TypeScript (Vite) |
 | **api-gateway** | Punto de entrada único: valida el JWT, enruta cada request al servicio correspondiente, aplica límites de tráfico y propaga el identificador de correlación. No tiene lógica de negocio. | Go |
 | **users-service** | Registro, inicio de sesión, emisión del JWT y roles (`estudiante` / `admin`). | Go + PostgreSQL |
-| **planner-service** | Materias del estudiante y su dificultad, calendario de exámenes y entregas, disponibilidad horaria, generación del plan de estudio con el agente de IA, **confirmación del plan** (acción principal) y seguimiento de sesiones. Expone la **capacidad publicada para otros grupos: generar un plan de estudio**. | Go + PostgreSQL |
-| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. Corre en **dos instancias** detrás del balanceo de carga. | Go + MongoDB + MinIO + Apache Solr + Memcached |
+| **planner-service** | Materias del estudiante y su dificultad, calendario de exámenes y entregas, disponibilidad horaria, generación del plan de estudio con el agente de IA, **confirmación del plan** (acción principal) y seguimiento de sesiones. | Go + PostgreSQL |
+| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. Expone la **capacidad publicada para el Grupo 4: registro y consulta de documentos** ([ADR-014](adr/ADR-014-contrato-documentos.md)) y consume el **programa de beneficios del Grupo 1** al aprobar un resumen. Corre en **dos instancias** detrás del balanceo de carga. | Go + MongoDB + MinIO + Apache Solr + Memcached |
 | **notification-service** | Consume los eventos de moderación y le envía el mail al autor exactamente una vez. Trata los mensajes que no se pueden procesar. | Go + MongoDB |
 
 Los criterios para separar los servicios están en el [ADR-001](adr/ADR-001-limites-de-servicios.md).
@@ -52,8 +52,8 @@ El detalle de por qué se eligió cada almacenamiento está en el [ADR-003](adr/
 | frontend → api-gateway | Toda interacción del usuario |
 | api-gateway → users / planner / forum | Enrutamiento de cada request |
 | planner-service → proveedor de IA | Generar el plan de estudio |
-| planner-service → capacidad de otro grupo | A definir cuando la cátedra asigne el proveedor |
-| sistema de otro grupo → planner-service | Consumir nuestra capacidad: generar un plan de estudio |
+| forum-service → programa de beneficios del Grupo 1 | Registrar la participación del autor cuando se aprueba su resumen ([ADR-009](adr/ADR-009-consumo-del-proveedor.md)) |
+| sistema del Grupo 4 → forum-service | Consumir nuestra capacidad: registrar y consultar documentos ([ADR-014](adr/ADR-014-contrato-documentos.md)) |
 
 - **No hay llamadas síncronas entre servicios propios**, así se evitan cadenas que sumen latencia y propaguen fallas.
 - Toda llamada saliente tiene **timeout** y sólo se **reintentan** operaciones idempotentes ante errores transitorios.
@@ -101,16 +101,16 @@ flowchart TB
 
     ia["<b>Proveedor de IA</b><br/>[Sistema externo]<br/>Modelo de lenguaje que propone el plan"]
     mail["<b>Servidor de mail</b><br/>[Sistema externo]<br/>Envía los mails de moderación"]
-    grupoConsumidor["<b>Sistema de otro grupo</b><br/>[Sistema externo]<br/>Consume nuestra capacidad:<br/>generar un plan de estudio"]
-    grupoProveedor["<b>Capacidad de otro grupo</b><br/>[Sistema externo]<br/>A asignar por la cátedra"]
+    grupoConsumidor["<b>Grupo 4: Agencia de viajes</b><br/>[Sistema externo]<br/>Consume nuestra capacidad:<br/>registro y consulta de documentos"]
+    grupoProveedor["<b>Grupo 1: Gimnasio</b><br/>[Sistema externo]<br/>Programa de beneficios"]
 
     estudiante -- "Carga materias, fechas y disponibilidad;<br/>confirma su plan; sube y califica resúmenes<br/>[HTTPS]" --> estudiario
     admin -- "Aprueba, rechaza o elimina resúmenes<br/>[HTTPS]" --> estudiario
     estudiario -- "Pide la propuesta del plan<br/>[HTTPS]" --> ia
     estudiario -- "Envía mail al autor<br/>[SMTP]" --> mail
     mail -. "Mail con el resultado" .-> estudiante
-    grupoConsumidor -- "Genera planes de estudio<br/>[HTTPS/JSON]" --> estudiario
-    estudiario -- "Consume su capacidad<br/>[a definir]" --> grupoProveedor
+    grupoConsumidor -- "Registra y consulta guías de viaje<br/>[HTTPS, API key]" --> estudiario
+    estudiario -- "Premia la participación<br/>[HTTPS]" --> grupoProveedor
 
     classDef person fill:#08427b,stroke:#052e56,color:#fff
     classDef system fill:#1168bd,stroke:#0b4884,color:#fff
@@ -151,8 +151,8 @@ flowchart TB
 
     ia["<b>Proveedor de IA</b><br/>[Sistema externo]"]
     mail["<b>Servidor de mail</b><br/>[Sistema externo]"]
-    grupoConsumidor["<b>Sistema de otro grupo</b><br/>[Sistema externo]"]
-    grupoProveedor["<b>Capacidad de otro grupo</b><br/>[Sistema externo]"]
+    grupoConsumidor["<b>Grupo 4: Agencia de viajes</b><br/>[Sistema externo]"]
+    grupoProveedor["<b>Grupo 1: programa de beneficios</b><br/>[Sistema externo]"]
 
     estudiante -- "Usa [HTTPS]" --> frontend
     admin -- "Usa [HTTPS]" --> frontend
@@ -165,8 +165,8 @@ flowchart TB
     users -- "Lee/escribe [SQL]" --> usersDb
     planner -- "Lee/escribe [SQL]" --> plannerDb
     planner -- "Propuesta del plan [HTTPS]" --> ia
-    planner -- "Consume capacidad [a definir]" --> grupoProveedor
-    grupoConsumidor -- "Genera planes [HTTPS/JSON]" --> planner
+    forum -- "Premia la participación [HTTPS]" --> grupoProveedor
+    grupoConsumidor -- "Registra y consulta documentos [HTTPS, API key]" --> forum
 
     forum -- "Lee/escribe" --> forumDb
     forum -- "Indexa y busca [HTTP]" --> solr
@@ -192,7 +192,8 @@ flowchart TB
 **Cómo leerlo**
 
 - Las líneas que salen del **api-gateway** son síncronas. La única comunicación entre servicios propios es **asíncrona**, a través de RabbitMQ.
-- El **sistema de otro grupo** entra directo a planner-service (el servicio dueño de la capacidad), por el punto que se publique para la integración. El frontend propio no participa de esa comunicación.
+- El **sistema del Grupo 4** entra directo a forum-service (el servicio dueño de los documentos), con su API key, sin pasar por el api-gateway. El frontend propio no participa de esa comunicación.
+- **forum-service** es también el que llama al **programa de beneficios del Grupo 1**, porque es el dueño de la aprobación de los resúmenes, que es lo que se premia.
 - **forum-service** aparece una sola vez, pero corre en **dos instancias**: el api-gateway reparte los pedidos entre ellas (ver *Balanceo de carga* en la sección 4).
 - La flecha de RabbitMQ hacia forum-service es el **indexador**, un componente interno del foro que consume sus propios eventos para mantener actualizado el índice de Solr. No es una comunicación con otro servicio.
 - **Solr** y **Memcached** son almacenes derivados: si se pierden, se reconstruyen desde MongoDB.
