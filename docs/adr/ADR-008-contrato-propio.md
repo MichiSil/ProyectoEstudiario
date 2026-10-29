@@ -1,6 +1,6 @@
 # ADR-008: Contrato propio
 
-- **Estado:** Propuesta
+- **Estado:** Reemplazada por el [ADR-014](ADR-014-contrato-documentos.md) (2026-10-29): la cátedra asignó como capacidad a publicar el registro y la consulta de documentos del foro. Esta decisión se conserva como historial; su contrato está en [`docs/contracts/retirados/`](../contracts/retirados/).
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D8
 - **Reemplaza a:** —
@@ -53,7 +53,7 @@ Condiciones que influyen en el diseño:
 
 | Aspecto | Decisión |
 |---|---|
-| **Formato del contrato** | OpenAPI **3.0.3** en [`docs/contracts/planner-v1.yaml`](../contracts/planner-v1.yaml), con la guía de uso en [`docs/contracts/README.md`](../contracts/README.md). Se eligió 3.0.3 sobre 3.1 por ser la versión con mejor soporte en generadores y validadores (por ejemplo, en Go). |
+| **Formato del contrato** | OpenAPI **3.0.3** en [`docs/contracts/planner-v1.yaml`](../contracts/retirados/planner-v1.yaml), con la guía de uso en [`docs/contracts/README.md`](../contracts/retirados/README-planner-v1.md). Se eligió 3.0.3 sobre 3.1 por ser la versión con mejor soporte en generadores y validadores (por ejemplo, en Go). |
 | **Operaciones** | `POST /v1/study-plan-proposals` genera una propuesta; `GET /health` informa si el servicio puede atender pedidos. |
 | **Semántica** | La operación devuelve una **propuesta**, no reserva nada (RN-08) y **no guarda estado del consumidor**: cada pedido es independiente y Estudiario no conoce el resto del calendario de la persona. Lo único que se persiste es el registro de idempotencia. |
 | **Garantías** | El contrato enumera las propiedades que cumple toda respuesta `200`: dentro de la ventana de RN-06, dentro de las franjas, sin superposiciones, sin superar la capacidad diaria, duración fija y cierre con repaso (RN-07). Así el consumidor puede confiar en el plan y testearlo, sin importar si lo armó la IA o el motor de reglas. |
