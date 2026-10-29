@@ -1,0 +1,264 @@
+@import "tailwindcss";
+
+@theme {
+  /* un único sistema tipográfico: la jerarquía viene del peso y el tamaño, no de mezclar familias */
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Manrope", ui-sans-serif, system-ui, sans-serif;
+
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-secondary: var(--secondary);
+  --color-secondary-soft: var(--secondary-soft);
+
+  --color-difficulty-easy: var(--difficulty-easy);
+  --color-difficulty-medium: var(--difficulty-medium);
+  --color-difficulty-hard: var(--difficulty-hard);
+  --color-difficulty-extreme: var(--difficulty-extreme);
+
+  --color-event-exam: var(--event-exam);
+  --color-event-final: var(--event-final);
+  --color-event-delivery: var(--event-delivery);
+  --color-event-class: var(--event-class);
+  --color-event-reminder: var(--event-reminder);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+}
+
+:root {
+  /* alto del contenido de la barra inferior mobile (BottomNav), sin contar
+     el margen de seguridad del home indicator — eso se suma aparte. */
+  --bottom-nav-h: 56px;
+  /* alto total real de la barra (contenido + safe area) — lo que hay que
+     usar para que cualquier otro elemento (el composer del chat, etc.)
+     quede justo pegado arriba de la barra, nunca metido debajo. */
+  --bottom-nav-total-h: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom));
+
+  /* --- superficies: cálidas, nunca blanco ni negro puro --- */
+  --paper: #f5f2ec;
+  --surface: #fcfbf8;
+  --surface-raised: #efeade;
+  --ink: #1e2328;
+  --muted: #667085;
+  --subtle: #98a2b3;
+  --border: #e4e0d6;
+
+  /* --- marca --- */
+  --accent: #355c7d;
+  --accent-soft: #e2eaef;
+  --accent-ink: #22415a;
+  --secondary: #7fa58a;
+  --secondary-soft: #e7eee7;
+
+  --difficulty-easy: #7fa58a;
+  --difficulty-medium: #e7a64a;
+  --difficulty-hard: #cb7b4a;
+  --difficulty-extreme: #d35d5d;
+
+  --event-exam: #355c7d;
+  --event-final: #d35d5d;
+  --event-delivery: #7fa58a;
+  --event-class: #667085;
+  --event-reminder: #e7a64a;
+
+  --success: #4c956c;
+  --warning: #e7a64a;
+  --danger: #d35d5d;
+
+  --shadow-sm: 0 1px 2px rgba(30, 35, 40, 0.05);
+  --shadow-md: 0 6px 20px rgba(30, 35, 40, 0.08);
+  --shadow-lg: 0 16px 40px rgba(30, 35, 40, 0.14);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  /* grafito diseñado desde cero, no una inversión del claro */
+  --paper: #1a1d21;
+  --surface: #22262b;
+  --surface-raised: #282d33;
+  --ink: #ece9e2;
+  --muted: #9aa3ad;
+  --subtle: #6b7280;
+  --border: #33383e;
+
+  --accent: #7ea3bd;
+  --accent-soft: #253844;
+  --accent-ink: #c3dbe8;
+  --secondary: #9bc1a8;
+  --secondary-soft: #263229;
+
+  --difficulty-easy: #9bc1a8;
+  --difficulty-medium: #e9b368;
+  --difficulty-hard: #d99566;
+  --difficulty-extreme: #e08585;
+
+  --event-exam: #7ea3bd;
+  --event-final: #e08585;
+  --event-delivery: #9bc1a8;
+  --event-class: #9aa3ad;
+  --event-reminder: #e9b368;
+
+  --success: #6fb98a;
+  --warning: #e9b368;
+  --danger: #e08585;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.36);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #1a1d21;
+    --surface: #22262b;
+    --surface-raised: #282d33;
+    --ink: #ece9e2;
+    --muted: #9aa3ad;
+    --subtle: #6b7280;
+    --border: #33383e;
+
+    --accent: #7ea3bd;
+    --accent-soft: #253844;
+    --accent-ink: #c3dbe8;
+    --secondary: #9bc1a8;
+    --secondary-soft: #263229;
+
+    --difficulty-easy: #9bc1a8;
+    --difficulty-medium: #e9b368;
+    --difficulty-hard: #d99566;
+    --difficulty-extreme: #e08585;
+
+    --event-exam: #7ea3bd;
+    --event-final: #e08585;
+    --event-delivery: #9bc1a8;
+    --event-class: #9aa3ad;
+    --event-reminder: #e9b368;
+
+    --success: #6fb98a;
+    --warning: #e9b368;
+    --danger: #e08585;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.28);
+    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.36);
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--paper);
+  color: var(--ink);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+button {
+  font-family: inherit;
+}
+
+button,
+a,
+[role="button"] {
+  transition: transform 120ms cubic-bezier(0.4, 0, 0.2, 1), background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+button:active,
+[role="button"]:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fade-in 320ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes check-pop {
+  0% {
+    transform: scale(0.7);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.animate-check-pop {
+  animation: check-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
