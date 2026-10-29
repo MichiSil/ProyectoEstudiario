@@ -1,8 +1,10 @@
+> **Retirado (2026-10-29).** Esta capacidad nunca se implementó: la cátedra asignó como integración el registro y la consulta de documentos del foro. El contrato vigente está en [`documents-v1.yaml`](../documents-v1.yaml) y su guía en [`docs/contracts/README.md`](../README.md). Las decisiones están en el [ADR-014](../../adr/ADR-014-contrato-documentos.md), que reemplaza al [ADR-008](../../adr/ADR-008-contrato-propio.md). Este archivo se conserva como historial.
+
 # Capacidad publicada: generar un plan de estudio
 
-Estudiario publica para otros grupos la capacidad de **generar un plan de estudio**: el consumidor envía los datos de un examen y la disponibilidad horaria de una persona, y recibe las sesiones de estudio propuestas, cada una con fecha, horario, duración, tema, objetivo y explicación (RF-13 del [SPEC](../../SPEC.md)).
+Estudiario publica para otros grupos la capacidad de **generar un plan de estudio**: el consumidor envía los datos de un examen y la disponibilidad horaria de una persona, y recibe las sesiones de estudio propuestas, cada una con fecha, horario, duración, tema, objetivo y explicación (RF-13 del [SPEC](../../../SPEC.md)).
 
-Este documento alcanza para integrarse sin hablar con nosotros. El contrato formal es [`planner-v1.yaml`](planner-v1.yaml) (OpenAPI 3.0.3). Si este README y el contrato no coinciden, vale el contrato. Las decisiones de diseño están en el [ADR-008](../adr/ADR-008-contrato-propio.md).
+Este documento alcanza para integrarse sin hablar con nosotros. El contrato formal es [`planner-v1.yaml`](planner-v1.yaml) (OpenAPI 3.0.3). Si este README y el contrato no coinciden, vale el contrato. Las decisiones de diseño están en el [ADR-008](../../adr/ADR-008-contrato-propio.md).
 
 ## Índice
 
@@ -187,7 +189,7 @@ Las claves son por API key: dos grupos pueden usar la misma clave sin interferir
 
 ## 7. Tiempos de espera, reintentos y cupo de uso
 
-**Nuestros tiempos.** planner-service responde en menos de **10 s** en el peor caso. Si la IA tarda más de lo previsto, la propuesta se arma con el motor de reglas y se responde igual. Los valores internos están en el [ADR-005](../adr/ADR-005-comunicacion.md).
+**Nuestros tiempos.** planner-service responde en menos de **10 s** en el peor caso. Si la IA tarda más de lo previsto, la propuesta se arma con el motor de reglas y se responde igual. Los valores internos están en el [ADR-005](../../adr/ADR-005-comunicacion.md).
 
 **Lo que recomendamos del lado del consumidor:**
 
@@ -313,7 +315,7 @@ El mock es [Prism](https://docs.stoplight.io/docs/prism), que levanta un servido
 
 Cualquiera de estas opciones lo deja escuchando en `http://localhost:4010`.
 
-**Con el sistema completo** (cuando esté el `docker-compose.yml`, ver el [README](../../README.md#cómo-levantar-el-sistema)):
+**Con el sistema completo** (cuando esté el `docker-compose.yml`, ver el [README](../../../README.md#cómo-levantar-el-sistema)):
 
 ```bash
 docker compose up planner-mock
@@ -384,7 +386,7 @@ curl -i -X POST http://localhost:4010/v1/study-plan-proposals \
 
 **Cómo se publica una versión nueva.**
 
-1. El cambio se hace en una rama propia con *pull request* revisado, igual que el resto del código. Un cambio incompatible requiere además un ADR que reemplace al [ADR-008](../adr/ADR-008-contrato-propio.md).
+1. El cambio se hace en una rama propia con *pull request* revisado, igual que el resto del código. Un cambio incompatible requiere además un ADR que reemplace al [ADR-008](../../adr/ADR-008-contrato-propio.md).
 2. Se actualizan el YAML, este README y el [historial de cambios](#13-historial-de-cambios).
 3. Se avisa al grupo consumidor **antes** de desplegar el cambio.
 
