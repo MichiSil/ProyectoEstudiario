@@ -31,12 +31,15 @@ const (
 )
 
 // Author identifica a quien subió el documento.
-//   - Estudiante: UserID (el id de users-service) y Name.
+//   - Estudiante: UserID (el id de users-service), Name y Email, copiados del
+//     token al publicar (ADR-003). Email es un dato personal: se guarda para
+//     el mail de moderación (ADR-005) y nunca sale en las respuestas de la API.
 //   - Sistema externo: Name, ExternalID (el id en su sistema, sin interpretar) y
 //     Consumer, el consumidor de la API key que lo registró.
 type Author struct {
 	UserID     string `bson:"userId,omitempty"`
 	Name       string `bson:"name"`
+	Email      string `bson:"email,omitempty"`
 	ExternalID string `bson:"externalId,omitempty"`
 	Consumer   string `bson:"consumer,omitempty"`
 }

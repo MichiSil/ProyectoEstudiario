@@ -140,3 +140,37 @@ Implementado en `services/planner-service/internal/adapters/postgres/schema.sql`
 | `users_svc` intenta entrar a `planner` | `permission denied for database "planner"` |
 
 **Limitación aceptada.** Las dos bases siguen en la misma instancia de PostgreSQL: una falla de esa instancia afecta a los dos servicios. Separarlas en instancias distintas es la alternativa si la carga o la disponibilidad lo pidieran ([ADR-013](ADR-013-capacidad-y-costos.md)).
+
+## Actualización (2026-10-29): nombre y mail del autor, y limpieza de PDF huérfanos
+
+### Nombre y mail del autor
+
+**Resultado: el resumen guarda el nombre y el mail del autor copiados al publicar, como decía este ADR.** Hasta ahora forum-service no los conocía: el JWT sólo traía `sub` y `role`, y el autor aparecía como "Estudiante de Estudiario".
+
+Cómo llegan, sin que forum-service consulte a users-service:
+
+1. **users-service** pone el nombre y el mail del usuario en el JWT, en los claims `name` y `email` (los demás claims no cambian).
+2. **api-gateway** valida el token y se los pasa al servicio en `X-User-Name` y `X-User-Email`, codificados con `url.QueryEscape` porque un encabezado HTTP no admite tildes ni ñ. Igual que con `X-User-Id`, borra siempre los que mande el cliente, también en las rutas públicas: nadie puede publicar a nombre de otro. Un token sin esos claims (de antes o de `devtoken`) sigue funcionando, sin esos encabezados.
+3. **forum-service** los lee sólo si el pedido trae el secreto interno del gateway y, al publicar, los copia en `author.name` y `author.email` del resumen. Si el token no trae el nombre, usa el campo `authorName` del formulario y, si tampoco viene, "Estudiante de Estudiario".
+
+`author.email` es un dato personal: queda sólo en MongoDB, para el mail de moderación ([ADR-005](ADR-005-comunicacion.md)), y **nunca** sale en las respuestas del foro ni de la capacidad `/v1`. Los documentos de sistemas externos no guardan mail (RN-41).
+
+Se acepta que, si el usuario cambia su nombre o su mail después, el resumen conserve los datos del momento en que publicó.
+
+### Limpieza de PDF huérfanos
+
+**Resultado: la limpieza periódica que preveía este ADR está implementada** (`internal/cleanup` de forum-service).
+
+- Corre dentro de forum-service al arrancar y después **cada hora** (`FORUM_CLEANUP_INTERVAL`).
+- Recorre los PDF del bucket `summaries` con más de **1 hora** de antigüedad (`FORUM_CLEANUP_MIN_AGE`), para no borrar uno que se está subiendo y todavía no tiene su documento.
+- Borra los que no tienen **ningún** documento en MongoDB con ese `file.key`, en cualquier estado: un resumen eliminado conserva su documento y su PDF, así que no se toca. Hay un índice sobre `file.key` para esa consulta.
+- Si MinIO o MongoDB no responden, deja un log `WARN` y reintenta en la vuelta siguiente, sin frenar el servicio. Con dos instancias corriendo a la vez no pasa nada: borrar dos veces el mismo archivo da lo mismo.
+- Cada vuelta deja un log JSON `limpieza de PDF huérfanos` con la cantidad revisada (`reviewed`) y borrada (`deleted`), y uno por cada archivo borrado.
+
+**Evidencia.**
+
+| Prueba | Resultado |
+|---|---|
+| Test de integración contra MinIO y MongoDB reales (`internal/cleanup`) | Con antigüedad mínima de 1 h no toca los recién subidos; después borra sólo el huérfano y conserva los PDF de un resumen aprobado y de uno eliminado; una segunda vuelta no cambia nada |
+| `docker compose` con la limpieza cada 20 s y antigüedad 0 s, y un PDF subido a mano al bucket sin documento | Borrado en la vuelta siguiente (`reviewed: 10`, `deleted: 1`); los PDF de los resúmenes no se tocaron |
+| MongoDB pausado durante una vuelta | `WARN` con el error; la vuelta siguiente funcionó y el servicio siguió respondiendo |

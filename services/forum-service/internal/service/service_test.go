@@ -382,3 +382,25 @@ func (b *blockingFiles) Put(ctx context.Context, key string, r io.Reader, size i
 	})
 	return b.Files.Put(ctx, key, r, size, ct)
 }
+
+func TestElEventoLlevaNombreYMailDelAutor(t *testing.T) {
+	svc, store, _ := newService()
+	in := student
+	in.Author = model.Author{UserID: "ana", Name: "Ana Pérez", Email: "ana@mail.com"}
+	doc := publish(t, svc, in)
+	_ = svc.Approve(ctx, admin, doc.ID)
+
+	got, _ := store.Get(ctx, doc.ID)
+	author, _ := got.Outbox[0].Data["author"].(map[string]any)
+	if author["id"] != "ana" || author["name"] != "Ana Pérez" || author["email"] != "ana@mail.com" {
+		t.Errorf("author del evento = %v, se esperaban id, nombre y mail (ADR-005, 3.2)", author)
+	}
+
+	ext, _, _ := svc.Register(ctx, "grupo4", "clave-0009", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía", Email: "no-deberia@mail.com"}}, pdf)
+	_ = svc.Reject(ctx, admin, ext.ID, "no se lee")
+	got, _ = store.Get(ctx, ext.ID)
+	author, _ = got.Outbox[0].Data["author"].(map[string]any)
+	if _, ok := author["email"]; ok {
+		t.Errorf("el evento de un documento externo lleva mail: %v (RN-41)", author)
+	}
+}

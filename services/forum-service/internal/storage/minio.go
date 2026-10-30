@@ -88,6 +88,20 @@ func (m *MinIO) Delete(ctx context.Context, key string) error {
 	return classify(m.client.RemoveObject(ctx, m.bucket, key, minio.RemoveObjectOptions{}))
 }
 
+// List recorre los objetos del bucket cuya clave empieza con prefix (vacío:
+// todos), con su fecha de última modificación. Si fn devuelve error, corta.
+func (m *MinIO) List(ctx context.Context, prefix string, fn func(key string, modified time.Time) error) error {
+	for obj := range m.client.ListObjects(ctx, m.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return classify(obj.Err)
+		}
+		if err := fn(obj.Key, obj.LastModified); err != nil {
+			return err
+		}
+	}
+	return classify(ctx.Err())
+}
+
 type cancelOnClose struct {
 	io.ReadCloser
 	cancel context.CancelFunc

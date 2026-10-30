@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,9 +30,13 @@ const (
 var ErrWeakSecret = errors.New("JWT_SECRET falta o tiene menos de 32 caracteres")
 
 // Claims son los datos del JWT que usa el gateway: el id del usuario va en
-// "sub" y el rol en "role".
+// "sub", el rol en "role" y, desde que users-service los emite, el nombre y el
+// mail en "name" y "email". Los tokens sin name ni email (los de antes o los
+// de devtoken) siguen siendo válidos.
 type Claims struct {
-	Role string `json:"role"`
+	Role  string `json:"role"`
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -96,8 +101,9 @@ func Sign(secret, userID, role string, ttl time.Duration) (string, error) {
 }
 
 // Require exige un JWT válido en "Authorization: Bearer <token>". Si es válido,
-// completa X-User-Id y X-User-Role con los datos del token, después de borrar
-// lo que haya mandado el cliente. Si no, responde 401 sin llamar al servicio.
+// completa X-User-Id y X-User-Role (y X-User-Name y X-User-Email si el token
+// los trae) con los datos del token, después de borrar lo que haya mandado el
+// cliente. Si no, responde 401 sin llamar al servicio.
 func Require(v *Verifier, logger *slog.Logger, next http.Handler) http.Handler {
 	return StripIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, ok := bearerToken(r)
@@ -114,6 +120,12 @@ func Require(v *Verifier, logger *slog.Logger, next http.Handler) http.Handler {
 		}
 		r.Header.Set(UserIDHeader, claims.Subject)
 		r.Header.Set(UserRoleHeader, claims.Role)
+		if claims.Name != "" {
+			r.Header.Set(UserNameHeader, url.QueryEscape(claims.Name))
+		}
+		if claims.Email != "" {
+			r.Header.Set(UserEmailHeader, url.QueryEscape(claims.Email))
+		}
 		r.Header.Del("Authorization") // los servicios internos no necesitan el token
 		next.ServeHTTP(w, r)
 	}))

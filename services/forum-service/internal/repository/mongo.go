@@ -54,6 +54,8 @@ func (m *Mongo) EnsureIndexes(ctx context.Context) error {
 			// Mis publicaciones (RF-15) y lo registrado por cada API key (RF-27).
 			{Keys: bson.D{{Key: "author.userId", Value: 1}, {Key: "createdAt", Value: -1}}},
 			{Keys: bson.D{{Key: "author.consumer", Value: 1}, {Key: "createdAt", Value: -1}}},
+			// Archivos con documento, para la limpieza de PDF huérfanos (ADR-003).
+			{Keys: bson.D{{Key: "file.key", Value: 1}}},
 			// Eventos sin publicar, para el relay del outbox (ADR-005, 3.3).
 			{Keys: bson.D{{Key: "outbox.publishedAt", Value: 1}}},
 			// Cambios recientes, para el indexador de Solr (ADR-006).
@@ -238,6 +240,29 @@ func (m *Mongo) whyNotMatched(ctx context.Context, id string) error {
 	default:
 		return model.ErrAlreadyModerated
 	}
+}
+
+// ExistingFileKeys dice cuáles de esas claves de archivo tienen un documento,
+// en cualquier estado: un resumen eliminado conserva su documento y su PDF.
+func (m *Mongo) ExistingFileKeys(ctx context.Context, keys []string) (found map[string]bool, err error) {
+	found = map[string]bool{}
+	err = m.run(ctx, func(ctx context.Context) error {
+		cur, err := m.summaries.Find(ctx,
+			bson.D{{Key: "file.key", Value: bson.D{{Key: "$in", Value: keys}}}},
+			options.Find().SetProjection(bson.D{{Key: "file.key", Value: 1}}))
+		if err != nil {
+			return err
+		}
+		var docs []model.Summary
+		if err := cur.All(ctx, &docs); err != nil {
+			return err
+		}
+		for _, d := range docs {
+			found[d.File.Key] = true
+		}
+		return nil
+	})
+	return found, err
 }
 
 // ---------- Calificaciones ----------

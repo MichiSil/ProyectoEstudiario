@@ -83,7 +83,9 @@ func (s *Service) Delete(ctx context.Context, v Viewer, id string) error {
 }
 
 // moderationData son los datos de summary.approved y summary.rejected
-// (ADR-005, 3.2). Los documentos de sistemas externos no generan mail ni
+// (ADR-005, 3.2). El autor va con su id, su nombre y su mail, copiados al
+// publicar, para que notification-service mande el mail sin consultar a
+// users-service. Los documentos de sistemas externos no tienen mail ni generan
 // beneficios porque su autor no tiene cuenta en Estudiario (RN-41): el evento
 // lo dice en notifyAuthor y awardBenefits, para que los consumidores no
 // tengan que deducirlo.
@@ -92,6 +94,9 @@ func moderationData(doc model.Summary, by string, at time.Time, to model.Status,
 	author := map[string]any{"name": doc.Author.Name}
 	if doc.Author.UserID != "" {
 		author["id"] = doc.Author.UserID
+	}
+	if student && doc.Author.Email != "" {
+		author["email"] = doc.Author.Email
 	}
 	data := map[string]any{
 		"summaryId":   doc.ID,

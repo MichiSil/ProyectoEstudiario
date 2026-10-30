@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +130,74 @@ func TestSecretoCortoNoSeAcepta(t *testing.T) {
 	}
 	if _, err := Sign("corto", "x", RoleStudent, time.Hour); err == nil {
 		t.Error("Sign aceptó un secreto de menos de 32 caracteres")
+	}
+}
+
+// signProfile firma un token con nombre y mail, como los de users-service.
+func signProfile(t *testing.T, name, email string) string {
+	t.Helper()
+	now := time.Now()
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		Role: RoleStudent, Name: name, Email: email,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: Issuer, Subject: "ana-1",
+			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+	}).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// identityAfterRequire devuelve los encabezados de identidad que le llegan al servicio.
+func identityAfterRequire(t *testing.T, token string, clientHeaders map[string]string) (status int, got map[string]string) {
+	t.Helper()
+	got = map[string]string{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{UserIDHeader, UserRoleHeader, UserNameHeader, UserEmailHeader} {
+			got[h] = r.Header.Get(h)
+		}
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/forum/summaries/mine", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range clientHeaders {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	Require(mustVerifier(t), testLogger, next).ServeHTTP(rec, req)
+	return rec.Code, got
+}
+
+func TestNombreYMailDelTokenLleganCodificados(t *testing.T) {
+	status, got := identityAfterRequire(t, signProfile(t, "Ana Pérez Ñandú", "ana+foro@mail.com"), nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if got[UserNameHeader] != "Ana+P%C3%A9rez+%C3%91and%C3%BA" || got[UserEmailHeader] != "ana%2Bforo%40mail.com" {
+		t.Errorf("encabezados = %q / %q, se esperaban nombre y mail codificados", got[UserNameHeader], got[UserEmailHeader])
+	}
+	name, _ := url.QueryUnescape(got[UserNameHeader])
+	email, _ := url.QueryUnescape(got[UserEmailHeader])
+	if name != "Ana Pérez Ñandú" || email != "ana+foro@mail.com" {
+		t.Errorf("decodificados = %q / %q", name, email)
+	}
+}
+
+func TestNombreYMailDelClienteSeReemplazanOBorran(t *testing.T) {
+	spoof := map[string]string{UserNameHeader: "Otra%20Persona", UserEmailHeader: "otra%40mail.com"}
+
+	_, got := identityAfterRequire(t, signProfile(t, "Ana Pérez", "ana@mail.com"), spoof)
+	if got[UserNameHeader] != "Ana+P%C3%A9rez" || got[UserEmailHeader] != "ana%40mail.com" {
+		t.Errorf("con token con nombre: llegó %q / %q, se esperaban los del token", got[UserNameHeader], got[UserEmailHeader])
+	}
+
+	// Un token sin name ni email (de antes o de devtoken): lo del cliente se borra igual.
+	status, got := identityAfterRequire(t, mustSign(t, testSecret, "ana-1", RoleStudent, time.Hour), spoof)
+	if status != http.StatusOK || got[UserIDHeader] != "ana-1" {
+		t.Fatalf("token sin nombre ni mail: status = %d, X-User-Id = %q; se esperaba que siguiera andando", status, got[UserIDHeader])
+	}
+	if got[UserNameHeader] != "" || got[UserEmailHeader] != "" {
+		t.Errorf("token sin nombre ni mail: llegaron %q / %q del cliente, se esperaba que se borraran", got[UserNameHeader], got[UserEmailHeader])
 	}
 }
