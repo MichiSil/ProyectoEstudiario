@@ -4,8 +4,11 @@ package storage_test
 // el usuario propio de forum-service. Se ejecutan sólo si está definida
 // FORUM_TEST_MINIO_ENDPOINT:
 //
-//	docker compose up -d minio minio-init
-//	FORUM_TEST_MINIO_ENDPOINT=localhost:9000 go test ./internal/storage/
+// Los puertos de MinIO no se publican fuera de Docker: se corren en un
+// contenedor conectado a la red de docker compose (ver el README):
+//
+//	docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/src" -w /src \
+//	  -e FORUM_TEST_MINIO_ENDPOINT=minio:9000 golang:1.26-alpine go test ./internal/storage/
 
 import (
 	"bytes"
