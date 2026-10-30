@@ -157,3 +157,21 @@ func TestUsersCaidoDevuelve503(t *testing.T) {
 
 	assertProblem(t, rec, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE")
 }
+
+func TestForumReenviaSinElPrefijoYDa20sALaSubida(t *testing.T) {
+	var path string
+	forum := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { path = r.URL.Path }))
+	defer forum.Close()
+
+	rec := httptest.NewRecorder()
+	Forum(mustURL(t, forum.URL), testLogger).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/forum/summaries/abc/file", nil))
+	if rec.Code != http.StatusOK || path != "/summaries/abc/file" {
+		t.Fatalf("status = %d, ruta = %q; se esperaba 200 y /summaries/abc/file", rec.Code, path)
+	}
+	if got := forumTimeout(httptest.NewRequest(http.MethodPost, "/api/forum/summaries", nil)); got != UploadTimeout {
+		t.Errorf("subir un PDF: timeout = %v, se esperaba %v", got, UploadTimeout)
+	}
+	if got := forumTimeout(httptest.NewRequest(http.MethodGet, "/api/forum/summaries", nil)); got != DefaultTimeout {
+		t.Errorf("listar: timeout = %v, se esperaba %v", got, DefaultTimeout)
+	}
+}
