@@ -82,3 +82,61 @@ func TestPlannerExigeJWT(t *testing.T) {
 		t.Fatalf("con token: status = %d, X-User-Id recibido = %q; se esperaba 200 y estudiante-1", rec.Code, userID)
 	}
 }
+
+func TestRegistroYLoginSonPublicosYNoAceptanIdentidadDelCliente(t *testing.T) {
+	var llamadas int
+	var userID string
+	users := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llamadas++
+		userID = r.Header.Get(auth.UserIDHeader)
+	})
+	v, err := auth.NewVerifier(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users)
+
+	for _, path := range []string{"/api/users/register", "/api/users/login"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.Header.Set(auth.UserIDHeader, "otro-usuario")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || userID != "" {
+			t.Errorf("%s sin token: status = %d, X-User-Id recibido = %q; se esperaba 200 y sin identidad", path, rec.Code, userID)
+		}
+	}
+	if llamadas != 2 {
+		t.Errorf("users-service recibió %d pedidos, se esperaban 2", llamadas)
+	}
+}
+
+func TestMeExigeJWTYUsaLaIdentidadDelToken(t *testing.T) {
+	var userID string
+	users := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID = r.Header.Get(auth.UserIDHeader)
+	})
+	v, err := auth.NewVerifier(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/users/me", nil))
+	if rec.Code != http.StatusUnauthorized || userID != "" {
+		t.Fatalf("sin token: status = %d; se esperaba 401 sin llegar a users-service", rec.Code)
+	}
+
+	tok, err := auth.Sign(testSecret, "usuario-1", auth.RoleStudent, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/users/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(auth.UserIDHeader, "otro-usuario")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || userID != "usuario-1" {
+		t.Fatalf("con token: status = %d, X-User-Id recibido = %q; se esperaba 200 y usuario-1", rec.Code, userID)
+	}
+}
