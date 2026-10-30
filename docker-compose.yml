@@ -138,6 +138,8 @@ services:
       FORUM_CLEANUP_MIN_AGE: ${FORUM_CLEANUP_MIN_AGE:-1h}
       # Core de Solr para la búsqueda de aprobados (ADR-006). El indexador corre dentro de forum-service.
       SOLR_URL: http://solr:8983/solr/summaries
+      # Relay del outbox: publica los eventos summary.* en forum.events (ADR-005).
+      RABBITMQ_URL: amqp://${FORUM_RABBITMQ_USER}:${FORUM_RABBITMQ_PASSWORD}@rabbitmq:5672/
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
@@ -147,6 +149,10 @@ services:
       mongo-init:
         condition: service_completed_successfully
       minio-init:
+        condition: service_completed_successfully
+      # Crea el usuario de forum-service en RabbitMQ. Si después el broker se
+      # cae, el foro sigue y los eventos esperan en el outbox (RN-33).
+      rabbitmq-init:
         condition: service_completed_successfully
       # Sólo "started": sin Solr el foro funciona y la búsqueda responde 503 hasta que vuelva (ADR-010).
       solr:

@@ -26,6 +26,7 @@ import (
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/ratelimit"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/relay"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/repository"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/search"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
@@ -138,6 +139,17 @@ func run(logger *slog.Logger) error {
 	}
 	go (&cleanup.Cleaner{Files: files, Docs: repo, Logger: logger, Interval: cleanInterval, MinAge: cleanMinAge}).Run(ctx)
 	logger.Info("limpieza de PDF huérfanos programada", "intervalMs", cleanInterval.Milliseconds(), "minAgeMs", cleanMinAge.Milliseconds())
+
+	// Relay del outbox a RabbitMQ (ADR-005, 3.3). Corre aparte: si el broker
+	// está caído, la moderación sigue y los eventos esperan en el outbox (RN-33).
+	if amqpURL := os.Getenv("RABBITMQ_URL"); amqpURL != "" {
+		publisher := &relay.RabbitMQ{URL: amqpURL, Exchange: relay.Exchange}
+		defer publisher.Close()
+		go (&relay.Relay{Outbox: repo, Publisher: publisher, Logger: logger}).Run(ctx)
+		logger.Info("relay del outbox a RabbitMQ iniciado", "exchange", relay.Exchange)
+	} else {
+		logger.Warn("sin RABBITMQ_URL: los eventos del outbox no se publican")
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", controller.Health(repo))
