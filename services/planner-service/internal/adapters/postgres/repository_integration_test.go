@@ -164,3 +164,50 @@ func TestIntegration_RestriccionDeSuperposicion(t *testing.T) {
 		t.Fatal("la base debería rechazar una sesión superpuesta")
 	}
 }
+
+// RF-04: borrar una materia cancela sus exámenes y planes y libera las
+// sesiones pendientes; las completadas se conservan en la base, pero la
+// materia deja de verse con todo lo suyo.
+func TestIntegration_BorrarMateria(t *testing.T) {
+	svc, pool, ids := newService(t)
+	student, examID := split(ids)
+	ctx := context.Background()
+
+	plan, err := svc.ProposePlan(ctx, student, examID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.ConfirmPlan(ctx, student, plan.ID, "clave-borrar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE sessions SET status = 'completada' WHERE id = $1`, res.Sessions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	exam, err := svc.Repo.GetExam(ctx, student, examID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.DeleteSubject(ctx, student, exam.SubjectID); err != nil {
+		t.Fatalf("borrar la materia: %v", err)
+	}
+	subjects, _ := svc.ListSubjects(ctx, student)
+	exams, _ := svc.ListExams(ctx, student)
+	sessions, _ := svc.ListSessions(ctx, student)
+	if len(subjects) != 0 || len(exams) != 0 || len(sessions) != 0 {
+		t.Errorf("después de borrar se ven %d materias, %d exámenes y %d sesiones", len(subjects), len(exams), len(sessions))
+	}
+	if got := countSessions(t, pool, student); got != 1 {
+		t.Errorf("en la base tienen que quedar sólo la sesión completada, quedan %d", got)
+	}
+	var planStatus, examStatus string
+	_ = pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, plan.ID).Scan(&planStatus)
+	_ = pool.QueryRow(ctx, `SELECT status FROM exams WHERE id = $1`, examID).Scan(&examStatus)
+	if planStatus != "cancelado" || examStatus != "cancelado" {
+		t.Errorf("plan %q y examen %q, se esperaban cancelados", planStatus, examStatus)
+	}
+	if err := svc.DeleteSubject(ctx, student, exam.SubjectID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("borrar dos veces: se esperaba ErrNotFound, llegó %v", err)
+	}
+}

@@ -209,6 +209,12 @@ func (s *Service) UpdateExam(ctx context.Context, studentID, examID string, ch E
 	})
 }
 
+// DeleteSubject borra una materia (RF-04): sus exámenes se cancelan y sus
+// sesiones pendientes se liberan, como al cancelar un examen (RN-17).
+func (s *Service) DeleteSubject(ctx context.Context, studentID, subjectID string) error {
+	return s.Repo.DeleteSubject(ctx, studentID, subjectID)
+}
+
 // CancelExam cancela un examen (RF-06): sus sesiones pendientes se liberan y
 // las completadas se conservan como historial (RN-17).
 func (s *Service) CancelExam(ctx context.Context, studentID, examID string) (domain.Exam, error) {

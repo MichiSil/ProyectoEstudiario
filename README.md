@@ -226,7 +226,9 @@ curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
 - `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha de un examen con plan confirmado, el plan pasa a **desactualizado** y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
 - `POST /exams/{id}/cancel` cancela el examen y sus planes, libera las sesiones pendientes y conserva las completadas como historial (RN-17). Cancelar dos veces no falla. Un examen cancelado no se puede editar ni planificar: responde `409 EXAM_CANCELLED`.
 
-Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
+**Borrar una materia:** `DELETE /subjects/{id}` responde `204` (o `404` si no existe o ya estaba borrada). Cancela sus exámenes y planes y libera las sesiones pendientes, igual que cancelar cada examen. La materia deja de verse junto con sus exámenes y sesiones; las sesiones completadas se conservan en la base.
+
+Editar, cancelar, borrar una materia y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
 
 ### Material de cada materia
 

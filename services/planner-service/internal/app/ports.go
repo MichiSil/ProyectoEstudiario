@@ -75,6 +75,9 @@ type PlanRepository interface {
 	// no completadas, todo en una transacción (RN-17). Cancelar un examen ya
 	// cancelado no cambia nada.
 	CancelExam(ctx context.Context, studentID, examID string) (domain.Exam, error)
+	// DeleteSubject borra la materia, cancela sus exámenes y planes y libera
+	// sus sesiones no completadas, todo en una transacción.
+	DeleteSubject(ctx context.Context, studentID, subjectID string) error
 
 	CreateMaterial(ctx context.Context, m domain.Material) error
 	ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error)

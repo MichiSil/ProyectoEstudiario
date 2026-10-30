@@ -111,6 +111,10 @@ func (g Guarded) ListMaterials(ctx context.Context, studentID, subjectID string)
 	return out, err
 }
 
+func (g Guarded) DeleteSubject(ctx context.Context, studentID, id string) error {
+	return g.run(ctx, func(ctx context.Context) error { return g.Repo.DeleteSubject(ctx, studentID, id) })
+}
+
 func (g Guarded) DeleteMaterial(ctx context.Context, studentID, id string) error {
 	return g.run(ctx, func(ctx context.Context) error { return g.Repo.DeleteMaterial(ctx, studentID, id) })
 }

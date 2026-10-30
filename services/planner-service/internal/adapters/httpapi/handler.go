@@ -46,6 +46,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("POST /subjects", h.withStudent(h.createSubject))
 	mux.HandleFunc("GET /subjects", h.withStudent(h.listSubjects))
+	mux.HandleFunc("DELETE /subjects/{subjectId}", h.withStudent(h.deleteSubject))
 	mux.HandleFunc("GET /subjects/{subjectId}/materials", h.withStudent(h.listMaterials))
 	mux.HandleFunc("POST /subjects/{subjectId}/materials", h.withStudent(h.addMaterial))
 	mux.HandleFunc("DELETE /materials/{materialId}", h.withStudent(h.deleteMaterial))
@@ -393,6 +394,16 @@ func (h *Handler) setAvailability(w http.ResponseWriter, r *http.Request, studen
 		av.Slots = append(av.Slots, domain.Slot{Weekday: time.Weekday(s.Weekday), StartMinute: start, EndMinute: end})
 	}
 	if err := h.Svc.SetAvailability(r.Context(), av); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteSubject borra una materia con sus exámenes: 204, o 404 si no existe
+// o ya estaba borrada.
+func (h *Handler) deleteSubject(w http.ResponseWriter, r *http.Request, student string) {
+	if err := h.Svc.DeleteSubject(r.Context(), student, r.PathValue("subjectId")); err != nil {
 		h.fail(w, r, err)
 		return
 	}
