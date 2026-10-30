@@ -11,14 +11,15 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/correlation"
 )
 
-type ctxKey struct{}
-
-// CorrelationID devuelve el identificador de correlación del pedido.
+// CorrelationID devuelve el identificador de correlación del pedido. Lo guarda
+// el paquete correlation, así lo leen igual los logs, el handler y los
+// adaptadores de salida (por ejemplo, el de IA).
 func CorrelationID(ctx context.Context) string {
-	id, _ := ctx.Value(ctxKey{}).(string)
-	return id
+	return correlation.ID(ctx)
 }
 
 // ContextHandler agrega a cada log el correlationId y el traceId del pedido,
@@ -27,13 +28,24 @@ func CorrelationID(ctx context.Context) string {
 type ContextHandler struct{ slog.Handler }
 
 func (h ContextHandler) Handle(ctx context.Context, r slog.Record) error {
-	if id := CorrelationID(ctx); id != "" {
+	if id := CorrelationID(ctx); id != "" && !hasAttr(r, "correlationId") {
 		r.AddAttrs(slog.String("correlationId", id))
 	}
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 		r.AddAttrs(slog.String("traceId", sc.TraceID().String()), slog.String("spanId", sc.SpanID().String()))
 	}
 	return h.Handler.Handle(ctx, r)
+}
+
+// hasAttr indica si el registro ya trae el atributo (por ejemplo, el log de
+// fallo de la IA escribe su propio correlationId), para no repetir la clave.
+func hasAttr(r slog.Record, key string) bool {
+	found := false
+	r.Attrs(func(a slog.Attr) bool {
+		found = a.Key == key
+		return !found
+	})
+	return found
 }
 
 func (h ContextHandler) WithAttrs(a []slog.Attr) slog.Handler {
@@ -58,13 +70,13 @@ func (s *statusRecorder) WriteHeader(code int) {
 // traceparent) y un log estructurado por pedido.
 func Observe(next http.Handler, logger *slog.Logger) http.Handler {
 	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+		id := strings.TrimSpace(r.Header.Get(correlation.Header))
 		if id == "" {
 			id = strings.ToLower(rand.Text())
 		}
-		ctx := context.WithValue(r.Context(), ctxKey{}, id)
+		ctx := correlation.WithID(r.Context(), id)
 		trace.SpanFromContext(ctx).SetAttributes(attribute.String("correlation.id", id))
-		w.Header().Set("X-Correlation-Id", id)
+		w.Header().Set(correlation.Header, id)
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()

@@ -20,6 +20,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
+	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/ai"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/httpapi"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/postgres"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/rules"
@@ -72,16 +73,23 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	// El generador es el motor de reglas. El adaptador de IA (adapters/ai) lo
-	// envuelve con fallback cuando está configurado (RN-09).
-	var generator app.PlanGenerator = rules.Engine{}
+	generator, err := planGenerator(logger)
+	if err != nil {
+		return err
+	}
 
 	// Cada operación contra PostgreSQL tiene un tiempo máximo y, si la base no
 	// responde, la API devuelve 503 en lugar de 500 (ADR-010).
 	guarded := postgres.Guarded{Repo: repo, Timeout: postgres.DefaultTimeout}
 
 	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
-	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger}
+	// Secreto compartido con el api-gateway: sin él, cualquiera podría llamar
+	// directo al puerto de planner-service con el X-User-Id de otro estudiante.
+	internalToken := os.Getenv("INTERNAL_TOKEN")
+	if len(internalToken) < 32 {
+		return errors.New("INTERNAL_TOKEN falta o tiene menos de 32 caracteres")
+	}
+	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8082"),
@@ -102,6 +110,23 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// planGenerator arma el generador de propuestas. Con AI_API_KEY definida es el
+// agente de IA (Groq) con fallback al motor de reglas; sin clave, sólo el motor
+// de reglas (RN-09).
+func planGenerator(logger *slog.Logger) (app.PlanGenerator, error) {
+	cfg, err := ai.ConfigFromEnv()
+	if errors.Is(err, ai.ErrMissingAPIKey) {
+		logger.Info("AI_API_KEY no está definida: las propuestas se arman sólo con el motor de reglas (RN-09)")
+		return rules.Engine{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("agente de IA habilitado, con fallback al motor de reglas",
+		"model", cfg.Model, "baseUrl", cfg.BaseURL, "timeout", cfg.Timeout.String())
+	return ai.WithFallback(ai.NewClient(cfg), rules.Engine{}, logger), nil
 }
 
 // connect abre el pool y reintenta con espera exponencial mientras PostgreSQL

@@ -131,3 +131,47 @@ func assertProblem(t *testing.T, rec *httptest.ResponseRecorder, status int, cod
 		t.Errorf("code = %v, se esperaba %s", body["code"], code)
 	}
 }
+
+func TestUsersReenviaSinElPrefijo(t *testing.T) {
+	var path string
+	users := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+	}))
+	defer users.Close()
+
+	rec := httptest.NewRecorder()
+	Users(mustURL(t, users.URL), testLogger).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/users/login", nil))
+
+	if rec.Code != http.StatusOK || path != "/login" {
+		t.Fatalf("status = %d, ruta recibida = %q; se esperaba 200 y /login", rec.Code, path)
+	}
+}
+
+func TestUsersCaidoDevuelve503(t *testing.T) {
+	users := httptest.NewServer(http.NotFoundHandler())
+	target := mustURL(t, users.URL)
+	users.Close()
+
+	rec := httptest.NewRecorder()
+	Users(target, testLogger).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/users/login", nil))
+
+	assertProblem(t, rec, http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE")
+}
+
+func TestForumReenviaSinElPrefijoYDa20sALaSubida(t *testing.T) {
+	var path string
+	forum := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { path = r.URL.Path }))
+	defer forum.Close()
+
+	rec := httptest.NewRecorder()
+	Forum(mustURL(t, forum.URL), testLogger).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/forum/summaries/abc/file", nil))
+	if rec.Code != http.StatusOK || path != "/summaries/abc/file" {
+		t.Fatalf("status = %d, ruta = %q; se esperaba 200 y /summaries/abc/file", rec.Code, path)
+	}
+	if got := forumTimeout(httptest.NewRequest(http.MethodPost, "/api/forum/summaries", nil)); got != UploadTimeout {
+		t.Errorf("subir un PDF: timeout = %v, se esperaba %v", got, UploadTimeout)
+	}
+	if got := forumTimeout(httptest.NewRequest(http.MethodGet, "/api/forum/summaries", nil)); got != DefaultTimeout {
+		t.Errorf("listar: timeout = %v, se esperaba %v", got, DefaultTimeout)
+	}
+}

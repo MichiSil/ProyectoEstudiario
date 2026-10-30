@@ -15,7 +15,8 @@ Es un documento vivo: se actualiza en cada entrega a medida que el alcance se pr
 | **Plan de estudio** | Propuesta de sesiones generada por un agente de IA, confirmación del plan (acción principal), replanificación ante cambios y seguimiento de sesiones. |
 | **Foro de resúmenes** | Publicación de resúmenes, moderación por el administrador, búsqueda de resúmenes aprobados y calificación. |
 | **Notificaciones** | Mail al autor cuando su resumen es aprobado o rechazado. |
-| **Capacidad para otro grupo** | Generar un plan de estudio a partir de un examen y una disponibilidad, a través de un contrato publicado en [`docs/contracts/`](docs/contracts/). |
+| **Capacidad para otro grupo** | Registro y consulta de documentos del foro, para el Grupo 4 (Agencia de viajes), a través de un contrato publicado en [`docs/contracts/`](docs/contracts/). Ver la sección 11. |
+| **Capacidad de otro grupo** | Programa de beneficios del Grupo 1 (Gimnasio), para premiar a los estudiantes que comparten resúmenes. Ver la sección 11. |
 
 ### 1.2 Fuera de alcance
 
@@ -33,7 +34,8 @@ Es un documento vivo: se actualiza en cada entrega a medida que el alcance se pr
 | **Estudiante** | Usuario registrado. Gestiona su organización de estudio, pide y confirma planes, sube resúmenes y califica los de otros. |
 | **Administrador** | Usuario con rol de moderación. Aprueba, rechaza o elimina publicaciones del foro. |
 | **Agente de IA** | Componente del sistema que propone las sesiones de un plan de estudio. No toma decisiones finales: el estudiante siempre confirma. |
-| **Sistema externo consumidor** | Sistema de otro grupo que usa la capacidad publicada de generación de planes. |
+| **Sistema externo consumidor** | Sistema de otro grupo que registra y consulta documentos del foro con la capacidad publicada (el Grupo 4). |
+| **Programa de beneficios** | Sistema del Grupo 1 que premia la participación de los usuarios. Estudiario lo usa cuando se aprueba un resumen. |
 
 ## 3. Glosario
 
@@ -91,7 +93,7 @@ Es un documento vivo: se actualiza en cada entrega a medida que el alcance se pr
 | RF-10 | El estudiante puede ver su calendario con exámenes y sesiones reservadas. |
 | RF-11 | El estudiante puede marcar una sesión como completada o pospuesta. |
 | RF-12 | Si un plan queda desactualizado, el estudiante puede pedir una nueva propuesta que reemplace las sesiones pendientes. |
-| RF-13 | Un sistema externo autorizado puede pedir una propuesta de plan enviando los datos de un examen y una disponibilidad, sin necesidad de tener cuenta de estudiante (capacidad publicada, ver [`docs/contracts/`](docs/contracts/)). |
+| RF-13 | *Retirado el 2026-10-29.* Era la capacidad publicada de generar un plan para un sistema externo. La cátedra asignó como capacidad publicada el registro y la consulta de documentos (RF-25 a RF-27). La generación del plan sigue disponible para los estudiantes (RF-08). |
 
 ### 6.2 Reglas de negocio
 
@@ -244,7 +246,7 @@ Cada criterio indica entre paréntesis las reglas o requisitos que verifica. Los
 | CA-11 | **Dado** dos confirmaciones del mismo plan enviadas al mismo tiempo desde dos dispositivos, **cuando** el sistema las procesa, **entonces** se reserva un único conjunto de sesiones. *(RN-14, RN-15)* **[crítico]** |
 | CA-12 | **Dado** un examen con plan confirmado, **cuando** el estudiante cambia la fecha del examen, **entonces** el plan pasa a *desactualizado* y sus sesiones pendientes se muestran marcadas como desactualizadas. *(RN-16)* |
 | CA-13 | **Dado** un examen con sesiones completadas y pendientes, **cuando** el estudiante lo cancela, **entonces** las pendientes se liberan y las completadas se conservan. *(RN-17)* |
-| CA-14 | **Dado** un sistema externo con credenciales válidas, **cuando** pide un plan con los datos de un examen y una disponibilidad, **entonces** recibe las sesiones propuestas en el formato definido en el contrato publicado. *(RF-13)* |
+| CA-14 | *Retirado el 2026-10-29 junto con RF-13.* Los criterios de la capacidad publicada están en la sección 11. |
 
 ### 9.3 Foro
 
@@ -307,3 +309,47 @@ Pruebas automáticas que recorren el flujo del plan de estudio de punta a punta,
 | ID | Criterio |
 |---|---|
 | CA-30 | **Dado** el sistema levantado desde cero con `docker compose up --build`, **cuando** se ejecutan los tests end-to-end, **entonces** recorren el flujo anterior completo y terminan sin errores. |
+
+## 11. Integración con otros grupos
+
+La cátedra asignó las integraciones: Estudiario **exporta** al Grupo 4 (Agencia de viajes) el registro y la consulta de documentos del foro, y **consume** del Grupo 1 (Gimnasio) su programa de beneficios. Las decisiones están en el [ADR-014](docs/adr/ADR-014-contrato-documentos.md) y el [ADR-009](docs/adr/ADR-009-consumo-del-proveedor.md).
+
+### 11.1 Capacidad publicada: registro y consulta de documentos
+
+El Grupo 4 la usa para **guías de viaje compartidas**. El contrato es genérico: el destino va en la categoría y los datos del viaje en las etiquetas. El contrato está en [`docs/contracts/documents-v1.yaml`](docs/contracts/documents-v1.yaml) y su guía en [`docs/contracts/README.md`](docs/contracts/README.md).
+
+| ID | Requisito |
+|---|---|
+| RF-25 | Un sistema externo autorizado puede registrar un documento en el foro, con título, categoría, descripción, etiquetas, autor y un archivo PDF. El documento queda pendiente de moderación. |
+| RF-26 | Un sistema externo autorizado puede buscar entre los documentos aprobados, con los mismos filtros, órdenes y paginación que RF-19 y RF-20, ver el detalle de cada uno y descargar su PDF. |
+| RF-27 | Un sistema externo autorizado puede ver el estado de los documentos que registró (pendiente, aprobado o rechazado) y, si fue rechazado, el motivo. |
+
+| ID | Regla |
+|---|---|
+| RN-38 | Lo que registra un sistema externo pasa por la misma moderación que un resumen (RN-19, RN-21 a RN-23) y su archivo cumple RN-20. |
+| RN-39 | Un documento aprobado lo ve cualquier sistema autorizado y aparece en la búsqueda del foro. Uno pendiente o rechazado sólo lo ve el sistema que lo registró. Uno eliminado no lo ve nadie. |
+| RN-40 | Un mismo registro no crea dos documentos: si llega repetido con la misma clave de idempotencia, se devuelve el documento ya registrado. |
+| RN-41 | Los documentos registrados por sistemas externos no generan mail ni beneficios, porque su autor no tiene cuenta en Estudiario. |
+
+### 11.2 Capacidad consumida: programa de beneficios del Grupo 1
+
+| ID | Requisito |
+|---|---|
+| RF-28 | Cuando el administrador aprueba un resumen de un estudiante, el sistema registra esa participación en el programa de beneficios del Grupo 1, para que el estudiante reciba el premio que corresponda. |
+
+| ID | Regla |
+|---|---|
+| RN-42 | Cada resumen aprobado se registra en el programa de beneficios una sola vez, aunque el aviso de la aprobación se procese más de una vez. |
+| RN-43 | La moderación no depende del programa de beneficios. Si el Grupo 1 no responde, la aprobación se registra igual y la participación se registra cuando vuelva, sin intervención manual. |
+| RN-44 | Eliminar un resumen ya aprobado no revierte un premio ya otorgado. |
+
+### 11.3 Criterios de aceptación
+
+| ID | Criterio |
+|---|---|
+| CA-31 | **Dado** un sistema externo con una API key válida, **cuando** registra un PDF de menos de 10 MB con sus datos, **entonces** el documento queda *pendiente* y no aparece en la búsqueda. *(RF-25, RN-38)* |
+| CA-32 | **Dado** un documento registrado por un sistema externo, **cuando** el administrador lo aprueba y pasa 1 minuto, **entonces** aparece en la búsqueda de cualquier sistema autorizado y en la del foro. *(RF-26, RN-26, RN-39)* |
+| CA-33 | **Dado** un documento pendiente registrado por un sistema, **cuando** otro sistema pide su detalle, **entonces** recibe que no existe. *(RN-39)* |
+| CA-34 | **Dado** un registro ya procesado, **cuando** llega otra vez con la misma clave de idempotencia, **entonces** se devuelve el mismo documento y no se crea otro. *(RN-40)* **[crítico]** |
+| CA-35 | **Dado** un resumen pendiente de un estudiante, **cuando** el administrador lo aprueba, **entonces** se registra una única participación en el programa de beneficios del Grupo 1. *(RF-28, RN-42)* **[crítico]** |
+| CA-36 | **Dado** que el programa de beneficios del Grupo 1 está caído, **cuando** el administrador aprueba un resumen, **entonces** la aprobación se registra igual y, cuando el programa vuelve, la participación se registra una sola vez. *(RN-43)* **[crítico]** |

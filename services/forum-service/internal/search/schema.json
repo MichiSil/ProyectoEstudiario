@@ -1,0 +1,29 @@
+{
+  "add-field-type": [
+    {
+      "name": "text_es_estudiario",
+      "class": "solr.TextField",
+      "positionIncrementGap": "100",
+      "analyzer": {
+        "tokenizer": { "class": "solr.StandardTokenizerFactory" },
+        "filters": [
+          { "class": "solr.LowerCaseFilterFactory" },
+          { "class": "solr.StopFilterFactory", "words": "lang/stopwords_es.txt", "format": "snowball", "ignoreCase": "true" },
+          { "class": "solr.ASCIIFoldingFilterFactory" },
+          { "class": "solr.SpanishLightStemFilterFactory" }
+        ]
+      }
+    }
+  ],
+  "add-field": [
+    { "name": "title", "type": "text_es_estudiario", "indexed": true, "stored": false },
+    { "name": "description", "type": "text_es_estudiario", "indexed": true, "stored": false },
+    { "name": "category_text", "type": "text_es_estudiario", "indexed": true, "stored": false },
+    { "name": "categoryKey", "type": "string", "indexed": true, "stored": false },
+    { "name": "tagKeys", "type": "string", "indexed": true, "stored": false, "multiValued": true },
+    { "name": "source", "type": "string", "indexed": true, "stored": false },
+    { "name": "ratingAvg", "type": "pfloat", "indexed": true, "stored": true },
+    { "name": "ratingCount", "type": "pint", "indexed": true, "stored": true },
+    { "name": "publishedAt", "type": "pdate", "indexed": true, "stored": true }
+  ]
+}

@@ -252,3 +252,23 @@ Queda una ventana mínima en la que el mail se envió pero el proceso se cayó a
 ### Pendiente
 
 La comunicación asíncrona (sección 3: *outbox* en forum-service, RabbitMQ, consumidor idempotente en notification-service y *dead letter queues*) se implementa con el foro y las notificaciones, para la presentación final.
+
+### Actualización (2026-10-30)
+
+El indexador de búsqueda ya no consume `forum.search-indexer`: lee los cambios directamente de MongoDB por `updatedAt` cada 5 s ([ADR-006, actualización](ADR-006-busqueda.md#actualización-2026-10-30-implementación)). La cola `forum.search-indexer` y su DLQ no se crean. Los eventos `summary.*` del *outbox* se siguen publicando para notification-service y el consumo de beneficios.
+
+## Actualización (2026-10-29): nombre y mail del autor en los eventos de moderación
+
+**Resultado: `summary.approved` y `summary.rejected` llevan `author` con `id`, `name` y `email`, como define la sección 3.2**, para que notification-service mande el mail sin consultar a otro servicio. Hasta ahora el evento no tenía el mail porque forum-service no lo conocía.
+
+Cómo llegan a forum-service: users-service pone `name` y `email` en el JWT; el api-gateway se los pasa en `X-User-Name` y `X-User-Email` (codificados con `url.QueryEscape` y sin aceptar nunca los que mande el cliente), y forum-service los copia en el resumen al publicar. El detalle está en la actualización del mismo día del [ADR-003](ADR-003-persistencia.md).
+
+Ejemplo de `data.author` en un `summary.approved` guardado en el *outbox*:
+
+```json
+{ "id": "3tayky3g3yrynqv3ole5txkesx", "name": "Ana Pérez", "email": "ana.perez@mail.com" }
+```
+
+- **Documentos de sistemas externos:** el autor no tiene cuenta en Estudiario, así que su `author` no lleva `id` ni `email`, y el evento tiene `notifyAuthor: false` y, si es una aprobación, `awardBenefits: false` (RN-41). Los consumidores deciden con esos dos campos, sin deducirlo de `source`.
+- **Un resumen publicado con un token sin `name` ni `email`** (por ejemplo, de `devtoken`) genera un evento sin `email`. notification-service tiene que tratar ese caso como un evento que no puede notificar.
+- El mail del autor viaja sólo en los eventos internos: no aparece en ninguna respuesta de la API del foro ni de la capacidad `/v1`.

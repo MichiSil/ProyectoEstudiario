@@ -87,6 +87,22 @@ func userPrompt(in app.ProposalInput) string {
 		fmt.Fprintf(&b, "- %s de %s a %s\n", weekdayNames[s.Weekday], clock(s.StartMinute), clock(s.EndMinute))
 	}
 
+	// Las fechas concretas evitan que el modelo tenga que calcular qué día de
+	// la semana cae cada fecha, que es donde más se equivoca.
+	b.WriteString("Fechas en las que se puede estudiar (usá sólo estas fechas y horarios):\n")
+	examDay := startOfDay(in.Exam.StartsAt.In(loc))
+	for day := windowStart(in); !day.After(examDay); day = day.AddDate(0, 0, 1) {
+		var ranges []string
+		for _, s := range slots {
+			if s.Weekday == day.Weekday() {
+				ranges = append(ranges, clock(s.StartMinute)+" a "+clock(s.EndMinute))
+			}
+		}
+		if len(ranges) > 0 {
+			fmt.Fprintf(&b, "- %s (%s): %s\n", day.Format("2006-01-02"), weekdayNames[day.Weekday()], strings.Join(ranges, ", "))
+		}
+	}
+
 	var booked []domain.Session
 	for _, s := range in.Booked {
 		if s.OccupiesCalendar() && s.End.After(in.Now) && s.Start.Before(in.Exam.StartsAt) {

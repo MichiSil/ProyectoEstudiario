@@ -38,7 +38,12 @@ services:
     environment:
       PORT: "8080"
       PLANNER_SERVICE_URL: http://planner-service:8082
+      USERS_SERVICE_URL: http://users-service:8081
+      FORUM_SERVICE_URL: http://forum-service:8083
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Secreto para validar los JWT y secreto compartido con planner-service y users-service.
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
@@ -46,6 +51,10 @@ services:
       retries: 5
     depends_on:
       planner-service:
+        condition: service_healthy
+      users-service:
+        condition: service_healthy
+      forum-service:
         condition: service_healthy
       jaeger:
         condition: service_started
@@ -60,17 +69,21 @@ services:
       PORT: "8082"
       DATABASE_URL: postgres://${PLANNER_DB_USER}:${PLANNER_DB_PASSWORD}@postgres:5432/planner?sslmode=disable
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
-      AI_PROVIDER_URL: ${AI_PROVIDER_URL:-}
+      # Sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
+      # Agente de IA (Groq). Sin AI_API_KEY, el plan se arma con el motor de reglas (RN-09).
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_TIMEOUT: ${AI_TIMEOUT:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
       interval: 10s
       timeout: 3s
       retries: 5
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       jaeger:
         condition: service_started
 
@@ -81,24 +94,65 @@ services:
       - "8081:8081"
     environment:
       PORT: "8081"
+      # Base propia `users` con su propio usuario (ADR-001, ADR-003).
+      DATABASE_URL: postgres://${USERS_DB_USER}:${USERS_DB_PASSWORD}@postgres:5432/users?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Firma los JWT con el mismo secreto que usa el api-gateway para validarlos.
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
+      # GET /me sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
+      # Mails con rol admin (RF-03); se aplica en cada login.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
 
   forum-service:
     <<: *go-service
     build: ./services/forum-service
+    # Publicado directamente: la capacidad para otros grupos (/v1/*) no pasa por el api-gateway (ADR-014).
     ports:
       - "8083:8083"
     environment:
       PORT: "8083"
+      # Base `forum` en MongoDB y bucket `summaries` en MinIO, con usuarios propios (ADR-003).
+      MONGO_URI: mongodb://${FORUM_DB_USER}:${FORUM_DB_PASSWORD}@mongo:27017/forum?authSource=forum
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY}
+      MINIO_BUCKET: summaries
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # La API del foro sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
+      # API keys de la capacidad /v1 (consumidor:sha256 de la clave), nunca las claves (ADR-014).
+      FORUM_API_KEYS: ${FORUM_API_KEYS:-}
+      # Limpieza de PDF huérfanos (ADR-003): cada cuánto corre y desde qué antigüedad borra.
+      FORUM_CLEANUP_INTERVAL: ${FORUM_CLEANUP_INTERVAL:-1h}
+      FORUM_CLEANUP_MIN_AGE: ${FORUM_CLEANUP_MIN_AGE:-1h}
+      # Core de Solr para la búsqueda de aprobados (ADR-006). El indexador corre dentro de forum-service.
+      SOLR_URL: http://solr:8983/solr/summaries
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      # Sólo "started": sin Solr el foro funciona y la búsqueda responde 503 hasta que vuelva (ADR-010).
+      solr:
+        condition: service_started
+      jaeger:
+        condition: service_started
 
   notification-service:
     <<: *go-service
@@ -116,9 +170,9 @@ services:
   # ---------------------------------------------------------------
   # Mock de la capacidad publicada (docs/contracts/)
   # ---------------------------------------------------------------
-  planner-mock:
+  contract-mock:
     image: stoplight/prism:5
-    command: mock -h 0.0.0.0 -p 4010 --multiprocess=false /contracts/planner-v1.yaml
+    command: mock -h 0.0.0.0 -p 4010 --multiprocess=false /contracts/documents-v1.yaml
     ports:
       - "4010:4010"
     volumes:
@@ -134,8 +188,9 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_DB: planner
-      POSTGRES_USER: ${PLANNER_DB_USER:?falta el archivo .env (copiá .env.example a .env)}
-      POSTGRES_PASSWORD: ${PLANNER_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+      # Administrador del contenedor: sólo lo usa db-init, ningún servicio se conecta con él.
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?falta POSTGRES_ADMIN_USER en el .env (copiá de nuevo .env.example a .env)}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?falta POSTGRES_ADMIN_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -143,6 +198,119 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  # Crea el usuario y la base de cada servicio (planner y users), sin superusuario
+  # y sin acceso a la base del otro. Corre una vez en cada `up` y termina; el
+  # script es idempotente, así sirve también con un volumen que ya existía.
+  db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGDATABASE: planner
+      PGUSER: ${POSTGRES_ADMIN_USER}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      PLANNER_DB_USER: ${PLANNER_DB_USER:?falta PLANNER_DB_USER en el .env (ver .env.example)}
+      PLANNER_DB_PASSWORD: ${PLANNER_DB_PASSWORD:?falta PLANNER_DB_PASSWORD en el .env (ver .env.example)}
+      USERS_DB_USER: ${USERS_DB_USER:?falta USERS_DB_USER en el .env (ver .env.example)}
+      USERS_DB_PASSWORD: ${USERS_DB_PASSWORD:?falta USERS_DB_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/postgres:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-databases.sh"]
+    restart: "no"
+
+  mongo:
+    image: mongo:7.0
+    # Sin puertos publicados: sólo lo usan forum-service y mongo-init, por la red interna de Docker.
+    environment:
+      # Administrador del contenedor: sólo lo usa mongo-init. forum-service tiene su propio usuario.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?falta MONGO_ROOT_USER en el .env (ver .env.example)}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?falta MONGO_ROOT_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Crea el usuario de forum-service con permiso sólo sobre la base `forum`.
+  # Corre una vez en cada `up` y termina; el script es idempotente.
+  mongo-init:
+    image: mongo:7.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_ROOT_USER: ${MONGO_ROOT_USER}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      FORUM_DB_USER: ${FORUM_DB_USER:?falta FORUM_DB_USER en el .env (ver .env.example)}
+      FORUM_DB_PASSWORD: ${FORUM_DB_PASSWORD:?falta FORUM_DB_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/mongo:/scripts:ro
+    entrypoint: ["sh", "-c", "mongosh --quiet --host mongo -u \"$$MONGO_ROOT_USER\" -p \"$$MONGO_ROOT_PASSWORD\" --authenticationDatabase admin /scripts/init-databases.js"]
+    restart: "no"
+
+  # MinIO (S3) para los PDF. Las imágenes oficiales ya no se publican en Docker
+  # Hub: se usa la de Bitnami, que es el mismo MinIO, con versión fija.
+  minio:
+    image: bitnamilegacy/minio:2025.4.22
+    # Sólo se publica la consola web; la API S3 (9000) la usa forum-service por la red interna de Docker.
+    ports:
+      - "9001:9001"
+    environment:
+      # Administrador del contenedor: sólo lo usa minio-init. forum-service tiene su propio usuario.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?falta MINIO_ROOT_USER en el .env (ver .env.example)}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?falta MINIO_ROOT_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Crea el bucket `summaries` y el usuario de forum-service con permiso sólo
+  # sobre ese bucket. Corre una vez en cada `up` y termina; es idempotente.
+  minio-init:
+    image: bitnamilegacy/minio:2025.4.22
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      FORUM_MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY:?falta FORUM_MINIO_ACCESS_KEY en el .env (ver .env.example)}
+      FORUM_MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY:?falta FORUM_MINIO_SECRET_KEY en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/minio:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-storage.sh"]
+    restart: "no"
+
+  # Solr con el core `summaries`, creado al arrancar desde el configset
+  # _default, como en la CLASE_5. El esquema (campos y análisis en español) lo
+  # aplica forum-service con la Schema API desde
+  # services/forum-service/internal/search/schema.json (ADR-006).
+  solr:
+    image: solr:9.7.0
+    ports:
+      - "8983:8983" # panel de administración: http://localhost:8983/solr
+    command: ["solr-precreate", "summaries"]
+    environment:
+      SOLR_HEAP: 512m
+    volumes:
+      - solr-data:/var/solr
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8983/solr/summaries/admin/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
 
   # ---------------------------------------------------------------
@@ -160,3 +328,6 @@ services:
 
 volumes:
   postgres-data:
+  mongo-data:
+  minio-data:
+  solr-data:

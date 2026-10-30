@@ -17,23 +17,53 @@ import (
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/observability"
 )
 
-// PlannerPrefix es la ruta pública de planner-service en el gateway.
-const PlannerPrefix = "/api/planner"
+// Rutas públicas de cada servicio en el gateway.
+const (
+	PlannerPrefix = "/api/planner"
+	UsersPrefix   = "/api/users"
+	ForumPrefix   = "/api/forum"
+)
 
-// Timeouts del gateway hacia planner-service (ADR-005, 2.1).
+// Timeouts del gateway hacia cada servicio (ADR-005, 2.1).
 const (
 	DefaultTimeout  = 5 * time.Second
 	ProposalTimeout = 12 * time.Second
+	UsersTimeout    = 3 * time.Second
+	UploadTimeout   = 20 * time.Second
 )
 
 // Planner devuelve un reverse proxy hacia planner-service: /api/planner/<ruta>
 // se reenvía como /<ruta>. Cada pedido tiene un timeout, lleva el
 // X-Correlation-Id y propaga la traza con el encabezado traceparent (W3C).
 func Planner(target *url.URL, logger *slog.Logger) http.Handler {
+	return newProxy("planner-service", PlannerPrefix, target, timeoutFor, logger)
+}
+
+// Users devuelve un reverse proxy hacia users-service: /api/users/<ruta> se
+// reenvía como /<ruta>, con un timeout de 3 s.
+func Users(target *url.URL, logger *slog.Logger) http.Handler {
+	return newProxy("users-service", UsersPrefix, target, func(*http.Request) time.Duration { return UsersTimeout }, logger)
+}
+
+// Forum devuelve un reverse proxy hacia forum-service: /api/forum/<ruta> se
+// reenvía como /<ruta>, con 5 s y 20 s para subir un PDF.
+func Forum(target *url.URL, logger *slog.Logger) http.Handler {
+	return newProxy("forum-service", ForumPrefix, target, forumTimeout, logger)
+}
+
+// forumTimeout da 20 s a la subida de un resumen (PDF de hasta 10 MB) y 5 s al resto.
+func forumTimeout(r *http.Request) time.Duration {
+	if r.Method == http.MethodPost && trimPrefix(r.URL.Path, ForumPrefix) == "/summaries" {
+		return UploadTimeout
+	}
+	return DefaultTimeout
+}
+
+func newProxy(service, prefix string, target *url.URL, timeout func(*http.Request) time.Duration, logger *slog.Logger) http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
-			pr.Out.URL.Path = stripPrefix(pr.In.URL.Path)
+			pr.Out.URL.Path = trimPrefix(pr.In.URL.Path, prefix)
 			pr.Out.URL.RawPath = ""
 			pr.SetXForwarded()
 		},
@@ -46,29 +76,31 @@ func Planner(target *url.URL, logger *slog.Logger) http.Handler {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			status, code, title := http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "planner-service no está disponible"
+			status, code, title := http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", service+" no está disponible"
 			if errors.Is(err, context.DeadlineExceeded) {
-				status, code, title = http.StatusGatewayTimeout, "UPSTREAM_TIMEOUT", "planner-service no respondió a tiempo"
+				status, code, title = http.StatusGatewayTimeout, "UPSTREAM_TIMEOUT", service+" no respondió a tiempo"
 			}
-			logger.ErrorContext(r.Context(), "falla al llamar a planner-service", "error", err.Error())
+			logger.ErrorContext(r.Context(), "falla al llamar a "+service, "error", err.Error())
 			writeProblem(w, r, status, code, title)
 		},
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), timeoutFor(r))
+		ctx, cancel := context.WithTimeout(r.Context(), timeout(r))
 		defer cancel()
 		rp.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func stripPrefix(path string) string {
-	p := strings.TrimPrefix(path, PlannerPrefix)
+func trimPrefix(path, prefix string) string {
+	p := strings.TrimPrefix(path, prefix)
 	if p == "" {
 		return "/"
 	}
 	return p
 }
+
+func stripPrefix(path string) string { return trimPrefix(path, PlannerPrefix) }
 
 // timeoutFor da 12 s a la propuesta de plan (puede esperar a la IA) y 5 s al resto.
 func timeoutFor(r *http.Request) time.Duration {

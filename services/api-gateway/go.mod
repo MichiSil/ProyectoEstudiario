@@ -3,6 +3,7 @@ module github.com/MichiSil/ProyectoEstudiario/services/api-gateway
 go 1.26.0
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0
