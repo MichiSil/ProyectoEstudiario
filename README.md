@@ -146,7 +146,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 | notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
-| PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env` |
+| PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
 
@@ -204,7 +204,7 @@ export TOKEN=$(JWT_SECRET=$(grep ^JWT_SECRET= ../../.env | cut -d= -f2 | tr -d '
 cd ../..
 ```
 
-> Si ya tenías un `.env` de antes, agregale las variables nuevas copiándolas de `.env.example` (`JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_USER`, `USERS_DB_PASSWORD` y `ADMIN_EMAILS`): sin ellas, `docker compose` no levanta.
+> Si ya tenías un `.env` de antes, volvé a copiar `.env.example` a `.env` (y, si tenías una `AI_API_KEY`, volvé a ponerla). Cambiaron las variables de PostgreSQL (`POSTGRES_ADMIN_*` y `PLANNER_DB_*`) y se sumaron `JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_*` y `ADMIN_EMAILS`: sin ellas, `docker compose` no levanta. No hace falta borrar la base: `db-init` adapta la que ya tenías.
 
 ### Logs y trazas
 
