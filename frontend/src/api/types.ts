@@ -104,3 +104,29 @@ export interface RuleViolation {
   /** -1 si no corresponde a una sesión puntual */
   sessionIndex: number
 }
+
+// Formas de la API de users-service
+// (services/users-service/internal/controller/http.go).
+
+export type UserRole = 'estudiante' | 'admin'
+
+export interface User {
+  id: string
+  name: string
+  email: string
+  role: UserRole
+  createdAt: string
+}
+
+export interface LoginResult {
+  /** JWT HS256 que valida el api-gateway */
+  token: string
+  expiresAt: string
+  user: User
+}
+
+/** Error de validación de un campo (VALIDATION_ERROR de users-service). */
+export interface FieldError {
+  field: string
+  message: string
+}
