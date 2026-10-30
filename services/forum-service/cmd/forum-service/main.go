@@ -18,11 +18,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/apikey"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cache"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cached"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cleanup"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
@@ -134,8 +136,15 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("caché del foro", "provider", forumCache.Name())
+	// El envoltorio de caché va entre el service y el repositorio (cache-aside,
+	// ADR-002). Los aciertos y fallos se registran en Prometheus y se resumen
+	// en los logs cada minuto.
+	cacheMetrics := &cached.Metrics{}
+	prometheus.MustRegister(cacheMetrics)
+	go cacheMetrics.Log(ctx, logger, forumCache.Name(), time.Minute)
+	cachedRepo := &cached.Repository{Repository: repo, Cache: forumCache, Metrics: cacheMetrics, Logger: logger}
 
-	svc := &service.Service{Repo: repo, Search: summarySearch, Files: files}
+	svc := &service.Service{Repo: cachedRepo, Search: &cached.Search{Next: summarySearch, Repo: cachedRepo}, Files: files}
 
 	// Limpieza periódica de PDF huérfanos en MinIO (ADR-003).
 	cleanInterval, err := durationEnv("FORUM_CLEANUP_INTERVAL", cleanup.DefaultInterval)
