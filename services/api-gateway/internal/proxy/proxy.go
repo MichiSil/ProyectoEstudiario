@@ -21,6 +21,7 @@ import (
 const (
 	PlannerPrefix = "/api/planner"
 	UsersPrefix   = "/api/users"
+	ForumPrefix   = "/api/forum"
 )
 
 // Timeouts del gateway hacia cada servicio (ADR-005, 2.1).
@@ -28,6 +29,7 @@ const (
 	DefaultTimeout  = 5 * time.Second
 	ProposalTimeout = 12 * time.Second
 	UsersTimeout    = 3 * time.Second
+	UploadTimeout   = 20 * time.Second
 )
 
 // Planner devuelve un reverse proxy hacia planner-service: /api/planner/<ruta>
@@ -41,6 +43,20 @@ func Planner(target *url.URL, logger *slog.Logger) http.Handler {
 // reenvía como /<ruta>, con un timeout de 3 s.
 func Users(target *url.URL, logger *slog.Logger) http.Handler {
 	return newProxy("users-service", UsersPrefix, target, func(*http.Request) time.Duration { return UsersTimeout }, logger)
+}
+
+// Forum devuelve un reverse proxy hacia forum-service: /api/forum/<ruta> se
+// reenvía como /<ruta>, con 5 s y 20 s para subir un PDF.
+func Forum(target *url.URL, logger *slog.Logger) http.Handler {
+	return newProxy("forum-service", ForumPrefix, target, forumTimeout, logger)
+}
+
+// forumTimeout da 20 s a la subida de un resumen (PDF de hasta 10 MB) y 5 s al resto.
+func forumTimeout(r *http.Request) time.Duration {
+	if r.Method == http.MethodPost && trimPrefix(r.URL.Path, ForumPrefix) == "/summaries" {
+		return UploadTimeout
+	}
+	return DefaultTimeout
 }
 
 func newProxy(service, prefix string, target *url.URL, timeout func(*http.Request) time.Duration, logger *slog.Logger) http.Handler {

@@ -20,7 +20,7 @@ func testRouter(t *testing.T, planner http.Handler) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), planner, http.NotFoundHandler())
+	return newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), planner, http.NotFoundHandler(), http.NotFoundHandler())
 }
 
 func TestHealthRespondeOK(t *testing.T) {
@@ -94,7 +94,7 @@ func TestRegistroYLoginSonPublicosYNoAceptanIdentidadDelCliente(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users)
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users, http.NotFoundHandler())
 
 	for _, path := range []string{"/api/users/register", "/api/users/login"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
@@ -119,7 +119,7 @@ func TestMeExigeJWTYUsaLaIdentidadDelToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users)
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users, http.NotFoundHandler())
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/users/me", nil))

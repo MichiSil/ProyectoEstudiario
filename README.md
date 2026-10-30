@@ -111,7 +111,7 @@ Además de lo obligatorio, el grupo encara dos desafíos adicionales. El alcance
 
 Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.
 
-Funcionan **users-service** (registro, inicio de sesión y emisión del JWT) y **planner-service** (pedir y confirmar el plan de estudio), cada uno con su base en PostgreSQL. forum-service y notification-service todavía son esqueletos que sólo responden `GET /health`.
+Funcionan **users-service** (registro, inicio de sesión y emisión del JWT) y **planner-service** (pedir y confirmar el plan de estudio), cada uno con su base en PostgreSQL, y **forum-service** (foro de resúmenes y capacidad de documentos para el Grupo 4) con MongoDB y MinIO. notification-service todavía es un esqueleto que sólo responde `GET /health`.
 
 ### Requisitos
 
@@ -142,10 +142,12 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
 | planner-service | http://localhost:8082 | Plan de estudio |
 | users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
-| forum-service | http://localhost:8083 | Esqueleto: sólo `GET /health` |
+| forum-service | http://localhost:8083 | Foro de resúmenes (a través del gateway, en `/api/forum`) y capacidad de documentos para el Grupo 4 (directo, en `/v1`) |
 | notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
+| MongoDB (base `forum`) | Sin puerto publicado | Sólo lo usan forum-service y `mongo-init`, por la red interna de Docker. forum-service entra con su usuario (`FORUM_DB_*`), que sólo lee y escribe la base `forum`; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
+| MinIO (bucket `summaries`) | Consola web en http://localhost:9001 | PDF de los resúmenes. La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar el bucket `summaries`. La consola se abre con `MINIO_ROOT_*` |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
@@ -205,6 +207,104 @@ cd ../..
 ```
 
 > Si ya tenías un `.env` de antes, volvé a copiar `.env.example` a `.env` (y, si tenías una `AI_API_KEY`, volvé a ponerla). Cambiaron las variables de PostgreSQL (`POSTGRES_ADMIN_*` y `PLANNER_DB_*`) y se sumaron `JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_*` y `ADMIN_EMAILS`: sin ellas, `docker compose` no levanta. No hace falta borrar la base: `db-init` adapta la que ya tenías.
+
+### Foro de resúmenes
+
+forum-service está organizado por capas (controller → service → repository, [ADR-002](docs/adr/ADR-002-arquitectura-interna.md)). Los resúmenes se guardan en MongoDB y los PDF en MinIO ([ADR-003](docs/adr/ADR-003-persistencia.md)). Desde el frontend se usa a través del api-gateway en `/api/forum/*`, con el JWT de la sección anterior.
+
+Para probarlo hace falta un estudiante y un administrador. El mail `admin@estudiario.local` está en `ADMIN_EMAILS` del `.env.example`, así que al registrarse recibe el rol `admin`:
+
+```bash
+G=http://localhost:8080
+login() { curl -s -X POST $G/api/users/register -H "Content-Type: application/json" -d "{\"name\":\"$1\",\"email\":\"$2\",\"password\":\"secreta123\"}" >/dev/null
+          curl -s -X POST $G/api/users/login -H "Content-Type: application/json" -d "{\"email\":\"$2\",\"password\":\"secreta123\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'; }
+EST=$(login "Ana Pérez" ana@mail.com)
+ADMIN=$(login "Admin" admin@estudiario.local)
+```
+
+**Subir un resumen** (multipart: `title`, `category` con la materia, `description`, `tags` separadas por comas, `authorName` opcional y el PDF en `file`). Queda **pendiente** (RN-19). Si el archivo no es PDF responde `415`, y si pesa más de 10 MB, `413` (RN-20):
+
+```bash
+curl -s -H "Authorization: Bearer $EST" $G/api/forum/summaries \
+  -F "title=Resumen de integrales dobles" -F "category=Análisis Matemático II" \
+  -F "tags=parcial,integrales" -F "authorName=Ana Pérez" \
+  -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf"
+# guardá el "id" de la respuesta:
+ID=<id del resumen>
+```
+
+**Moderar** (sólo administradores; un estudiante recibe `403`):
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN" $G/api/forum/admin/summaries/pending                 # de la más vieja a la más nueva
+curl -s -X POST -H "Authorization: Bearer $ADMIN" $G/api/forum/admin/summaries/$ID/approve
+curl -s -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{"reason":"El PDF está incompleto"}' $G/api/forum/admin/summaries/$ID/reject           # el motivo es obligatorio
+curl -s -X DELETE -H "Authorization: Bearer $ADMIN" $G/api/forum/admin/summaries/$ID
+```
+
+Aprobar o rechazar algo que ya no está pendiente responde `409 ALREADY_MODERATED` (RN-23). Cada moderación guarda su evento (`summary.approved`, `summary.rejected` o `summary.deleted`, con el formato del [ADR-005](docs/adr/ADR-005-comunicacion.md)) en el arreglo `outbox` del mismo documento, en la misma actualización.
+
+**Leer y calificar:**
+
+```bash
+curl -s -H "Authorization: Bearer $EST" $G/api/forum/summaries/mine                            # mis publicaciones con su estado
+curl -s -H "Authorization: Bearer $EST" "$G/api/forum/summaries?q=integrales&category=analisis%20matematico%20ii&sort=rating&page=1&size=20"
+curl -s -H "Authorization: Bearer $EST" $G/api/forum/summaries/$ID                              # detalle
+curl -s -o resumen.pdf -H "Authorization: Bearer $EST" $G/api/forum/summaries/$ID/file         # descarga
+curl -s -X PUT -H "Authorization: Bearer $EST" -H "Content-Type: application/json" \
+  -d '{"score":4}' $G/api/forum/summaries/$ID/rating                                            # de 1 a 5
+```
+
+Sólo se califican resúmenes aprobados (RN-28), nunca el propio (RN-29), y calificar de nuevo reemplaza el puntaje anterior (RN-30). Por ahora la búsqueda usa el índice de texto de MongoDB, detrás de la interfaz `SummarySearch`. Cuando se sume Solr, se la reemplaza sin tocar el resto ([ADR-006](docs/adr/ADR-006-busqueda.md)).
+
+### Capacidad de documentos para el Grupo 4
+
+forum-service expone directamente, sin pasar por el gateway, la API de [`docs/contracts/documents-v1.yaml`](docs/contracts/documents-v1.yaml) en `http://localhost:8083/v1`. La guía para el consumidor está en [`docs/contracts/README.md`](docs/contracts/README.md).
+
+Las API keys se configuran en `FORUM_API_KEYS` **sólo como hash SHA-256** (`consumidor:hash`). El `.env.example` trae la clave de prueba local `clave-de-prueba-grupo4`. La clave real del Grupo 4 se genera aparte y se entrega por un canal privado. Su hash se calcula con:
+
+```bash
+printf '%s' 'la-clave' | shasum -a 256
+```
+
+Ejemplo de punta a punta, como lo haría el Grupo 4:
+
+```bash
+F=http://localhost:8083
+K="X-API-Key: clave-de-prueba-grupo4"
+curl -i -X POST $F/v1/documents -H "$K" -H "Idempotency-Key: $(uuidgen)" \
+  -F "title=Guía de trekking en los glaciares" -F "category=Patagonia" -F "tags=trekking,invierno" \
+  -F "authorName=Lucía Fernández" -F "authorExternalId=viajero-1842" \
+  -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf"     # 202, queda pendiente
+curl -s "$F/v1/submissions?status=pendiente" -H "$K"                           # lo ve sólo esta API key
+# un administrador lo aprueba desde el foro (/api/forum/admin/summaries/<id>/approve) y entonces:
+curl -s "$F/v1/documents?category=Patagonia&tag=trekking&sort=rating" -H "$K" # aparece en la búsqueda
+```
+
+Repetir el registro con la misma `Idempotency-Key` y el mismo cuerpo devuelve el mismo documento con `Idempotent-Replayed: true`. Con otro cuerpo responde `422 IDEMPOTENCY_KEY_REUSED`. El cupo es de 60 pedidos por minuto por API key, de los cuales hasta 10 registros, y se informa en `RateLimit-Limit`, `RateLimit-Remaining` y `Retry-After`. Los documentos de sistemas externos se moderan igual que los resúmenes, pero no generan mail ni beneficios (RN-41): su evento lo indica con `notifyAuthor` y `awardBenefits` en `false`.
+
+### Tests de forum-service
+
+```bash
+cd services/forum-service
+go test ./...                                                   # unitarios y de contrato (en memoria)
+FORUM_CONTRACT_URL=http://localhost:8083 FORUM_CONTRACT_API_KEY=clave-de-prueba-grupo4 \
+  go test -run Contrato ./internal/controller/                  # contrato contra el servicio real
+```
+
+Los tests de integración usan MongoDB y MinIO reales. Como sus puertos no se publican fuera de Docker, se corren en un contenedor de Go conectado a la red de `docker compose` (con el sistema levantado, desde la raíz del repositorio):
+
+```bash
+docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/src" -w /src \
+  -e FORUM_TEST_MONGO_URI='mongodb://forum_svc:forum-local@mongo:27017/forum?authSource=forum' \
+  -e FORUM_TEST_MINIO_ENDPOINT=minio:9000 \
+  golang:1.26-alpine go test ./internal/repository/ ./internal/storage/
+```
+
+Los tests borran al terminar los datos que crean.
+
+El test de contrato valida cada respuesta de `/v1/*` y de `/health`, de éxito y de error, contra `docs/contracts/documents-v1.yaml` con [kin-openapi](https://github.com/getkin/kin-openapi). Si el servicio y el contrato no coinciden, el test falla.
 
 ### Logs y trazas
 
