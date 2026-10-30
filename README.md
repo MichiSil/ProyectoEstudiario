@@ -143,7 +143,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
 | planner-service | http://localhost:8082 | Plan de estudio |
 | users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
-| forum-service | http://localhost:8083 | Foro de resúmenes (a través del gateway, en `/api/forum`) y capacidad de documentos para el Grupo 4 (directo, en `/v1`) |
+| forum-service (dos instancias) | http://localhost:8083 (`forum-service-1`) | Foro de resúmenes (a través del gateway, en `/api/forum`, repartido entre las dos instancias) y capacidad de documentos para el Grupo 4 (directo, en `/v1`). `forum-service-2` no publica puerto |
 | notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
@@ -266,6 +266,20 @@ npx @modelcontextprotocol/inspector
 Recorren el flujo principal completo contra el sistema levantado, a través del gateway (SPEC 10.2): registro, materia, examen, disponibilidad, propuesta, confirmación, reintento idempotente y propuesta con la IA caída (`AI_FALLBACK`). Cómo correrlos: [tests/e2e/README.md](tests/e2e/README.md).
 
 ### Foro de resúmenes
+
+**Dos instancias con balanceo** ([ADR-012](docs/adr/ADR-012-balanceo-de-carga.md)). forum-service corre como `forum-service-1` y `forum-service-2`, y el api-gateway reparte los pedidos de `/api/forum` en *round robin* entre las que estén sanas:
+
+- **Chequeo de salud:** consulta `GET /health` de cada instancia cada 5 s. Dos fallas seguidas la sacan de la rotación, y una respuesta correcta la vuelve a poner.
+- **Si un pedido no puede conectarse,** la instancia sale de la rotación en ese momento. Si era una lectura, se reintenta en la otra; si era una escritura, responde `503` (no se sabe si se aplicó).
+- **Qué instancia atendió:** cada respuesta lo dice en `X-Served-By`, y los logs del foro lo dicen en `instance`. El gateway deja en su log cuándo una instancia sale o vuelve a la rotación.
+
+```bash
+# con un token de estudiante en $TOKEN: 10 pedidos, mitad en cada instancia
+for i in $(seq 10); do curl -s -o /dev/null -w '%{http_code} %header{x-served-by}\n' -H "Authorization: Bearer $TOKEN" localhost:8080/api/forum/summaries; done | sort | uniq -c
+docker compose stop forum-service      # se cae forum-service-1: todo pasa a forum-service-2, sin errores en las lecturas
+docker compose start forum-service     # en unos segundos vuelve a la rotación
+docker compose logs api-gateway | grep rotación
+```
 
 forum-service está organizado por capas (controller → service → repository, [ADR-002](docs/adr/ADR-002-arquitectura-interna.md)). Los resúmenes se guardan en MongoDB y los PDF en MinIO ([ADR-003](docs/adr/ADR-003-persistencia.md)). Desde el frontend se usa a través del api-gateway en `/api/forum/*`, con el JWT de la sección anterior.
 

@@ -1,6 +1,6 @@
 # ADR-012: Balanceo de carga
 
-- **Estado:** Propuesta
+- **Estado:** Aceptada (implementada y probada el 2026-10-30; ver la sección *Actualización*)
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D12
 - **Reemplaza a:** —
@@ -98,3 +98,31 @@ Condiciones que pesan:
 
 - Implementar las dos instancias y el balanceo cuando se implemente forum-service, y ajustar los valores iniciales de los chequeos de salud con las pruebas.
 - Demostrar la caída de una instancia con los logs, las métricas por instancia y el tablero.
+
+## Actualización (2026-10-30): implementación
+
+Se implementó lo decidido, con estos ajustes:
+
+| Punto | Cómo quedó |
+|---|---|
+| **Instancias** | En `docker-compose.yml`, el servicio `forum-service` es la primera instancia y `forum-service-2` la segunda, definida con `extends`. Así toma la misma imagen y la misma configuración, y una variable nueva del foro llega a las dos. Cada una se identifica con `INSTANCE` (`forum-service-1` y `forum-service-2`) en sus logs. Sólo la primera publica el puerto 8083. |
+| **Balanceo en el gateway** | Paquete `internal/proxy` del api-gateway (`balancer.go`). Las instancias se configuran en `FORUM_SERVICE_URLS`, separadas por comas; `FORUM_SERVICE_URL` sigue sirviendo para una sola. Round robin entre las sanas. |
+| **Chequeos** | Los valores iniciales quedaron como estaban: `GET /health` cada 5 s con 2 s de timeout, 2 fallas seguidas para sacar una instancia y 1 respuesta correcta para volver. Chequeo pasivo: un error de conexión en un pedido real la saca en ese momento. |
+| **Reintento** | Una lectura (`GET` o `HEAD`) que no pudo conectarse se reintenta una vez en otra instancia. Una escritura responde `503 UPSTREAM_UNAVAILABLE`. Un timeout responde `504` y no saca a la instancia de la rotación: puede estar lenta, no caída. |
+| **Qué instancia atendió** | Cada respuesta del foro trae su nombre en `X-Instance` y el gateway lo devuelve en `X-Served-By`. El span del gateway lleva `upstream.instance`. El gateway deja un log cuando una instancia sale o vuelve a la rotación, y cuando reintenta una lectura. |
+| **Capacidad `/v1` para el Grupo 4** | No pasa por el gateway (ADR-014). En la nube la balancea Caddy entre las dos instancias, con los mismos criterios (`lb_policy round_robin`, `health_uri /health` cada 5 s, reintento en la otra durante 2 s). En local, el puerto 8083 llega sólo a la primera instancia. |
+| **Procesos de fondo** | El indexador de Solr, la limpieza de PDF huérfanos y el *relay* del *outbox* corren en las dos instancias. Repetirlos no cambia el resultado ([ADR-004](ADR-004-concurrencia.md), punto 4). |
+| **Métricas por instancia** | Las agrega el trabajo de Prometheus y Grafana ([ADR-011](ADR-011-observabilidad.md)). Mientras tanto, el reparto se comprueba con `X-Served-By` y los logs. |
+
+### Validación
+
+Con el sistema completo levantado con `docker compose` y 20 lecturas de `GET /api/forum/summaries` en cada paso:
+
+| Paso | Resultado |
+|---|---|
+| Las dos instancias arriba | 10 pedidos en `forum-service-1` y 10 en `forum-service-2`, todos `200` |
+| `docker compose stop forum-service` | 20 de 20 en `forum-service-2`, todos `200`: el primer pedido a la instancia caída se reintentó en la otra (log `se reintenta la lectura en otra instancia`) y la caída salió de la rotación |
+| Publicar un resumen con una instancia caída | `201`: la instancia caída ya estaba fuera de la rotación |
+| `docker compose start forum-service` | Vuelve a la rotación en 3 s (log `instancia de vuelta en la rotación`), y el reparto vuelve a ser 10 y 10 |
+
+Los tests de `balancer_test.go` cubren el round robin, el reintento de una lectura, el no reintento de una escritura, el chequeo de salud (dos fallas para salir y una respuesta para volver) y el caso sin instancias sanas. También pasan con el detector de carreras (`go test -race`).
