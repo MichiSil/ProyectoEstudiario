@@ -349,6 +349,8 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?falta RABBITMQ_ADMIN_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      # Interfaz de administración y shovel, para reinyectar la DLQ desde la interfaz ("Move messages").
+      - ./deploy/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 5s
