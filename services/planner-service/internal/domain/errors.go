@@ -15,6 +15,9 @@ var (
 	// ErrExamCancelled indica que el examen está cancelado: no se puede editar
 	// ni planificar (RF-06, RN-17).
 	ErrExamCancelled = errors.New("el examen está cancelado")
+	// ErrAvailabilityNotSet indica que el estudiante todavía no cargó su
+	// disponibilidad (RF-07).
+	ErrAvailabilityNotSet = errors.New("el estudiante todavía no cargó su disponibilidad")
 	// ErrUnavailable indica que una dependencia (por ejemplo PostgreSQL) no
 	// está disponible. No es un error del pedido: se puede reintentar más tarde.
 	ErrUnavailable = errors.New("servicio no disponible temporalmente")

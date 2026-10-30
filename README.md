@@ -429,6 +429,7 @@ H=(-H Content-Type:application/json -H X-Correlation-Id:prueba-ia -H "Authorizat
 G=localhost:8080/api/planner
 curl "${H[@]}" -X POST $G/subjects -d '{"name":"Análisis II","difficulty":3}'          # devuelve el id de la materia
 curl "${H[@]}" -X PUT $G/availability -d '{"weeklySlots":[{"weekday":1,"startTime":"18:00","endTime":"21:00"},{"weekday":3,"startTime":"18:00","endTime":"21:00"}],"maxDailyMinutes":120,"preferredSessionMinutes":90,"timezone":"America/Argentina/Cordoba"}'
+curl "${H[@]}" $G/availability                                                      # la misma forma que el PUT; 404 AVAILABILITY_NOT_SET si nunca se cargó
 curl "${H[@]}" -X POST $G/exams -d '{"subjectId":"<id de la materia>","type":"parcial","startsAt":"2026-11-10T09:00:00-03:00","topics":["Integrales dobles","Series"]}'
 curl "${H[@]}" -X POST $G/exams/<id del examen>/proposals
 docker compose logs planner-service | grep prueba-ia
@@ -444,7 +445,7 @@ npm install
 npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
 ```
 
-Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. Los exámenes se leen de `GET /exams` y se editan o cancelan desde su detalle en el calendario. planner-service todavía no expone `GET /availability`, así que el frontend recuerda en el navegador la disponibilidad que el servidor aceptó al guardarla.
+Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. Los exámenes se leen de `GET /exams` y se editan o cancelan desde su detalle en el calendario. La disponibilidad se guarda con `PUT /availability` y se lee con `GET /availability`, con la misma forma.
 
 ### Estructura del repositorio
 

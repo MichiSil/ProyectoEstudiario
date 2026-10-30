@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -222,6 +223,16 @@ func (s *Service) SetAvailability(ctx context.Context, av domain.Availability) e
 		return &domain.ValidationError{Violations: []domain.RuleViolation{{Rule: "RF-07", Message: "la capacidad diaria y la duración de sesión tienen que ser positivas", SessionIndex: -1}}}
 	}
 	return s.Repo.SaveAvailability(ctx, av)
+}
+
+// Availability devuelve la disponibilidad guardada del estudiante (RF-07), o
+// ErrAvailabilityNotSet si todavía no la cargó.
+func (s *Service) Availability(ctx context.Context, studentID string) (domain.Availability, error) {
+	av, err := s.Repo.GetAvailability(ctx, studentID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return av, domain.ErrAvailabilityNotSet
+	}
+	return av, err
 }
 
 // ProposePlan pide una propuesta de plan para un examen (RF-08). La propuesta
