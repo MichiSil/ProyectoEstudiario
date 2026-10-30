@@ -1,0 +1,19 @@
+{
+  "name": "Estudiario",
+  "short_name": "Estudiario",
+  "description": "Organizá tu semana de estudio: materias, calendario de exámenes y un plan de estudio armado por un agente de IA.",
+  "lang": "es-AR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f2ec",
+  "theme_color": "#355c7d",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "/icons/pwa-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/pwa-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
