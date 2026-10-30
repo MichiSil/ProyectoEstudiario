@@ -20,7 +20,7 @@ func TestElTokenTieneElFormatoQueEsperaElGateway(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
 
-	raw, exp, err := s.Issue(model.User{ID: "u-1", Role: model.RoleAdmin})
+	raw, exp, err := s.Issue(model.User{ID: "u-1", Role: model.RoleAdmin, Name: "Ana Pérez", Email: "ana@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +45,9 @@ func TestElTokenTieneElFormatoQueEsperaElGateway(t *testing.T) {
 	}
 	if claims.Subject != "u-1" || claims.Role != "admin" {
 		t.Errorf("sub y role = %q %q", claims.Subject, claims.Role)
+	}
+	if claims.Name != "Ana Pérez" || claims.Email != "ana@mail.com" {
+		t.Errorf("name y email = %q %q, se esperaban los del usuario", claims.Name, claims.Email)
 	}
 	if claims.IssuedAt == nil || !claims.IssuedAt.Equal(now) {
 		t.Errorf("iat = %v, se esperaba %v", claims.IssuedAt, now)

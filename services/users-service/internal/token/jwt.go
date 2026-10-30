@@ -2,6 +2,9 @@
 // (services/api-gateway/internal/auth/jwt.go). El formato no se puede cambiar
 // sin cambiar también el gateway: HS256 firmado con JWT_SECRET, emisor
 // "users-service", el id del usuario en "sub", el rol en "role", e "iat" y "exp".
+// Además lleva el nombre y el mail del usuario en "name" y "email": el gateway
+// se los pasa a los servicios, para que forum-service sepa quién publica sin
+// consultar a users-service (ADR-003, ADR-005).
 package token
 
 import (
@@ -27,7 +30,9 @@ var ErrWeakSecret = errors.New("JWT_SECRET falta o tiene menos de 32 caracteres"
 
 // Claims son los datos del JWT, con los mismos nombres que lee el gateway.
 type Claims struct {
-	Role string `json:"role"`
+	Role  string `json:"role"`
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -52,7 +57,9 @@ func (s *Signer) Issue(u model.User) (string, time.Time, error) {
 	now := s.now()
 	exp := now.Add(s.ttl)
 	claims := Claims{
-		Role: u.Role,
+		Role:  u.Role,
+		Name:  u.Name,
+		Email: u.Email,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    Issuer,
 			Subject:   u.ID,
