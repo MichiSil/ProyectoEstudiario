@@ -102,15 +102,30 @@ services:
   forum-service:
     <<: *go-service
     build: ./services/forum-service
+    # Publicado directamente: la capacidad para otros grupos (/v1/*) no pasa por el api-gateway (ADR-014).
     ports:
       - "8083:8083"
     environment:
       PORT: "8083"
+      # Base `forum` en MongoDB y bucket `summaries` en MinIO, con usuarios propios (ADR-003).
+      MONGO_URI: mongodb://${FORUM_DB_USER}:${FORUM_DB_PASSWORD}@mongo:27017/forum?authSource=forum
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY}
+      MINIO_BUCKET: summaries
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
 
   notification-service:
     <<: *go-service
@@ -180,6 +195,77 @@ services:
     entrypoint: ["sh", "/scripts/init-databases.sh"]
     restart: "no"
 
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    environment:
+      # Administrador del contenedor: sólo lo usa mongo-init. forum-service tiene su propio usuario.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?falta MONGO_ROOT_USER en el .env (ver .env.example)}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?falta MONGO_ROOT_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Crea el usuario de forum-service con permiso sólo sobre la base `forum`.
+  # Corre una vez en cada `up` y termina; el script es idempotente.
+  mongo-init:
+    image: mongo:7.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_ROOT_USER: ${MONGO_ROOT_USER}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      FORUM_DB_USER: ${FORUM_DB_USER:?falta FORUM_DB_USER en el .env (ver .env.example)}
+      FORUM_DB_PASSWORD: ${FORUM_DB_PASSWORD:?falta FORUM_DB_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/mongo:/scripts:ro
+    entrypoint: ["sh", "-c", "mongosh --quiet --host mongo -u \"$$MONGO_ROOT_USER\" -p \"$$MONGO_ROOT_PASSWORD\" --authenticationDatabase admin /scripts/init-databases.js"]
+    restart: "no"
+
+  # MinIO (S3) para los PDF. Las imágenes oficiales ya no se publican en Docker
+  # Hub: se usa la de Bitnami, que es el mismo MinIO, con versión fija.
+  minio:
+    image: bitnamilegacy/minio:2025.4.22
+    ports:
+      - "9000:9000" # API S3
+      - "9001:9001" # consola web
+    environment:
+      # Administrador del contenedor: sólo lo usa minio-init. forum-service tiene su propio usuario.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?falta MINIO_ROOT_USER en el .env (ver .env.example)}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?falta MINIO_ROOT_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Crea el bucket `summaries` y el usuario de forum-service con permiso sólo
+  # sobre ese bucket. Corre una vez en cada `up` y termina; es idempotente.
+  minio-init:
+    image: bitnamilegacy/minio:2025.4.22
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      FORUM_MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY:?falta FORUM_MINIO_ACCESS_KEY en el .env (ver .env.example)}
+      FORUM_MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY:?falta FORUM_MINIO_SECRET_KEY en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/minio:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-storage.sh"]
+    restart: "no"
+
   # ---------------------------------------------------------------
   # Observabilidad
   # ---------------------------------------------------------------
@@ -195,3 +281,5 @@ services:
 
 volumes:
   postgres-data:
+  mongo-data:
+  minio-data:
