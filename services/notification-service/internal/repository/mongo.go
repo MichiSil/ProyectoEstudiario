@@ -24,17 +24,20 @@ const Collection = "sent_notifications"
 
 // Notification es un documento de sent_notifications.
 type Notification struct {
-	EventID       string    `bson:"eventId"`
-	EventType     string    `bson:"eventType,omitempty"`
-	SummaryID     string    `bson:"summaryId,omitempty"`
-	To            string    `bson:"to,omitempty"`
-	CorrelationID string    `bson:"correlationId,omitempty"`
-	Status        string    `bson:"status"`
-	Attempts      int       `bson:"attempts"`
-	Error         string    `bson:"error,omitempty"`
-	CreatedAt     time.Time `bson:"createdAt"`
-	UpdatedAt     time.Time `bson:"updatedAt"`
-	SentAt        time.Time `bson:"sentAt,omitzero"`
+	EventID       string `bson:"eventId"`
+	EventType     string `bson:"eventType,omitempty"`
+	SummaryID     string `bson:"summaryId,omitempty"`
+	To            string `bson:"to,omitempty"`
+	CorrelationID string `bson:"correlationId,omitempty"`
+	Status        string `bson:"status"`
+	Attempts      int    `bson:"attempts"`
+	Error         string `bson:"error,omitempty"`
+	// LockedUntil: mientras no venza, un proceso está mandando el mail y otra
+	// copia del evento no lo toma. Al reintentar o fallar se libera.
+	LockedUntil time.Time `bson:"lockedUntil"`
+	CreatedAt   time.Time `bson:"createdAt"`
+	UpdatedAt   time.Time `bson:"updatedAt"`
+	SentAt      time.Time `bson:"sentAt,omitzero"`
 }
 
 // Mongo implementa consumer.Store.
@@ -66,28 +69,58 @@ func (m *Mongo) Ping(ctx context.Context) error {
 	})
 }
 
-// Begin inserta el registro como "procesando". Si el eventId ya existe
-// (índice único), es una reentrega: si ya estaba "enviado" devuelve
-// alreadySent; si no (quedó "procesando" o "fallido" y se reinyectó desde la
-// DLQ), lo vuelve a poner "procesando" para intentar de nuevo.
+// Lease es cuánto queda tomado un registro mientras se manda el mail: más que
+// el timeout del mail (10 s) y que las operaciones contra MongoDB. Pasado ese
+// tiempo, se asume que el proceso que lo tomó se cayó.
+const Lease = time.Minute
+
+// ErrInProgress: otra copia del mismo evento se está procesando ahora. Es
+// transitorio: el mensaje se reintenta y, para entonces, ya figura "enviado".
+var ErrInProgress = errors.New("otra copia del evento se está procesando")
+
+// Begin inserta el registro como "procesando" y lo toma por Lease. Si el
+// eventId ya existe (índice único), es una reentrega:
+//   - "enviado": devuelve alreadySent, no se manda otro mail (RN-32);
+//   - libre (esperando un reintento, "fallido" y reinyectado desde la DLQ, o
+//     tomado por un proceso que se cayó hace más de Lease): lo toma;
+//   - tomado: otra copia llegó a la vez (entrega al menos una vez); devuelve
+//     ErrInProgress, para no mandar dos mails en paralelo.
 func (m *Mongo) Begin(ctx context.Context, r consumer.Record) (alreadySent bool, err error) {
 	err = m.run(ctx, func(ctx context.Context) error {
 		_, err := m.coll.InsertOne(ctx, Notification{
 			EventID: r.EventID, EventType: r.EventType, SummaryID: r.SummaryID, To: r.To,
 			CorrelationID: r.CorrelationID, Status: consumer.StatusProcessing,
-			CreatedAt: r.At, UpdatedAt: r.At,
+			LockedUntil: r.At.Add(Lease), CreatedAt: r.At, UpdatedAt: r.At,
 		})
 		if err == nil || !mongo.IsDuplicateKeyError(err) {
 			return err
 		}
 		res, err := m.coll.UpdateOne(ctx,
-			bson.D{{Key: "eventId", Value: r.EventID}, {Key: "status", Value: bson.D{{Key: "$ne", Value: consumer.StatusSent}}}},
-			bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: consumer.StatusProcessing}, {Key: "updatedAt", Value: r.At}}}})
+			bson.D{
+				{Key: "eventId", Value: r.EventID},
+				{Key: "status", Value: bson.D{{Key: "$ne", Value: consumer.StatusSent}}},
+				{Key: "lockedUntil", Value: bson.D{{Key: "$lt", Value: r.At}}},
+			},
+			bson.D{{Key: "$set", Value: bson.D{
+				{Key: "status", Value: consumer.StatusProcessing},
+				{Key: "lockedUntil", Value: r.At.Add(Lease)},
+				{Key: "updatedAt", Value: r.At},
+			}}})
 		if err != nil {
 			return err
 		}
-		alreadySent = res.MatchedCount == 0
-		return nil
+		if res.MatchedCount == 1 {
+			return nil
+		}
+		var existing Notification
+		if err := m.coll.FindOne(ctx, bson.D{{Key: "eventId", Value: r.EventID}}).Decode(&existing); err != nil {
+			return err
+		}
+		if existing.Status == consumer.StatusSent {
+			alreadySent = true
+			return nil
+		}
+		return ErrInProgress
 	})
 	return alreadySent, err
 }
@@ -99,10 +132,25 @@ func (m *Mongo) MarkSent(ctx context.Context, eventID string, attempts int, at t
 			bson.D{
 				{Key: "$set", Value: bson.D{
 					{Key: "status", Value: consumer.StatusSent}, {Key: "attempts", Value: attempts},
-					{Key: "sentAt", Value: at}, {Key: "updatedAt", Value: at},
+					{Key: "sentAt", Value: at}, {Key: "lockedUntil", Value: time.Time{}},
+					{Key: "updatedAt", Value: at},
 				}},
 				{Key: "$unset", Value: bson.D{{Key: "error", Value: ""}}},
 			})
+		return err
+	})
+}
+
+// Release libera el registro después de un error transitorio, para que el
+// reintento lo pueda tomar. Sigue "procesando", con el error y los intentos.
+func (m *Mongo) Release(ctx context.Context, eventID, reason string, attempts int, at time.Time) error {
+	return m.run(ctx, func(ctx context.Context) error {
+		_, err := m.coll.UpdateOne(ctx,
+			bson.D{{Key: "eventId", Value: eventID}, {Key: "status", Value: consumer.StatusProcessing}},
+			bson.D{{Key: "$set", Value: bson.D{
+				{Key: "lockedUntil", Value: time.Time{}}, {Key: "error", Value: reason},
+				{Key: "attempts", Value: attempts}, {Key: "updatedAt", Value: at},
+			}}})
 		return err
 	})
 }
@@ -113,7 +161,8 @@ func (m *Mongo) MarkFailed(ctx context.Context, r consumer.Record, reason string
 	return m.run(ctx, func(ctx context.Context) error {
 		set := bson.D{
 			{Key: "status", Value: consumer.StatusFailed}, {Key: "error", Value: reason},
-			{Key: "attempts", Value: attempts}, {Key: "updatedAt", Value: r.At},
+			{Key: "attempts", Value: attempts}, {Key: "lockedUntil", Value: time.Time{}},
+			{Key: "updatedAt", Value: r.At},
 		}
 		onInsert := bson.D{{Key: "createdAt", Value: r.At}}
 		for _, f := range []struct{ key, value string }{

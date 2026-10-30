@@ -50,6 +50,9 @@ type Store interface {
 	// si ya estaba como "enviado": es un duplicado y no se manda otro mail.
 	Begin(ctx context.Context, r Record) (alreadySent bool, err error)
 	MarkSent(ctx context.Context, eventID string, attempts int, at time.Time) error
+	// Release libera el registro después de un error transitorio al mandar,
+	// para que el reintento lo pueda tomar.
+	Release(ctx context.Context, eventID, reason string, attempts int, at time.Time) error
 	// MarkFailed deja el registro como "fallido" con el motivo (RN-34). Si no
 	// existía, lo crea.
 	MarkFailed(ctx context.Context, r Record, reason string, attempts int) error
@@ -167,7 +170,15 @@ func (h *Handler) Handle(ctx context.Context, msg Message) Decision {
 	err = h.Mailer.Send(sendCtx, Compose(ev))
 	cancel()
 	if err != nil {
-		return h.retryOrFail(ctx, log, rec, err, msg.Retries)
+		d := h.retryOrFail(ctx, log, rec, err, msg.Retries)
+		if d.Action == Retry {
+			if relErr := h.Store.Release(ctx, rec.EventID, d.Reason, msg.Retries+1, h.now()); relErr != nil {
+				// El reintento lo va a encontrar tomado y lo va a volver a
+				// reintentar hasta que venza la toma: se demora, no se pierde.
+				log.WarnContext(ctx, "no se pudo liberar el registro para el reintento", "error", relErr.Error())
+			}
+		}
+		return d
 	}
 
 	if err := h.Store.MarkSent(ctx, rec.EventID, msg.Retries+1, h.now()); err != nil {
