@@ -366,7 +366,7 @@ Con el sistema levantado y las variables `$G`, `$EST` y `$ADMIN` de la sección 
 # 1. Se apaga el servidor de mail
 docker compose stop mailpit
 
-# 2. El estudiante sube un resumen y el administrador lo aprueba: responde 204 igual (RN-33)
+# 2. El estudiante sube un resumen y el administrador lo aprueba: responde 200 igual (RN-33)
 ID=$(curl -s -H "Authorization: Bearer $EST" $G/api/forum/summaries \
   -F "title=Resumen para la demo" -F "category=Física I" \
   -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
