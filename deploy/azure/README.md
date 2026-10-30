@@ -69,7 +69,7 @@ ssh -i ruta/a/tu-clave.pem -L 16686:localhost:16686 azureuser@estudiario.<regió
 sudo docker stop tunel-jaeger
 ```
 
-Lo mismo sirve para la consola de MinIO (`minio:9001`) o Solr (`solr:8983`), cambiando el nombre y el puerto.
+Lo mismo sirve para la consola de MinIO (`minio:9001`), Solr (`solr:8983`), la interfaz de RabbitMQ (`rabbitmq:15672`) o Mailpit (`mailpit:8025`), cambiando el nombre y el puerto.
 
 **Apagar para ahorrar crédito.** En el portal, **Detener** la VM deja de cobrar el cómputo (el disco sigue costando unos centavos). Al volver a iniciarla, los contenedores arrancan solos.
 

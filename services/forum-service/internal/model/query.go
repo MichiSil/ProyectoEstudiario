@@ -47,6 +47,13 @@ type Moderation struct {
 	Event  OutboxEvent
 }
 
+// PendingEvent es un evento del outbox que el relay todavía no publicó, con el
+// resumen en el que está guardado.
+type PendingEvent struct {
+	SummaryID string
+	Event     OutboxEvent
+}
+
 // IdempotencyRecord registra un POST /v1/documents por API key y clave (RN-40).
 type IdempotencyRecord struct {
 	ID          string    `bson:"_id"` // consumidor + ":" + clave

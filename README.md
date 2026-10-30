@@ -144,10 +144,12 @@ docker compose down         # agregar -v para borrar también los datos locales
 | planner-service | http://localhost:8082 | Plan de estudio |
 | users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
 | forum-service | http://localhost:8083 | Foro de resúmenes (a través del gateway, en `/api/forum`) y capacidad de documentos para el Grupo 4 (directo, en `/v1`) |
-| notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
+| notification-service | http://localhost:8084 | Mail al autor cuando se aprueba o rechaza su resumen. No tiene API: consume los eventos de RabbitMQ (sólo expone `GET /health`) |
+| **RabbitMQ** | Interfaz de administración en http://localhost:15672 | Eventos del foro (exchange `forum.events`) y colas de notification-service. La interfaz se abre con `RABBITMQ_ADMIN_*`; cada servicio entra con su propio usuario (`FORUM_RABBITMQ_*`, `NOTIFICATION_RABBITMQ_*`). El puerto AMQP (5672) no se publica |
+| **Mailpit** | http://localhost:8025 | Servidor SMTP de prueba: guarda los mails que manda notification-service en lugar de enviarlos y los muestra en esta página |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
-| MongoDB (base `forum`) | Sin puerto publicado | Sólo lo usan forum-service y `mongo-init`, por la red interna de Docker. forum-service entra con su usuario (`FORUM_DB_*`), que sólo lee y escribe la base `forum`; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
+| MongoDB (bases `forum` y `notifications`) | Sin puerto publicado | Sólo lo usan forum-service, notification-service y `mongo-init`, por la red interna de Docker. Cada servicio entra con su usuario (`FORUM_DB_*`, `NOTIFICATION_DB_*`), que sólo lee y escribe su base; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
 | Solr (core `summaries`) | http://localhost:8983/solr | Índice de búsqueda de los resúmenes aprobados. El panel de administración sirve para ver el esquema y probar consultas |
 | MinIO (bucket `summaries`) | Consola web en http://localhost:9001 | PDF de los resúmenes. La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar el bucket `summaries`. La consola se abre con `MINIO_ROOT_*` |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
@@ -300,7 +302,7 @@ curl -s -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/
 curl -s -X DELETE -H "Authorization: Bearer $ADMIN" $G/api/forum/admin/summaries/$ID
 ```
 
-Aprobar o rechazar algo que ya no está pendiente responde `409 ALREADY_MODERATED` (RN-23). Cada moderación guarda su evento (`summary.approved`, `summary.rejected` o `summary.deleted`, con el formato del [ADR-005](docs/adr/ADR-005-comunicacion.md)) en el arreglo `outbox` del mismo documento, en la misma actualización.
+Aprobar o rechazar algo que ya no está pendiente responde `409 ALREADY_MODERATED` (RN-23). Cada moderación guarda su evento (`summary.approved`, `summary.rejected` o `summary.deleted`, con el formato del [ADR-005](docs/adr/ADR-005-comunicacion.md)) en el arreglo `outbox` del mismo documento, en la misma actualización, y un *relay* lo publica en RabbitMQ (ver [Notificaciones por mail](#notificaciones-por-mail)).
 
 **Leer y calificar:**
 
@@ -327,6 +329,78 @@ docker compose exec forum-service forum-service reindex
 El esquema del índice está versionado en [`schema.json`](services/forum-service/internal/search/schema.json). forum-service lo aplica al arrancar con la Schema API de Solr, sin pasos manuales.
 
 **Limpieza de PDF huérfanos.** forum-service borra solo, cada hora, los PDF del bucket que no tienen ningún resumen (por ejemplo, si falló la creación del documento después de subir el archivo), siempre que tengan más de 1 hora. Se configura con `FORUM_CLEANUP_INTERVAL` y `FORUM_CLEANUP_MIN_AGE` en el `.env` ([ADR-003](docs/adr/ADR-003-persistencia.md)); para probarlo se pueden bajar, por ejemplo a `30s` y `0s`. Cada vuelta deja en el log `limpieza de PDF huérfanos` con lo revisado y lo borrado.
+
+### Notificaciones por mail
+
+Cuando el administrador aprueba o rechaza un resumen, el autor recibe **un único mail**: "tu resumen fue publicado" o "tu resumen fue rechazado", con el motivo (RF-23, RF-24, RN-32). En local los mails no salen de tu máquina: los recibe **Mailpit** y se ven en http://localhost:8025.
+
+```mermaid
+flowchart LR
+    M[moderación] -->|misma actualización| O[(outbox del resumen)]
+    O -->|relay cada 1 s| EX{{forum.events}}
+    EX --> Q[notifications.summary-moderation]
+    Q --> NS[notification-service]
+    NS -->|SMTP| MP[Mailpit]
+    NS -. error transitorio .-> R[notifications.retry] -. vence la espera .-> Q
+    NS -. permanente o reintentos agotados .-> D[notifications.dlq]
+```
+
+- **forum-service** guarda el evento en el `outbox` del resumen, en la misma actualización que cambia el estado. Un *relay* revisa el `outbox` cada 1 s, publica los eventos pendientes en el exchange `forum.events` con confirmación del broker y recién ahí marca `publishedAt`. Si RabbitMQ está caído, reintenta con espera exponencial (hasta 30 s) y **la moderación sigue funcionando** (RN-33).
+- **notification-service** consume `notifications.summary-moderation`. Antes de mandar, registra el `eventId` en la colección `sent_notifications` (índice único): si el evento llega repetido y ya figuraba `enviado`, no manda otro mail (RN-32). Los documentos de sistemas externos (`notifyAuthor: false`) no generan mail (RN-41).
+- **Errores transitorios** (el servidor de mail no responde o MongoDB está caído): el mensaje espera en `notifications.retry` y se reintenta a los 5 s, 15 s, 45 s, 2 min 15 s y 6 min 45 s (± 20 %), sin frenar a los demás. **Errores permanentes** (evento inválido, autor sin mail, SMTP `5xx`) o reintentos agotados: el mensaje va a `notifications.dlq` con el motivo en `x-failure-reason`, y el registro queda `fallido` (RN-34).
+
+El estado de cada mail se puede ver en MongoDB:
+
+```bash
+docker compose exec mongo mongosh -u notification_svc -p notification-local --authenticationDatabase notifications notifications \
+  --quiet --eval 'db.sent_notifications.find({}, {_id: 0, eventId: 1, eventType: 1, status: 1, attempts: 1, error: 1}).sort({createdAt: -1}).limit(5)'
+```
+
+Y las colas, en la interfaz de RabbitMQ (http://localhost:15672, pestaña *Queues*). Para probar notification-service sin pasar por el foro, se puede publicar un evento a mano desde *Exchanges → forum.events → Publish message*, con *Routing key* `summary.approved`, la propiedad `message_id` con el `eventId` y un cuerpo como el del [ADR-005](docs/adr/ADR-005-comunicacion.md#32-formato-de-los-eventos).
+
+#### Demostración: el servidor de mail se cae (CA-26)
+
+Con el sistema levantado y las variables `$G`, `$EST` y `$ADMIN` de la sección [Foro de resúmenes](#foro-de-resúmenes):
+
+```bash
+# 1. Se apaga el servidor de mail
+docker compose stop mailpit
+
+# 2. El estudiante sube un resumen y el administrador lo aprueba: responde 200 igual (RN-33)
+ID=$(curl -s -H "Authorization: Bearer $EST" $G/api/forum/summaries \
+  -F "title=Resumen para la demo" -F "category=Física I" \
+  -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "Authorization: Bearer $ADMIN" $G/api/forum/admin/summaries/$ID/approve
+
+# 3. notification-service no puede mandar el mail y lo reintenta más tarde
+docker compose logs notification-service | grep "se reintenta"
+
+# 4. Se prende el servidor de mail y, en el próximo reintento, sale el mail
+docker compose start mailpit
+docker compose logs -f notification-service | grep "mail enviado"
+```
+
+En http://localhost:8025 aparece **un solo mail** "Tu resumen fue publicado", y el registro del evento queda `enviado` con la cantidad de intentos. Aunque el evento se vuelva a entregar (por ejemplo, reinyectándolo), no llega otro mail.
+
+Si el servidor de mail queda caído más de unos 10 minutos, se agotan los reintentos: el mensaje queda en `notifications.dlq` y el registro como `fallido` (CA-27). Cuando el mail vuelve, se **reinyecta** desde la interfaz de RabbitMQ: *Queues → notifications.dlq → Move messages*, con destino `notifications.summary-moderation`. Los mails que ya se habían enviado no se repiten.
+
+### Caché del foro
+
+El listado de resúmenes aprobados y el detalle de cada uno son las lecturas más repetidas del foro, y cambian poco. forum-service las guarda en **Memcached** con *cache-aside* ([ADR-007](docs/adr/ADR-007-cache.md)), con la caché trabajada en clase (`services/forum-service/internal/cache`, copiada de `claseCache-2026`).
+
+- **Qué se guarda:** el detalle de un resumen aprobado (10 min) y las páginas del listado por materia, orden y página (60 s). Sólo resúmenes aprobados; la búsqueda por texto, las pendientes y "mis publicaciones" no pasan por la caché.
+- **Invalidación**, después de que MongoDB confirma el cambio: aprobar cambia la *generación* del listado (todas las páginas viejas quedan sin uso); eliminar borra el detalle y cambia la generación, así que un resumen eliminado deja de verse enseguida; calificar borra el detalle (el promedio nuevo se ve enseguida en el detalle y, en el listado, en menos de 60 s).
+- **Si Memcached se cae**, cada operación espera como mucho 100 ms y el foro lee de MongoDB, sin errores: sólo más lento.
+- **La caché se elige** con `FORUM_CACHE_PROVIDER` en el `.env`: `memcached` (por defecto) o `none`, para medir el foro sin caché ([resultados](tests/load/RESULTADOS.md)).
+
+Los aciertos y fallos se cuentan en `forum_cache_requests_total` (para Prometheus) y se resumen en los logs cada minuto:
+
+```bash
+docker compose logs forum-service | grep '"caché del foro"'
+# {"msg":"caché del foro","provider":"memcached","operation":"listado","hits":512,"misses":31,"errors":0,"hitRatio":0.94,...}
+```
+
+**Demostración: Memcached se cae.** Con el sistema levantado, `docker compose stop memcached`: el foro sigue respondiendo igual (más lento), y en los logs aparecen `"la caché no respondió: se sigue sin caché"` y `"errors"` en el resumen de la caché. `docker compose start memcached` y la caché se vuelve a llenar sola.
 
 ### Capacidad de documentos para el Grupo 4
 
@@ -372,7 +446,7 @@ docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/sr
   golang:1.26-alpine go test ./internal/repository/ ./internal/storage/
 ```
 
-Los tests borran al terminar los datos que crean.
+Los tests borran al terminar los datos que crean. El de Memcached se corre igual, en la red de `docker compose`, con `-e FORUM_TEST_MEMCACHED_ADDR=memcached:11211` y el paquete `./internal/cache/`.
 
 El test de integración de Solr vacía el core que usa, así que se corre contra un Solr descartable, no contra el del `docker compose`:
 
@@ -383,6 +457,22 @@ docker stop solr-test
 ```
 
 El test de contrato valida cada respuesta de `/v1/*` y de `/health`, de éxito y de error, contra `docs/contracts/documents-v1.yaml` con [kin-openapi](https://github.com/getkin/kin-openapi). Si el servicio y el contrato no coinciden, el test falla.
+
+### Tests de notification-service
+
+```bash
+cd services/notification-service
+go test ./...    # unitarios: consumidor (duplicado, error transitorio, permanente, reintentos agotados, RN-41) y SMTP
+```
+
+Los tests de integración usan RabbitMQ y MongoDB reales y se corren igual que los de forum-service, en un contenedor conectado a la red de `docker compose`. Cada test declara sus propias colas y las borra al terminar, así no compite con el notification-service que está corriendo; por eso usa el administrador de RabbitMQ:
+
+```bash
+docker run --rm --network estudiario_default -v "$PWD/services/notification-service:/src" -w /src \
+  -e NOTIFICATION_TEST_AMQP_URL='amqp://rabbit_admin:rabbit-admin-local@rabbitmq:5672/' \
+  -e NOTIFICATION_TEST_MONGO_URI='mongodb://notification_svc:notification-local@mongo:27017/notifications?authSource=notifications' \
+  golang:1.26-alpine go test ./internal/repository/ ./internal/broker/
+```
 
 ### Logs y trazas
 

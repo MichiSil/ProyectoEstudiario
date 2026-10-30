@@ -117,9 +117,15 @@ func TestIntegracionIndexadorYBusqueda(t *testing.T) {
 		"fis":  summary("fis", "Cinemática del punto", "Física I", []string{"parcial"}, model.StatusApproved, 3, 10, base.Add(2*time.Minute)),
 		"pen":  summary("pen", "Integrales pendientes", "Análisis Matemático II", nil, model.StatusPending, 0, 0, base),
 	}
-	ix := &Indexer{Solr: solr, Source: src, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	changed := 0
+	ix := &Indexer{Solr: solr, Source: src, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Changed: func(context.Context) { changed++ }}
 	if err := ix.Sync(ctx, time.Time{}); err != nil {
 		t.Fatal(err)
+	}
+	// Una sincronización con cambios avisa, para invalidar el listado cacheado (ADR-007).
+	if changed != 1 {
+		t.Errorf("Changed se llamó %d veces, se esperaba 1", changed)
 	}
 
 	// Sólo los aprobados (RN-24). Sin tildes y en singular también encuentra (análisis en español).

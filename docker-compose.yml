@@ -4,9 +4,6 @@
 #   docker compose up --build
 #
 # Puertos y URLs: ver "Cómo levantar el sistema" en el README.
-#
-# En la Entrega 2 sólo funciona planner-service (pedir y confirmar el plan) con
-# PostgreSQL. Los demás servicios son esqueletos que responden GET /health.
 
 name: estudiario
 
@@ -138,6 +135,11 @@ services:
       FORUM_CLEANUP_MIN_AGE: ${FORUM_CLEANUP_MIN_AGE:-1h}
       # Core de Solr para la búsqueda de aprobados (ADR-006). El indexador corre dentro de forum-service.
       SOLR_URL: http://solr:8983/solr/summaries
+      # Relay del outbox: publica los eventos summary.* en forum.events (ADR-005).
+      RABBITMQ_URL: amqp://${FORUM_RABBITMQ_USER}:${FORUM_RABBITMQ_PASSWORD}@rabbitmq:5672/
+      # Caché del listado y del detalle de aprobados (ADR-007): memcached, o none para medir sin caché.
+      CACHE_PROVIDER: ${FORUM_CACHE_PROVIDER:-memcached}
+      MEMCACHED_ADDR: memcached:11211
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
@@ -148,8 +150,15 @@ services:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
+      # Crea el usuario de forum-service en RabbitMQ. Si después el broker se
+      # cae, el foro sigue y los eventos esperan en el outbox (RN-33).
+      rabbitmq-init:
+        condition: service_completed_successfully
       # Sólo "started": sin Solr el foro funciona y la búsqueda responde 503 hasta que vuelva (ADR-010).
       solr:
+        condition: service_started
+      # Sólo "started": sin Memcached el foro funciona igual, leyendo de MongoDB (ADR-007, ADR-010).
+      memcached:
         condition: service_started
       jaeger:
         condition: service_started
@@ -161,11 +170,26 @@ services:
       - "8084:8084"
     environment:
       PORT: "8084"
+      # Base `notifications` en MongoDB con su propio usuario (ADR-003): un registro por eventId (RN-32).
+      MONGO_URI: mongodb://${NOTIFICATION_DB_USER}:${NOTIFICATION_DB_PASSWORD}@mongo:27017/notifications?authSource=notifications
+      # Consume notifications.summary-moderation y publica en notifications.retry y notifications.dlq (ADR-005).
+      RABBITMQ_URL: amqp://${NOTIFICATION_RABBITMQ_USER}:${NOTIFICATION_RABBITMQ_PASSWORD}@rabbitmq:5672/
+      # Mailpit en local: los mails se ven en http://localhost:8025.
+      SMTP_ADDR: mailpit:1025
+      MAIL_FROM: ${MAIL_FROM:-Estudiario <no-reply@estudiario.local>}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      rabbitmq-init:
+        condition: service_completed_successfully
+      # Sólo "started": si Mailpit se cae, los mails se reintentan (RN-33, CA-26).
+      mailpit:
+        condition: service_started
 
   # ---------------------------------------------------------------
   # Mock de la capacidad publicada (docs/contracts/)
@@ -224,9 +248,9 @@ services:
 
   mongo:
     image: mongo:7.0
-    # Sin puertos publicados: sólo lo usan forum-service y mongo-init, por la red interna de Docker.
+    # Sin puertos publicados: sólo lo usan forum-service, notification-service y mongo-init, por la red interna de Docker.
     environment:
-      # Administrador del contenedor: sólo lo usa mongo-init. forum-service tiene su propio usuario.
+      # Administrador del contenedor: sólo lo usa mongo-init. Cada servicio tiene su propio usuario.
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?falta MONGO_ROOT_USER en el .env (ver .env.example)}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?falta MONGO_ROOT_PASSWORD en el .env (ver .env.example)}
     volumes:
@@ -238,8 +262,8 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Crea el usuario de forum-service con permiso sólo sobre la base `forum`.
-  # Corre una vez en cada `up` y termina; el script es idempotente.
+  # Crea los usuarios de forum-service y notification-service, cada uno con
+  # permiso sólo sobre su base (`forum` y `notifications`). Corre una vez en cada `up` y termina; el script es idempotente.
   mongo-init:
     image: mongo:7.0
     depends_on:
@@ -250,6 +274,8 @@ services:
       MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
       FORUM_DB_USER: ${FORUM_DB_USER:?falta FORUM_DB_USER en el .env (ver .env.example)}
       FORUM_DB_PASSWORD: ${FORUM_DB_PASSWORD:?falta FORUM_DB_PASSWORD en el .env (ver .env.example)}
+      NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:?falta NOTIFICATION_DB_USER en el .env (copiá de nuevo .env.example a .env)}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?falta NOTIFICATION_DB_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
     volumes:
       - ./deploy/mongo:/scripts:ro
     entrypoint: ["sh", "-c", "mongosh --quiet --host mongo -u \"$$MONGO_ROOT_USER\" -p \"$$MONGO_ROOT_PASSWORD\" --authenticationDatabase admin /scripts/init-databases.js"]
@@ -314,6 +340,69 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------
+  # Mensajería y mail (ADR-005, 3)
+  # ---------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13.7-management-alpine
+    # RabbitMQ guarda los datos por nombre de nodo, que sale del hostname: fijo, para que el volumen sirva al recrear el contenedor.
+    hostname: rabbitmq
+    ports:
+      - "15672:15672" # interfaz de administración: http://localhost:15672
+    environment:
+      # Administrador del contenedor: sólo lo usan rabbitmq-init y la interfaz
+      # web. Cada servicio tiene su propio usuario.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:?falta RABBITMQ_ADMIN_USER en el .env (copiá de nuevo .env.example a .env)}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?falta RABBITMQ_ADMIN_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      # Interfaz de administración y shovel, para reinyectar la DLQ desde la interfaz ("Move messages").
+      - ./deploy/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # Crea los usuarios de forum-service y notification-service y la topología
+  # del ADR-005: exchange forum.events, cola de notificaciones, cola de
+  # reintentos y DLQ. Corre una vez en cada `up` y termina; es idempotente.
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER}
+      RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}
+      FORUM_RABBITMQ_USER: ${FORUM_RABBITMQ_USER:?falta FORUM_RABBITMQ_USER en el .env (ver .env.example)}
+      FORUM_RABBITMQ_PASSWORD: ${FORUM_RABBITMQ_PASSWORD:?falta FORUM_RABBITMQ_PASSWORD en el .env (ver .env.example)}
+      NOTIFICATION_RABBITMQ_USER: ${NOTIFICATION_RABBITMQ_USER:?falta NOTIFICATION_RABBITMQ_USER en el .env (ver .env.example)}
+      NOTIFICATION_RABBITMQ_PASSWORD: ${NOTIFICATION_RABBITMQ_PASSWORD:?falta NOTIFICATION_RABBITMQ_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/rabbitmq:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-broker.sh"]
+    restart: "no"
+
+  # Caché compartida por las instancias de forum-service (ADR-007). No es
+  # fuente de verdad: si se reinicia, todo se vuelve a leer de MongoDB. Sin
+  # puerto publicado: sólo la usa forum-service por la red interna de Docker.
+  memcached:
+    image: memcached:1.6.32-alpine
+    command: ["-m", "64"]
+    restart: unless-stopped
+
+  # Servidor SMTP de prueba: guarda los mails en lugar de mandarlos y los
+  # muestra en http://localhost:8025. notification-service le habla por SMTP
+  # (puerto 1025) por la red interna de Docker.
+  mailpit:
+    image: axllent/mailpit:v1.21.8
+    ports:
+      - "8025:8025" # interfaz web
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
   # Observabilidad
   # ---------------------------------------------------------------
   jaeger:
@@ -331,3 +420,4 @@ volumes:
   mongo-data:
   minio-data:
   solr-data:
+  rabbitmq-data:
