@@ -1,6 +1,6 @@
 # ADR-007: Caché
 
-- **Estado:** Propuesta (se valida con la medición antes y después al implementar forum-service)
+- **Estado:** Aceptada (implementada y medida el 2026-10-30, con los cambios de la sección *Actualización*)
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D7
 - **Reemplaza a:** —
@@ -176,3 +176,49 @@ Se comparan el throughput, la latencia p50 y p95, los errores y las lecturas sob
 - Confirmar con esa medición que 10 min para el detalle y 60 s para el listado son buenos valores, y que invalidar el listado al calificar no baja demasiado el porcentaje de aciertos.
 - Demostrar la caída de Memcached: el foro responde sin errores, con más latencia, y el porcentaje de aciertos cae a cero en el tablero.
 - Verificar que un resumen eliminado deja de verse en el listado y en el detalle en cuanto se elimina.
+
+## Actualización (2026-10-30): implementación y medición
+
+La caché quedó implementada en forum-service: la caché de clase copiada en `internal/cache` (Memcached, local y nula, elegida con `CACHE_PROVIDER`) y el envoltorio *cache-aside* en `internal/cached`. Se mantiene todo lo decidido (qué se guarda, claves con versión y generación, TTL, timeout de 100 ms, comportamiento ante fallas), con estos cambios:
+
+### 1. Calificar borra sólo el detalle
+
+**Antes:** calificar borraba el detalle y cambiaba la generación del listado (punto 4).
+
+**Ahora:** calificar borra sólo el detalle. El listado vence solo, en 60 s como máximo.
+
+**Por qué:** la primera medición, con calificaciones intercaladas, dio **28 % a 33 % de aciertos en el listado**: cada calificación cambiaba la generación y las páginas casi no se reusaban. Era el riesgo que este ADR ya preveía (punto 4). Además, invalidar el listado casi no cambiaba lo que se ve: el **orden** por calificación sale de Solr, que recibe las calificaciones recién en la reconciliación, hasta 5 min después ([ADR-006](ADR-006-busqueda.md), actualización, punto 3). Lo único que se demora es el promedio que muestra la tarjeta del listado, hasta 60 s; el detalle lo muestra enseguida.
+
+### 2. El indexador vuelve a invalidar el listado
+
+El listado sale de Solr, que se pone al día unos segundos después de MongoDB. Si alguien pedía el listado justo después de una aprobación, la página que se guardaba todavía no tenía el resumen nuevo, y quedaba así los 60 s del TTL. Por eso, además de la invalidación al aprobar, el indexador cambia la generación cuando una sincronización agregó o sacó resúmenes, 5 s después (el `commitWithin` de Solr). Medido: un aprobado aparece en el listado cacheado en **7 a 10 s**.
+
+### 3. Detalles de la implementación
+
+- **Lo que se guarda** es el resumen ya leído de MongoDB (en JSON), **sin el outbox ni el mail del autor**, y no el JSON de la respuesta HTTP: el envoltorio está en la capa del repositorio (ADR-002), donde la respuesta todavía no existe.
+- **Un solo timeout por pedido:** si Memcached no respondió al leer, no se intenta guardar. Así cada pedido pierde como mucho 100 ms (con la caché caída, el detalle tarda unos 130 ms en vez de 240 ms).
+- **Las métricas** de la sección 6 salen como `forum_cache_requests_total{operation, result}` (`hit`, `miss` y `error`, que incluye los timeouts) y `forum_cache_invalidations_total{write, result}`, registradas en el registro de Prometheus para el tablero del [ADR-011](ADR-011-observabilidad.md). Además, cada minuto queda en los logs un resumen con los aciertos, fallos, errores y el porcentaje de aciertos de cada operación.
+
+### Medición
+
+Detalle completo en [`tests/load/RESULTADOS.md`](../../tests/load/RESULTADOS.md). La misma carga de lectura con 50 usuarios virtuales, sobre el sistema completo en una notebook:
+
+| Métrica | Sin caché | Con Memcached |
+|---|---|---|
+| Pedidos por segundo | 171,5 | **604,6** (× 3,5) |
+| Listado: p50 / p95 | 256 ms / 762 ms | **50 ms / 236 ms** |
+| Detalle: p50 / p95 | 62 ms / 357 ms | **26 ms / 128 ms** |
+| Aciertos (listado / detalle) | — | **91,6 % / 90,2 %** |
+| Lecturas de MongoDB por pedido | 10,1 | **0,9** |
+| Errores | 0 % | 0 % |
+
+Se cumple lo esperado (punto 6): aciertos por encima del 80 %, p95 menor y muchas menos lecturas de MongoDB. Los TTL de 10 min y 60 s quedan como estaban.
+
+### Validación
+
+| Prueba | Resultado |
+|---|---|
+| Resumen eliminado con el detalle y el listado en la caché | Deja de verse enseguida (`404` en el detalle, fuera del listado) |
+| `docker compose stop memcached` | El foro responde sin errores, con más latencia; en los logs aparecen los errores de la caché |
+| Memcached vuelve | La caché se vuelve a llenar sola, sin reiniciar forum-service |
+| Tests | Unitarios del envoltorio (aciertos, sólo aprobados, invalidación, eliminado que no se sigue viendo, caché caída y colgada, reintento al eliminar) y de integración contra Memcached real |
