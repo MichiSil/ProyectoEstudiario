@@ -104,12 +104,12 @@ export function AvailabilitySection() {
         del máximo diario.
       </p>
 
-      <div className="mt-4 flex flex-col gap-2">
+      <div className="mt-4 flex flex-col gap-3 sm:gap-2">
         {orderedIndexes.map((i) => {
           const slot = draft.weeklySlots[i]
           return (
             <div key={i}>
-              <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7.5rem_7.5rem_auto]">
                 <Select value={slot.weekday} onChange={(e) => updateSlot(i, { weekday: Number(e.target.value) })} aria-label="Día">
                   {WEEKDAY_ORDER.map((d) => (
                     <option key={d} value={d}>
@@ -117,27 +117,27 @@ export function AvailabilitySection() {
                     </option>
                   ))}
                 </Select>
-                <Input
-                  type="time"
-                  value={slot.startTime}
-                  onChange={(e) => updateSlot(i, { startTime: e.target.value })}
-                  aria-label="Desde"
-                  className="w-[7.5rem]"
-                />
-                <Input
-                  type="time"
-                  value={slot.endTime}
-                  onChange={(e) => updateSlot(i, { endTime: e.target.value })}
-                  aria-label="Hasta"
-                  className="w-[7.5rem]"
-                />
                 <button
                   onClick={() => update({ weeklySlots: draft.weeklySlots.filter((_, j) => j !== i) })}
                   aria-label="Quitar franja"
-                  className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-danger/10 hover:text-danger"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-danger/10 hover:text-danger sm:order-last"
                 >
                   <Trash2 size={16} />
                 </button>
+                <div className="col-span-2 grid grid-cols-2 gap-2 sm:contents">
+                  <Input
+                    type="time"
+                    value={slot.startTime}
+                    onChange={(e) => updateSlot(i, { startTime: e.target.value })}
+                    aria-label="Desde"
+                  />
+                  <Input
+                    type="time"
+                    value={slot.endTime}
+                    onChange={(e) => updateSlot(i, { endTime: e.target.value })}
+                    aria-label="Hasta"
+                  />
+                </div>
               </div>
               {problems.has(i) && <p className="mt-1 text-xs text-danger">{problems.get(i)}</p>}
             </div>
@@ -156,8 +156,8 @@ export function AvailabilitySection() {
         Agregar franja
       </Button>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div>
+      <div className="mt-4 grid grid-cols-2 items-end gap-3">
+        <div className="min-w-0">
           <Label>Máximo por día (min)</Label>
           <Input
             type="number"
@@ -167,8 +167,8 @@ export function AvailabilitySection() {
             onChange={(e) => update({ maxDailyMinutes: Number(e.target.value) })}
           />
         </div>
-        <div>
-          <Label>Duración de cada sesión (min)</Label>
+        <div className="min-w-0">
+          <Label>Cada sesión (min)</Label>
           <Input
             type="number"
             min={15}
