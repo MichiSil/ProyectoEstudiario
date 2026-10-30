@@ -134,3 +134,31 @@ export interface FieldError {
   field: string
   message: string
 }
+
+// Formas de la API de forum-service (services/forum-service/internal/controller/common.go).
+
+export type SummaryStatus = 'pendiente' | 'aprobado' | 'rechazado' | 'eliminado'
+
+export interface Summary {
+  id: string
+  title: string
+  description: string
+  /** La materia, como texto libre (RN-25) */
+  category: string
+  tags: string[]
+  status: SummaryStatus
+  rejectionReason: string | null
+  source: 'estudiario' | 'externo'
+  author: { name: string; externalId?: string }
+  rating: { average: number | null; count: number }
+  file: { contentType: string; sizeBytes: number; downloadPath: string }
+  createdAt: string
+  publishedAt: string | null
+}
+
+export interface ForumPage {
+  items: Summary[]
+  page: number
+  size: number
+  total: number
+}

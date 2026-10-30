@@ -52,6 +52,13 @@ const CODE_MESSAGES: Record<string, string> = {
   PLAN_NOT_PROPOSED: 'Esta propuesta ya no se puede confirmar.',
   PLAN_ALREADY_CONFIRMED: 'Este examen ya tiene un plan confirmado.',
   EXAM_CANCELLED: 'Este examen está cancelado: no se puede editar ni planificar.',
+  FORBIDDEN: 'Esta sección es sólo para administradores.',
+  ALREADY_MODERATED: 'Otro administrador ya moderó esta publicación.',
+  NOT_APPROVED: 'Sólo se pueden calificar resúmenes publicados.',
+  OWN_SUMMARY: 'No podés calificar tu propio resumen.',
+  FILE_TOO_LARGE: 'El archivo pesa más de 10 MB.',
+  UNSUPPORTED_FILE_TYPE: 'El archivo tiene que ser un PDF.',
+  SEARCH_UNAVAILABLE: 'La búsqueda no está disponible en este momento.',
   REQUEST_IN_PROGRESS: 'La confirmación ya se está procesando. Esperá unos segundos.',
   IDEMPOTENCY_KEY_REUSED: 'La confirmación se mezcló con otro plan. Volvé a pedir la propuesta.',
   SERVICE_UNAVAILABLE: 'El servicio no está disponible en este momento. Probá de nuevo en unos segundos.',
@@ -78,22 +85,7 @@ export async function request<T>(
   path: string,
   { method = 'GET', body, headers, anonymous = false }: RequestOptions = {},
 ): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(`/api${path}`, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...(anonymous ? {} : authHeaders()),
-        ...headers,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-  } catch {
-    throw new ApiError(0, 'NETWORK', 'No hay conexión con el servidor. Revisá que el sistema esté levantado.', [], null)
-  }
-
+  const res = await send(path, { method, body, headers, anonymous })
   const correlationId = res.headers.get('X-Correlation-Id')
   if (res.status === 204) return undefined as T
 
@@ -126,6 +118,48 @@ export async function request<T>(
   return data as T
 }
 
+async function send(path: string, { method = 'GET', body, headers, anonymous = false }: RequestOptions): Promise<Response> {
+  const isForm = body instanceof FormData
+  try {
+    return await fetch(`/api${path}`, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(body !== undefined && !isForm ? { 'Content-Type': 'application/json' } : {}),
+        ...(anonymous ? {} : authHeaders()),
+        ...headers,
+      },
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError(0, 'NETWORK', 'No hay conexión con el servidor. Revisá que el sistema esté levantado.', [], null)
+  }
+}
+
+/**
+ * Descarga un archivo protegido (por ejemplo el PDF de un resumen). Un link
+ * común no sirve porque no manda el token: se baja con fetch y se ofrece al
+ * navegador como archivo.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const res = await send(path, { headers: { Accept: '*/*' } })
+  if (!res.ok) {
+    // Reusa el manejo de errores de request (mensajes, 401, etc.).
+    await request(path)
+    return
+  }
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const name = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition)?.[1]
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name ? decodeURIComponent(name) : fallbackName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
@@ -140,6 +174,10 @@ function safeJson(text: string): unknown {
 
 /** Qué puede hacer el estudiante ante cada código, para que ningún error quede sin explicación. */
 const CODE_HINTS: Record<string, string> = {
+  ALREADY_MODERATED: 'La lista se actualizó con el estado nuevo.',
+  FILE_TOO_LARGE: 'Probá comprimir el PDF o dividirlo en partes.',
+  SEARCH_UNAVAILABLE: 'Probá de nuevo en unos segundos.',
+  FORBIDDEN: 'Si sos administradora o administrador, cerrá sesión y volvé a entrar.',
   NETWORK: 'Puede que el backend no esté levantado o que no tengas conexión. Probá de nuevo en unos segundos.',
   NOT_FOUND: 'Puede que ese dato se haya borrado o que lo hayas cargado con otra cuenta. Recargá la página.',
   SERVICE_UNAVAILABLE: 'La base de datos no respondió a tiempo. No se guardó nada: podés reintentar sin miedo.',
