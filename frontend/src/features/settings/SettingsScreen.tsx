@@ -31,7 +31,12 @@ function ProfileSection() {
           <UserRound size={24} />
         </span>
         <div className="min-w-0 text-sm">
-          <p className="truncate font-medium text-ink">{user?.name}</p>
+          <p className="flex items-center gap-2 truncate font-medium text-ink">
+            {user?.name}
+            {user?.role === 'admin' && (
+              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent-ink">Admin</span>
+            )}
+          </p>
           <p className="truncate text-muted">{user?.email}</p>
         </div>
       </div>

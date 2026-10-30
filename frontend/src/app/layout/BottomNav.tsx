@@ -9,7 +9,7 @@ export function BottomNav() {
       style={{ height: 'var(--bottom-nav-total-h)' }}
     >
       <ul className="flex items-stretch justify-between px-1" style={{ height: 'var(--bottom-nav-h)' }}>
-        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+        {NAV_ITEMS.filter((item) => !item.hideOnMobileBar).map(({ to, label, icon: Icon }) => (
           <li key={to} className="flex-1">
             <NavLink
               to={to}

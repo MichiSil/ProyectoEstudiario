@@ -6,14 +6,18 @@ export function usePomodoro(studyMinutes: number, breakMinutes: number) {
   const [phase, setPhase] = useState<PomodoroPhase>('estudio')
   const [secondsLeft, setSecondsLeft] = useState(studyMinutes * 60)
   const [running, setRunning] = useState(false)
+  // started: se apretó Empezar y no se reinició. Pausado = started && !running:
+  // el tiempo restante se conserva hasta reanudar o reiniciar.
+  const [started, setStarted] = useState(false)
   const [completedCycles, setCompletedCycles] = useState(0)
   const intervalRef = useRef<number | null>(null)
 
-  // si cambian los minutos configurados y no está corriendo, reflejarlo de una
+  // Si cambian los minutos antes de empezar, reflejarlo de una. Ya empezado (o
+  // pausado), la duración nueva se aplica recién en la próxima fase.
   useEffect(() => {
-    if (running) return
+    if (started) return
     setSecondsLeft((phase === 'estudio' ? studyMinutes : breakMinutes) * 60)
-  }, [studyMinutes, breakMinutes, phase, running])
+  }, [studyMinutes, breakMinutes, phase, started])
 
   useEffect(() => {
     if (!running) {
@@ -50,14 +54,18 @@ export function usePomodoro(studyMinutes: number, breakMinutes: number) {
     return () => window.clearTimeout(timeout)
   }, [secondsLeft, running, phase, studyMinutes, breakMinutes])
 
-  const start = useCallback(() => setRunning(true), [])
+  const start = useCallback(() => {
+    setStarted(true)
+    setRunning(true)
+  }, [])
   const pause = useCallback(() => setRunning(false), [])
   const reset = useCallback(() => {
     setRunning(false)
+    setStarted(false)
     setPhase('estudio')
     setSecondsLeft(studyMinutes * 60)
     setCompletedCycles(0)
   }, [studyMinutes])
 
-  return { phase, secondsLeft, running, completedCycles, start, pause, reset }
+  return { phase, secondsLeft, running, paused: started && !running, completedCycles, start, pause, reset }
 }
