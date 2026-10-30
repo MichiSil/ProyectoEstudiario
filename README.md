@@ -389,7 +389,7 @@ npm install
 npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
 ```
 
-Mientras users-service sea un esqueleto, el ingreso pide sólo nombre y mail: el mail viaja como `X-User-Id`, que es la identidad que hoy acepta planner-service. planner-service todavía no expone `GET /exams` ni `GET /availability`, así que el frontend recuerda en el navegador los exámenes y la disponibilidad que el servidor le devolvió al guardarlos.
+Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. planner-service todavía no expone `GET /exams` ni `GET /availability`, así que el frontend recuerda en el navegador los exámenes y la disponibilidad que el servidor le devolvió al guardarlos.
 
 ### Estructura del repositorio
 
