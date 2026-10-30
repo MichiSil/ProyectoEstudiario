@@ -117,9 +117,10 @@ export async function request<T>(
     const message =
       code === 'VALIDATION_ERROR' && fieldErrors.length > 0
         ? fieldErrors.map((e) => capitalize(e.message)).join('. ') + '.'
-        : (CODE_MESSAGES[code] ??
-          problem.detail ??
-          (res.status >= 500 ? 'El servidor no está respondiendo.' : (problem.title ?? `Error ${res.status}`)))
+        : // Nunca se muestra el detalle técnico del servidor: si el código no tiene
+          // mensaje propio, se usa uno general en castellano.
+          (CODE_MESSAGES[code] ??
+          (res.status >= 500 ? 'El servidor no está respondiendo.' : 'No pudimos completar la operación.'))
     throw new ApiError(res.status, code, message, violations, problem.correlationId ?? correlationId)
   }
   return data as T
@@ -146,7 +147,7 @@ const CODE_HINTS: Record<string, string> = {
   UPSTREAM_TIMEOUT: 'El servicio tardó demasiado. Probá de nuevo en unos segundos.',
   TIMEOUT: 'El servicio tardó demasiado. Probá de nuevo en unos segundos.',
   INTERNAL_ERROR:
-    'El servidor falló sin decir por qué. Probá de nuevo; si se repite, pasale el correlationId a quien mantiene el backend para buscarlo en los logs.',
+    'Algo falló de nuestro lado. Probá de nuevo en unos segundos; si se repite, avisanos.',
   MALFORMED_REQUEST: 'Revisá los datos del formulario y volvé a intentar.',
 }
 
@@ -155,7 +156,7 @@ export function errorHint(err: ApiError): string | undefined {
   if (err.code.startsWith('HTTP_')) {
     return err.status >= 500
       ? 'No pudimos comunicarnos con el servidor. Revisá que el backend esté levantado y probá de nuevo.'
-      : `El servidor rechazó el pedido (código ${err.status}).`
+      : 'Revisá los datos y probá de nuevo.'
   }
   return undefined
 }

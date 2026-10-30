@@ -1,9 +1,12 @@
+import { useEffect } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { ApiError, errorHint, errorMessage } from '@/api/client'
 
 /**
- * Muestra un error de la API: el mensaje, cada regla incumplida con su
- * identificador del SPEC (RN-xx) y el correlation id para buscarlo en los logs.
+ * Muestra un error de la API en lenguaje del estudiante: qué pasó, qué puede
+ * hacer y, si corresponde, cada regla incumplida explicada. Los datos técnicos
+ * (código, regla del SPEC y correlationId para buscar en los logs) no se
+ * muestran en pantalla: quedan en la consola del navegador para el equipo.
  */
 export function ApiErrorNotice({
   error,
@@ -15,6 +18,15 @@ export function ApiErrorNotice({
   hint?: string
   sessionLabel?: (index: number) => string
 }) {
+  useEffect(() => {
+    if (error instanceof ApiError) {
+      console.error('[api]', error.status, error.code, {
+        correlationId: error.correlationId,
+        reglas: error.violations.map((v) => v.rule),
+      })
+    }
+  }, [error])
+
   if (!error) return null
   const apiError = error instanceof ApiError ? error : null
   const explanation = hint ?? (apiError ? errorHint(apiError) : undefined)
@@ -30,15 +42,11 @@ export function ApiErrorNotice({
         <ul className="mt-2 flex flex-col gap-1 pl-6">
           {apiError.violations.map((v, i) => (
             <li key={i} className="text-[13px] text-muted">
-              <span className="mr-1.5 rounded-md bg-danger/15 px-1.5 py-0.5 text-[11px] font-bold text-danger">{v.rule}</span>
               {v.sessionIndex >= 0 && sessionLabel && <span className="font-medium text-ink">{sessionLabel(v.sessionIndex)}: </span>}
-              {v.message}
+              {v.message.charAt(0).toUpperCase() + v.message.slice(1)}
             </li>
           ))}
         </ul>
-      )}
-      {apiError?.correlationId && (
-        <p className="mt-2 pl-6 font-mono text-[11px] text-subtle">correlationId {apiError.correlationId}</p>
       )}
     </div>
   )
