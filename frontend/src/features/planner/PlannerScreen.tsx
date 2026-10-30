@@ -138,15 +138,21 @@ export function PlannerScreen() {
 
       {!!requestError && (
         <div className="mt-5">
-          <ApiErrorNotice error={requestError} />
+          {/* planner-service responde 404 cuando falta la disponibilidad (o el examen): se explica qué hacer. */}
+          <ApiErrorNotice
+            error={
+              missingData
+                ? new ApiError(404, 'NOT_FOUND', 'Todavía no guardaste tu disponibilidad, así que el agente no puede armar el plan.', [], requestError.correlationId)
+                : requestError
+            }
+          />
           {missingData && (
-            <p className="mt-2 text-xs text-muted">
-              Revisá que hayas guardado tu{' '}
-              <Link to="/configuracion" className="font-medium text-accent">
-                disponibilidad
-              </Link>{' '}
-              antes de pedir el plan.
-            </p>
+            <Link to="/configuracion" className="mt-3 inline-block">
+              <Button size="sm">
+                <Settings size={14} />
+                Cargar mi disponibilidad
+              </Button>
+            </Link>
           )}
         </div>
       )}
