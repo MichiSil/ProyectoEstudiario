@@ -140,12 +140,12 @@ docker compose down         # agregar -v para borrar también los datos locales
 | Componente | URL local | Para qué |
 |---|---|---|
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
-| planner-service | http://localhost:8082 | Plan de estudio (publicado también para la capacidad de otros grupos, ADR-008) |
+| planner-service | http://localhost:8082 | Plan de estudio |
 | users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
 | forum-service | http://localhost:8083 | Esqueleto: sólo `GET /health` |
 | notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
-| **Mock de la capacidad (Prism)** | http://localhost:4010 | Contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
+| **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
@@ -159,7 +159,7 @@ El puerto de PostgreSQL se expone sólo para inspeccionar la base durante el des
 Para levantar sólo el mock de la capacidad publicada:
 
 ```bash
-docker compose up planner-mock
+docker compose up contract-mock
 ```
 
 > Las credenciales del proveedor de IA se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
@@ -267,7 +267,14 @@ docker compose logs planner-service | grep prueba-ia
 
 La capacidad que publicamos para otros grupos va a estar desplegada en la nube con una URL pública. La vamos a publicar acá cuando esté disponible.
 
-> **Estado en la Entrega 2:** por indicación de la cátedra, la implementación de la capacidad compartida (generar un plan de estudio para otro grupo) se pospone para una entrega posterior. Lo que ya está disponible es el [contrato versionado](docs/contracts/) y su **mock** (Prism, puerto `4010`), para que el grupo consumidor pueda integrarse desde ahora. La lógica que va a respaldar la capacidad (el motor de reglas y el agente de IA de planner-service) ya funciona para los estudiantes.
+**Integración con otros grupos** (asignada por la cátedra):
+
+| Dirección | Grupo | Capacidad | Dónde |
+|---|---|---|---|
+| Exportamos | Grupo 4, Agencia de viajes | **Registro y consulta de documentos del foro**, que usan para guías de viaje compartidas | forum-service · [contrato](docs/contracts/) · [ADR-014](docs/adr/ADR-014-contrato-documentos.md) |
+| Consumimos | Grupo 1, Gimnasio | **Programa de beneficios**: premia al estudiante cuando se aprueba un resumen suyo | forum-service · [ADR-009](docs/adr/ADR-009-consumo-del-proveedor.md) |
+
+El contrato que exportamos y su **mock** (Prism, puerto `4010`) ya están disponibles para que el Grupo 4 se integre. La capacidad que habíamos publicado antes (generar un plan de estudio) quedó retirada sin llegar a implementarse ([ADR-008](docs/adr/ADR-008-contrato-propio.md), reemplazado por el ADR-014).
 
 ## Documentación
 
