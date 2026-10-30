@@ -1,6 +1,10 @@
-// Command notification-service consume los eventos de moderación del foro y le envía el mail al autor exactamente una vez.
+// Command notification-service consume los eventos de moderación del foro
+// (summary.approved y summary.rejected) y le manda el mail al autor
+// exactamente una vez (RF-23, RF-24, RN-32 a RN-34, ADR-005).
 //
-// Por ahora sólo expone GET /health. La funcionalidad se agrega a partir de la Entrega 2.
+//	RabbitMQ (notifications.summary-moderation) → consumer → MongoDB (sent_notifications) + SMTP
+//
+// Expone GET /health.
 package main
 
 import (
@@ -13,6 +17,14 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/MichiSil/ProyectoEstudiario/services/notification-service/internal/broker"
+	"github.com/MichiSil/ProyectoEstudiario/services/notification-service/internal/consumer"
+	"github.com/MichiSil/ProyectoEstudiario/services/notification-service/internal/mail"
+	"github.com/MichiSil/ProyectoEstudiario/services/notification-service/internal/repository"
 )
 
 const (
@@ -20,14 +32,61 @@ const (
 	defaultPort = "8084"
 )
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", serviceName)
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
+func main() {
+	// Logs JSON con service e instance; cada mensaje agrega eventId y correlationId (ADR-011).
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).
+		With("service", serviceName, "instance", env("INSTANCE", env("HOSTNAME", "local")))
+	slog.SetDefault(logger)
+
+	if err := run(logger); err != nil {
+		logger.Error("el servicio terminó con error", "error", err.Error())
+		os.Exit(1)
+	}
+}
+
+func run(logger *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	mongoURI := os.Getenv("MONGO_URI")
+	if mongoURI == "" {
+		return errors.New("falta la variable MONGO_URI")
+	}
+	amqpURL := os.Getenv("RABBITMQ_URL")
+	if amqpURL == "" {
+		return errors.New("falta la variable RABBITMQ_URL")
 	}
 
+	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect(context.Background()) //nolint:errcheck
+	store := repository.New(client.Database("notifications"))
+	if err := retry(ctx, logger, "MongoDB", store.Ping); err != nil {
+		return err
+	}
+	if err := store.EnsureIndexes(ctx); err != nil {
+		return err
+	}
+
+	mailer := &mail.SMTP{
+		Addr: env("SMTP_ADDR", "localhost:1025"),
+		From: env("MAIL_FROM", "Estudiario <no-reply@estudiario.local>"),
+	}
+	handler := &consumer.Handler{Store: store, Mailer: mailer, Logger: logger}
+	// Si RabbitMQ no está, el consumidor espera y reintenta: el servicio arranca igual.
+	go (&broker.Consumer{URL: amqpURL, Handler: handler, Logger: logger}).Run(ctx)
+	logger.Info("notification-service listo", "smtp", mailer.Addr, "queue", broker.Queue)
+
+	port := env("PORT", defaultPort)
 	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
 	srv := &http.Server{
 		Addr:              ":" + port,
@@ -37,28 +96,39 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
-		logger.Info("servidor iniciado", "port", port)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("el servidor se detuvo por un error", "error", err)
-			os.Exit(1)
-		}
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdown)
 	}()
-
-	<-ctx.Done()
-	logger.Info("apagando el servidor")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("no se pudo apagar el servidor de forma ordenada", "error", err)
-		os.Exit(1)
+	logger.Info("servidor iniciado", "port", port)
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
 	}
-	logger.Info("servidor detenido")
+	return nil
+}
+
+// retry espera a que una dependencia responda, con espera exponencial, como
+// los demás servicios al arrancar.
+func retry(ctx context.Context, logger *slog.Logger, name string, ping func(context.Context) error) error {
+	wait := time.Second
+	for attempt := 1; ; attempt++ {
+		err := ping(ctx)
+		if err == nil {
+			return nil
+		}
+		if attempt == 6 {
+			return err
+		}
+		logger.Warn(name+" no disponible, reintentando", "attempt", attempt, "waitMs", wait.Milliseconds(), "error", err.Error())
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		wait *= 2
+	}
 }
 
 func newRouter() http.Handler {

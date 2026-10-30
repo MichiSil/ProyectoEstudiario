@@ -4,9 +4,6 @@
 #   docker compose up --build
 #
 # Puertos y URLs: ver "Cómo levantar el sistema" en el README.
-#
-# En la Entrega 2 sólo funciona planner-service (pedir y confirmar el plan) con
-# PostgreSQL. Los demás servicios son esqueletos que responden GET /health.
 
 name: estudiario
 
@@ -167,11 +164,26 @@ services:
       - "8084:8084"
     environment:
       PORT: "8084"
+      # Base `notifications` en MongoDB con su propio usuario (ADR-003): un registro por eventId (RN-32).
+      MONGO_URI: mongodb://${NOTIFICATION_DB_USER}:${NOTIFICATION_DB_PASSWORD}@mongo:27017/notifications?authSource=notifications
+      # Consume notifications.summary-moderation y publica en notifications.retry y notifications.dlq (ADR-005).
+      RABBITMQ_URL: amqp://${NOTIFICATION_RABBITMQ_USER}:${NOTIFICATION_RABBITMQ_PASSWORD}@rabbitmq:5672/
+      # Mailpit en local: los mails se ven en http://localhost:8025.
+      SMTP_ADDR: mailpit:1025
+      MAIL_FROM: ${MAIL_FROM:-Estudiario <no-reply@estudiario.local>}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      rabbitmq-init:
+        condition: service_completed_successfully
+      # Sólo "started": si Mailpit se cae, los mails se reintentan (RN-33, CA-26).
+      mailpit:
+        condition: service_started
 
   # ---------------------------------------------------------------
   # Mock de la capacidad publicada (docs/contracts/)
