@@ -121,6 +121,8 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
       # API keys de la capacidad /v1 (consumidor:sha256 de la clave), nunca las claves (ADR-014).
       FORUM_API_KEYS: ${FORUM_API_KEYS:-}
+      # Core de Solr para la búsqueda de aprobados (ADR-006). El indexador corre dentro de forum-service.
+      SOLR_URL: http://solr:8983/solr/summaries
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
@@ -131,6 +133,9 @@ services:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
+      # Sólo "started": sin Solr el foro funciona y la búsqueda responde 503 hasta que vuelva (ADR-010).
+      solr:
+        condition: service_started
       jaeger:
         condition: service_started
 
@@ -273,6 +278,27 @@ services:
     entrypoint: ["sh", "/scripts/init-storage.sh"]
     restart: "no"
 
+  # Solr con el core `summaries`, creado al arrancar desde el configset
+  # _default, como en la CLASE_5. El esquema (campos y análisis en español) lo
+  # aplica forum-service con la Schema API desde
+  # services/forum-service/internal/search/schema.json (ADR-006).
+  solr:
+    image: solr:9.7.0
+    ports:
+      - "8983:8983" # panel de administración: http://localhost:8983/solr
+    command: ["solr-precreate", "summaries"]
+    environment:
+      SOLR_HEAP: 512m
+    volumes:
+      - solr-data:/var/solr
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8983/solr/summaries/admin/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
   # ---------------------------------------------------------------
   # Observabilidad
   # ---------------------------------------------------------------
@@ -290,3 +316,4 @@ volumes:
   postgres-data:
   mongo-data:
   minio-data:
+  solr-data:
