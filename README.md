@@ -111,7 +111,7 @@ Además de lo obligatorio, el grupo encara dos desafíos adicionales. El alcance
 
 Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.
 
-Funcionan **users-service** (registro, inicio de sesión y emisión del JWT) y **planner-service** (pedir y confirmar el plan de estudio), cada uno con su base en PostgreSQL, y **forum-service** (foro de resúmenes y capacidad de documentos para el Grupo 4) con MongoDB y MinIO. notification-service todavía es un esqueleto que sólo responde `GET /health`.
+Funcionan **users-service** (registro, inicio de sesión y emisión del JWT) y **planner-service** (pedir y confirmar el plan de estudio), cada uno con su base en PostgreSQL, y **forum-service** (foro de resúmenes y capacidad de documentos para el Grupo 4) con MongoDB y MinIO. El **frontend web** usa users-service y planner-service a través del api-gateway. notification-service todavía es un esqueleto que sólo responde `GET /health`.
 
 ### Requisitos
 
@@ -139,6 +139,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 
 | Componente | URL local | Para qué |
 |---|---|---|
+| **frontend** | http://localhost:5173 | Interfaz web de Estudiario. Reenvía `/api` al api-gateway |
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
 | planner-service | http://localhost:8082 | Plan de estudio |
 | users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
@@ -378,11 +379,24 @@ curl "${H[@]}" -X POST $G/exams/<id del examen>/proposals
 docker compose logs planner-service | grep prueba-ia
 ```
 
+### Frontend
+
+El frontend (`frontend/`, React + TypeScript con Vite y Tailwind) sólo habla con el api-gateway, en `/api`. Con `docker compose` lo sirve nginx, que reenvía `/api` al gateway. Para desarrollarlo con recarga en caliente, con el backend levantado:
+
+```bash
+cd frontend
+npm install
+npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
+```
+
+Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. planner-service todavía no expone `GET /exams` ni `GET /availability`, así que el frontend recuerda en el navegador los exámenes y la disponibilidad que el servidor le devolvió al guardarlos.
+
 ### Estructura del repositorio
 
 | Carpeta | Contenido |
 |---|---|
 | `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), con el ejecutable en `cmd/<nombre>/` y su `Dockerfile` |
+| `frontend/` | Interfaz web (React + TypeScript, Vite) con su `Dockerfile` y la configuración de nginx |
 | `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
 
 ### Entorno desplegado
