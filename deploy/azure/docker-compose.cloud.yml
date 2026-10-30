@@ -1,0 +1,52 @@
+# Ajustes para el despliegue en la nube. Se usa junto al docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f deploy/azure/docker-compose.cloud.yml up -d --build
+#
+# - Caddy es lo único publicado (80 y 443, con HTTPS automático).
+# - Ningún otro servicio publica puertos: bases de datos, paneles de MinIO,
+#   Solr y Jaeger quedan sólo en la red interna de docker. Para verlos, un
+#   túnel SSH (ver deploy/azure/README.md).
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?falta DOMAIN en el .env (el nombre DNS de la VM)}
+    volumes:
+      - ./deploy/azure/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - forum-service
+    restart: unless-stopped
+
+  frontend:
+    ports: !reset []
+  api-gateway:
+    ports: !reset []
+  planner-service:
+    ports: !reset []
+  users-service:
+    ports: !reset []
+  forum-service:
+    ports: !reset []
+  notification-service:
+    ports: !reset []
+  contract-mock:
+    ports: !reset []
+  postgres:
+    ports: !reset []
+  minio:
+    ports: !reset []
+  solr:
+    ports: !reset []
+  jaeger:
+    ports: !reset []
+
+volumes:
+  caddy-data:
+  caddy-config:
