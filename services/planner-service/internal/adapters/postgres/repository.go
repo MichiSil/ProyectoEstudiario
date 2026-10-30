@@ -97,20 +97,203 @@ func (r *Repository) CreateExam(ctx context.Context, e domain.Exam) error {
 	if topics == nil {
 		topics = []string{}
 	}
+	materialIDs := e.MaterialIDs
+	if materialIDs == nil {
+		materialIDs = []string{}
+	}
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO exams (id, student_id, subject_id, type, starts_at, topics, status) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		e.ID, e.StudentID, e.SubjectID, string(e.Type), e.StartsAt, topics, string(e.Status))
+		`INSERT INTO exams (id, student_id, subject_id, type, starts_at, topics, status, modality, material_ids)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		e.ID, e.StudentID, e.SubjectID, string(e.Type), e.StartsAt, topics, string(e.Status), string(e.Modality), materialIDs)
 	return err
 }
 
 func (r *Repository) GetExam(ctx context.Context, studentID, id string) (domain.Exam, error) {
 	var e domain.Exam
-	var typ, status string
+	var typ, status, modality string
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, student_id, subject_id, type, starts_at, topics, status FROM exams WHERE id = $1 AND student_id = $2`,
-		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status)
-	e.Type, e.Status = domain.ExamType(typ), domain.ExamStatus(status)
+		`SELECT id, student_id, subject_id, type, starts_at, topics, status, modality, material_ids FROM exams WHERE id = $1 AND student_id = $2`,
+		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs)
+	e.Type, e.Status, e.Modality = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality)
 	return e, notFound(err)
+}
+
+// planStatusSQL es el estado del plan vigente de un examen (alias e): el
+// confirmado o, si no hay, el desactualizado más reciente (RN-16).
+const planStatusSQL = `COALESCE((SELECT p.status FROM plans p
+				WHERE p.exam_id = e.id AND p.status IN ('confirmado', 'desactualizado')
+				ORDER BY p.status = 'confirmado' DESC, p.created_at DESC LIMIT 1), '')`
+
+// ListExams devuelve los exámenes con el estado de su plan vigente.
+func (r *Repository) ListExams(ctx context.Context, studentID string) ([]domain.Exam, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status, e.modality, e.material_ids, `+planStatusSQL+`
+		FROM exams e WHERE e.student_id = $1 ORDER BY e.starts_at`, studentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.Exam{}
+	for rows.Next() {
+		var e domain.Exam
+		var typ, status, modality, planStatus string
+		if err := rows.Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs, &planStatus); err != nil {
+			return nil, err
+		}
+		e.Type, e.Status, e.Modality, e.PlanStatus = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality), domain.PlanStatus(planStatus)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// lockStudent bloquea la fila del estudiante dentro de la transacción: las
+// operaciones que cambian su calendario (confirmar un plan, editar o cancelar
+// un examen) se procesan de a una (ADR-004).
+func lockStudent(ctx context.Context, tx pgx.Tx, studentID string) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO students (id) VALUES ($1) ON CONFLICT DO NOTHING`, studentID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `SELECT id FROM students WHERE id = $1 FOR UPDATE`, studentID)
+	return err
+}
+
+func getExamForUpdate(ctx context.Context, tx pgx.Tx, studentID, id string) (domain.Exam, error) {
+	var e domain.Exam
+	var typ, status, modality string
+	err := tx.QueryRow(ctx, `
+		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status, e.modality, e.material_ids
+		FROM exams e WHERE e.id = $1 AND e.student_id = $2 FOR UPDATE`,
+		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs)
+	e.Type, e.Status, e.Modality = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality)
+	return e, notFound(err)
+}
+
+// UpdateExam aplica el cambio en una transacción. Si apply indica que el plan
+// queda desactualizado, el plan confirmado pasa a ese estado (RN-16).
+func (r *Repository) UpdateExam(ctx context.Context, studentID, id string, apply func(domain.Exam) (domain.Exam, bool, error)) (domain.Exam, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	if err := lockStudent(ctx, tx, studentID); err != nil {
+		return domain.Exam{}, err
+	}
+	current, err := getExamForUpdate(ctx, tx, studentID, id)
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	next, outdate, err := apply(current)
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	topics := next.Topics
+	if topics == nil {
+		topics = []string{}
+	}
+	materialIDs := next.MaterialIDs
+	if materialIDs == nil {
+		materialIDs = []string{}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exams SET type = $1, starts_at = $2, topics = $3, modality = $4, material_ids = $5 WHERE id = $6`,
+		string(next.Type), next.StartsAt, topics, string(next.Modality), materialIDs, id); err != nil {
+		return domain.Exam{}, err
+	}
+	if outdate {
+		if _, err := tx.Exec(ctx, `UPDATE plans SET status = 'desactualizado' WHERE exam_id = $1 AND status = 'confirmado'`, id); err != nil {
+			return domain.Exam{}, err
+		}
+	}
+	var planStatus string
+	if err := tx.QueryRow(ctx, `SELECT `+planStatusSQL+` FROM exams e WHERE e.id = $1`, id).Scan(&planStatus); err != nil {
+		return domain.Exam{}, err
+	}
+	next.PlanStatus = domain.PlanStatus(planStatus)
+	return next, tx.Commit(ctx)
+}
+
+// CancelExam cancela el examen y sus planes, y borra sus sesiones no
+// completadas para liberar el calendario. Las completadas quedan como
+// historial (RN-17).
+func (r *Repository) CancelExam(ctx context.Context, studentID, id string) (domain.Exam, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	if err := lockStudent(ctx, tx, studentID); err != nil {
+		return domain.Exam{}, err
+	}
+	e, err := getExamForUpdate(ctx, tx, studentID, id)
+	if err != nil || e.Status == domain.ExamCancelled {
+		return e, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exams SET status = 'cancelado' WHERE id = $1`, id); err != nil {
+		return domain.Exam{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE exam_id = $1 AND student_id = $2 AND status <> 'completada'`, id, studentID); err != nil {
+		return domain.Exam{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE plans SET status = 'cancelado' WHERE exam_id = $1 AND status IN ('propuesto', 'confirmado', 'desactualizado')`, id); err != nil {
+		return domain.Exam{}, err
+	}
+	e.Status = domain.ExamCancelled
+	return e, tx.Commit(ctx)
+}
+
+func (r *Repository) CreateMaterial(ctx context.Context, m domain.Material) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO materials (id, student_id, subject_id, kind, title, content, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		m.ID, m.StudentID, m.SubjectID, string(m.Kind), m.Title, m.Content, m.CreatedAt)
+	return err
+}
+
+// ListMaterials devuelve el material de una materia: primero los teóricos y
+// después los prácticos, cada grupo en el orden en que se cargó.
+func (r *Repository) ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, student_id, subject_id, kind, title, content, created_at FROM materials
+		WHERE student_id = $1 AND subject_id = $2 ORDER BY kind = 'practico', created_at`, studentID, subjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.Material{}
+	for rows.Next() {
+		var m domain.Material
+		var kind string
+		if err := rows.Scan(&m.ID, &m.StudentID, &m.SubjectID, &kind, &m.Title, &m.Content, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		m.Kind = domain.MaterialKind(kind)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// DeleteMaterial borra un material propio y lo saca de los exámenes que lo
+// tenían elegido.
+func (r *Repository) DeleteMaterial(ctx context.Context, studentID, id string) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	tag, err := tx.Exec(ctx, `DELETE FROM materials WHERE id = $1 AND student_id = $2`, id, studentID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exams SET material_ids = array_remove(material_ids, $1) WHERE student_id = $2 AND $1 = ANY(material_ids)`,
+		id, studentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 type slotJSON struct {
@@ -166,7 +349,7 @@ const sessionColumns = `id, plan_id, student_id, exam_id, starts_at, ends_at, to
 func scanSession(row pgx.Row) (domain.Session, error) {
 	var s domain.Session
 	var status string
-	err := row.Scan(&s.ID, &s.PlanID, &s.StudentID, &s.ExamID, &s.Start, &s.End, &s.Topic, &s.Objective, &status)
+	err := row.Scan(&s.ID, &s.PlanID, &s.StudentID, &s.ExamID, &s.Start, &s.End, &s.Topic, &s.Objective, &status, &s.Outdated)
 	s.Status = domain.SessionStatus(status)
 	return s, err
 }
@@ -175,7 +358,10 @@ func listSessions(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, studentID string, from time.Time) ([]domain.Session, error) {
 	rows, err := q.Query(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE student_id = $1 AND ends_at > $2 ORDER BY starts_at`, studentID, from)
+		`SELECT s.id, s.plan_id, s.student_id, s.exam_id, s.starts_at, s.ends_at, s.topic, s.objective, s.status,
+			p.status = 'desactualizado'
+		FROM sessions s JOIN plans p ON p.id = s.plan_id
+		WHERE s.student_id = $1 AND s.ends_at > $2 ORDER BY s.starts_at`, studentID, from)
 	if err != nil {
 		return nil, err
 	}
@@ -255,10 +441,7 @@ func (r *Repository) Confirm(ctx context.Context, req app.ConfirmRequest, valida
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
 
-	if _, err = tx.Exec(ctx, `INSERT INTO students (id) VALUES ($1) ON CONFLICT DO NOTHING`, req.StudentID); err != nil {
-		return res, err
-	}
-	if _, err = tx.Exec(ctx, `SELECT id FROM students WHERE id = $1 FOR UPDATE`, req.StudentID); err != nil {
+	if err = lockStudent(ctx, tx, req.StudentID); err != nil {
 		return res, err
 	}
 
@@ -293,6 +476,19 @@ func (r *Repository) Confirm(ctx context.Context, req app.ConfirmRequest, valida
 	}
 	if confirmed {
 		return res, domain.ErrAlreadyConfirmed
+	}
+	var examStatus string
+	if err = tx.QueryRow(ctx, `SELECT status FROM exams WHERE id = $1`, examID).Scan(&examStatus); err != nil {
+		return res, err
+	}
+	if domain.ExamStatus(examStatus) == domain.ExamCancelled {
+		return res, domain.ErrExamCancelled
+	}
+	// RN-16: el plan nuevo reemplaza al desactualizado; sus sesiones no
+	// completadas se liberan antes de validar.
+	if _, err = tx.Exec(ctx, `DELETE FROM sessions WHERE exam_id = $1 AND student_id = $2 AND status <> 'completada'
+		AND plan_id IN (SELECT id FROM plans WHERE exam_id = $1 AND status = 'desactualizado')`, examID, req.StudentID); err != nil {
+		return res, err
 	}
 
 	booked, err := listSessions(ctx, tx, req.StudentID, time.Now().AddDate(0, 0, -1))

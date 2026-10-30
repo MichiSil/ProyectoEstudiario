@@ -1,0 +1,13 @@
+# Ajuste para los tests end-to-end (paso 6 del SPEC 10.2): la IA queda "no
+# disponible" apuntándola a una dirección que no responde, con una clave de
+# mentira. planner-service intenta llamarla, falla y arma la propuesta con el
+# motor de reglas y el aviso AI_FALLBACK (CA-05, ADR-010).
+#
+#   docker compose -f docker-compose.yml -f tests/e2e/docker-compose.e2e.yml up -d --build
+
+services:
+  planner-service:
+    environment:
+      AI_API_KEY: e2e-ia-no-disponible
+      AI_BASE_URL: http://10.255.255.1:81/v1
+      AI_TIMEOUT: 2s

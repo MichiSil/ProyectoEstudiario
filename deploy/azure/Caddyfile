@@ -1,0 +1,18 @@
+# Única puerta de entrada del despliegue en la nube. Caddy obtiene y renueva
+# solo el certificado HTTPS (Let's Encrypt) para el dominio de la VM.
+#
+# - /v1/* es la capacidad de documentos para el Grupo 4 (docs/contracts/documents-v1.yaml):
+#   va directo a forum-service, sin pasar por el api-gateway (ADR-014).
+# - Todo lo demás es el frontend; su nginx reenvía /api al api-gateway.
+
+{$DOMAIN} {
+	encode gzip
+
+	handle /v1/* {
+		reverse_proxy forum-service:8083
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+}

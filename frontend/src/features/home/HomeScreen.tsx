@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { addDays, format, formatISO, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -6,10 +6,10 @@ import { AlertCircle, ArrowRight, CalendarPlus, CheckCircle2, Circle, Clock, Lay
 import { WeekActivityChart } from './WeekActivityChart'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
-import { EXAM_TYPE_LABEL } from '@/api/types'
+import { EXAM_TYPE_LABEL, type Exam } from '@/api/types'
+import { ExamDetailSheet } from '@/features/calendar/ExamDetailSheet'
 import { examTypeColorVar } from '@/lib/domain-ui'
 import { formatDateLong, formatDaysUntil, formatMinutes, formatTimeRange, localDate, minutesBetween } from '@/lib/format'
 
@@ -27,6 +27,7 @@ export function HomeScreen() {
     [sessions, today],
   )
 
+  const [detailExam, setDetailExam] = useState<Exam | null>(null)
   const upcomingExams = useMemo(
     () =>
       exams
@@ -53,12 +54,8 @@ export function HomeScreen() {
   const weeklyCompleted = weekBreakdown.reduce((sum, d) => sum + d.completed, 0)
 
   return (
-    <div className="mx-auto max-w-3xl px-5 py-8 sm:px-8">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-accent">Estudiario</p>
-        <ThemeToggle />
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+    <div className="mx-auto max-w-3xl px-5 pt-2 pb-8 sm:px-8 sm:pt-8">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="text-[30px] leading-tight sm:text-[32px]">Tu semana académica</h1>
         <span className="text-sm capitalize text-muted">{format(new Date(), "EEEE d 'de' MMMM", { locale: es })}</span>
       </div>
@@ -158,10 +155,11 @@ export function HomeScreen() {
               const subject = subjectsById.get(exam.subjectId)
               const date = localDate(exam.startsAt)
               return (
-                <Link
+                <button
                   key={exam.id}
-                  to={subject ? `/materias/${subject.id}` : '/calendario'}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-sm)] hover:border-accent/40"
+                  type="button"
+                  onClick={() => setDetailExam(exam)}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 text-left shadow-[var(--shadow-sm)] hover:border-accent/40"
                 >
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: examTypeColorVar(exam.type) }} />
                   <div className="min-w-0 flex-1">
@@ -172,7 +170,7 @@ export function HomeScreen() {
                     <p className="text-xs text-muted">{formatDateLong(date)}</p>
                   </div>
                   <Badge tone="accent">{formatDaysUntil(date)}</Badge>
-                </Link>
+                </button>
               )
             })}
           </div>
@@ -186,6 +184,8 @@ export function HomeScreen() {
         </p>
         <WeekActivityChart days={weekBreakdown} />
       </section>
+
+      <ExamDetailSheet exam={detailExam} onClose={() => setDetailExam(null)} />
     </div>
   )
 }

@@ -8,14 +8,12 @@ import { useSession } from './SessionProvider'
 /**
  * Datos de planificación del estudiante.
  *
- * - Materias y sesiones se leen siempre de planner-service (GET /subjects y
- *   GET /sessions): el backend es la única fuente de verdad.
- * - planner-service todavía no expone GET /exams ni GET /availability. Para
- *   poder mostrar el calendario, el frontend recuerda las respuestas de
- *   POST /exams y PUT /availability que recibió en este navegador. Es sólo una
- *   caché de lo que devolvió el servidor: nunca se usa para validar ni se
- *   manda de vuelta como dato propio. Cuando existan esos GET, se reemplaza
- *   por la lectura directa.
+ * - Materias, exámenes y sesiones se leen siempre de planner-service
+ *   (GET /subjects, GET /exams y GET /sessions): el backend es la única
+ *   fuente de verdad.
+ * - planner-service todavía no expone GET /availability. El frontend recuerda
+ *   la disponibilidad que guardó con PUT /availability en este navegador. Es
+ *   sólo una caché de lo que aceptó el servidor: nunca se usa para validar.
  */
 
 interface PlannerData {
@@ -30,6 +28,7 @@ interface PlannerData {
   refresh: () => Promise<void>
   refreshSessions: () => Promise<void>
   addSubject: (subject: Subject) => void
+  /** Agrega o reemplaza un examen con lo que devolvió el servidor. */
   rememberExam: (exam: Exam) => void
   rememberAvailability: (availability: Availability) => void
 }
@@ -38,27 +37,30 @@ const PlannerDataContext = createContext<PlannerData | null>(null)
 
 export function PlannerDataProvider({ children }: { children: ReactNode }) {
   const { user } = useSession()
-  const examsKey = `estudiario-exams:${user?.id ?? ''}`
   const availabilityKey = `estudiario-availability:${user?.id ?? ''}`
 
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
-  const [exams, setExams] = useState<Exam[]>(() => readJson(examsKey, []))
+  const [exams, setExams] = useState<Exam[]>([])
   const [availability, setAvailability] = useState<Availability | null>(() => readJson(availabilityKey, null))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    setExams(readJson(examsKey, []))
     setAvailability(readJson(availabilityKey, null))
-  }, [examsKey, availabilityKey])
+  }, [availabilityKey])
 
   const refresh = useCallback(async () => {
     if (!user) return
     setError(null)
     try {
-      const [subjectList, sessionList] = await Promise.all([plannerApi.listSubjects(), plannerApi.listSessions()])
+      const [subjectList, examList, sessionList] = await Promise.all([
+        plannerApi.listSubjects(),
+        plannerApi.listExams(),
+        plannerApi.listSessions(),
+      ])
       setSubjects(subjectList ?? [])
+      setExams(examList ?? [])
       setSessions(sessionList ?? [])
     } catch (err) {
       setError(errorMessage(err))
@@ -84,16 +86,9 @@ export function PlannerDataProvider({ children }: { children: ReactNode }) {
     setSubjects((prev) => [...prev, subject])
   }, [])
 
-  const rememberExam = useCallback(
-    (exam: Exam) => {
-      setExams((prev) => {
-        const next = [...prev.filter((e) => e.id !== exam.id), exam]
-        writeJson(examsKey, next)
-        return next
-      })
-    },
-    [examsKey],
-  )
+  const rememberExam = useCallback((exam: Exam) => {
+    setExams((prev) => [...prev.filter((e) => e.id !== exam.id), exam])
+  }, [])
 
   const rememberAvailability = useCallback(
     (next: Availability) => {

@@ -41,6 +41,34 @@ export interface Exam {
   startsAt: string
   topics: string[]
   status: ExamStatus
+  /** Plan vigente: confirmado, o desactualizado si cambió la fecha (RN-16). Ausente si no tiene plan. */
+  planStatus?: 'confirmado' | 'desactualizado'
+  /** Cómo se evalúa; vacía si no se indicó (el plan no supone teoría ni ejercicios). */
+  modality: ExamModality
+  /** Material de la materia que entra; vacío = todo el material cargado. */
+  materialIds: string[]
+}
+
+export type ExamModality = '' | 'teorico' | 'practico' | 'mixto'
+
+export const MODALITY_LABEL: Record<ExamModality, string> = {
+  '': 'No sé todavía',
+  teorico: 'Teórico',
+  practico: 'Práctico',
+  mixto: 'Teórico y práctico',
+}
+
+export type MaterialKind = 'teorico' | 'practico'
+
+/** Teórico o práctico que el estudiante cargó en una materia. El plan se arma con esto. */
+export interface Material {
+  id: string
+  subjectId: string
+  kind: MaterialKind
+  title: string
+  /** Qué tiene adentro (temas, ejercicios, páginas). Opcional. */
+  content: string
+  createdAt: string
 }
 
 export interface WeeklySlot {
@@ -89,6 +117,8 @@ export interface Session {
   topic: string
   objective: string
   status: SessionStatus
+  /** El examen cambió de fecha después de confirmar el plan (RN-16). */
+  outdated: boolean
 }
 
 export interface ConfirmResult {
@@ -129,4 +159,32 @@ export interface LoginResult {
 export interface FieldError {
   field: string
   message: string
+}
+
+// Formas de la API de forum-service (services/forum-service/internal/controller/common.go).
+
+export type SummaryStatus = 'pendiente' | 'aprobado' | 'rechazado' | 'eliminado'
+
+export interface Summary {
+  id: string
+  title: string
+  description: string
+  /** La materia, como texto libre (RN-25) */
+  category: string
+  tags: string[]
+  status: SummaryStatus
+  rejectionReason: string | null
+  source: 'estudiario' | 'externo'
+  author: { name: string; externalId?: string }
+  rating: { average: number | null; count: number }
+  file: { contentType: string; sizeBytes: number; downloadPath: string }
+  createdAt: string
+  publishedAt: string | null
+}
+
+export interface ForumPage {
+  items: Summary[]
+  page: number
+  size: number
+  total: number
 }

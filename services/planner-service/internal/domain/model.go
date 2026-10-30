@@ -52,6 +52,49 @@ func (t ExamType) Valid() bool {
 	return false
 }
 
+// ExamModality dice cómo se evalúa el examen. Vacía si el estudiante no la
+// indicó: en ese caso el plan no asume si hay que leer teoría o hacer ejercicios.
+type ExamModality string
+
+const (
+	ModalityTheory   ExamModality = "teorico"
+	ModalityPractice ExamModality = "practico"
+	ModalityMixed    ExamModality = "mixto"
+)
+
+func (m ExamModality) Valid() bool {
+	switch m {
+	case "", ModalityTheory, ModalityPractice, ModalityMixed:
+		return true
+	}
+	return false
+}
+
+// MaterialKind distingue el material teórico (apuntes, unidades, capítulos)
+// del práctico (trabajos prácticos, guías de ejercicios).
+type MaterialKind string
+
+const (
+	MaterialTheory   MaterialKind = "teorico"
+	MaterialPractice MaterialKind = "practico"
+)
+
+func (k MaterialKind) Valid() bool { return k == MaterialTheory || k == MaterialPractice }
+
+// Material es lo que el estudiante tiene para estudiar una materia. El plan se
+// arma a partir de este material real y no inventa teóricos ni prácticos.
+type Material struct {
+	ID        string
+	StudentID string
+	SubjectID string
+	Kind      MaterialKind
+	Title     string
+	// Content es lo que tiene adentro: temas, ejercicios, páginas. Opcional;
+	// la IA lo usa para decidir qué hacer en cada sesión.
+	Content   string
+	CreatedAt time.Time
+}
+
 type ExamStatus string
 
 const (
@@ -69,6 +112,15 @@ type Exam struct {
 	StartsAt time.Time
 	Topics   []string
 	Status   ExamStatus
+	// Modality: teórico, práctico, mixto o vacía si no se sabe.
+	Modality ExamModality
+	// MaterialIDs es el material de la materia que entra en el examen. Vacío:
+	// entra todo el material cargado.
+	MaterialIDs []string
+	// PlanStatus es el estado del plan vigente del examen: confirmado o
+	// desactualizado (RN-16). Vacío si todavía no tiene un plan confirmado.
+	// Se completa al listar los exámenes; no se guarda en la fila del examen.
+	PlanStatus PlanStatus
 }
 
 // Slot es una franja semanal en la que el estudiante puede estudiar.
@@ -123,6 +175,9 @@ type Session struct {
 	Topic     string
 	Objective string
 	Status    SessionStatus
+	// Outdated indica que el examen cambió de fecha después de confirmar el
+	// plan (RN-16): la sesión sigue visible hasta que el estudiante replanifique.
+	Outdated bool
 }
 
 // OccupiesCalendar indica si la sesión ocupa su horario. Una sesión pospuesta

@@ -12,6 +12,8 @@ import { SubjectPlanTab } from '@/features/subjects/tabs/SubjectPlanTab'
 import { PlannerScreen } from '@/features/planner/PlannerScreen'
 import { PomodoroScreen } from '@/features/pomodoro/PomodoroScreen'
 import { SettingsScreen } from '@/features/settings/SettingsScreen'
+import { ForumScreen } from '@/features/forum/ForumScreen'
+import { SubjectMaterialTab } from '@/features/subjects/tabs/SubjectMaterialTab'
 
 export default function App() {
   return (
@@ -26,9 +28,11 @@ export default function App() {
                 <Route path="materias" element={<SubjectsListScreen />} />
                 <Route path="materias/:subjectId" element={<SubjectDetailScreen />}>
                   <Route index element={<SubjectOverviewTab />} />
+                  <Route path="material" element={<SubjectMaterialTab />} />
                   <Route path="plan" element={<SubjectPlanTab />} />
                 </Route>
                 <Route path="plan" element={<PlannerScreen />} />
+                <Route path="foro" element={<ForumScreen />} />
                 <Route path="pomodoro" element={<PomodoroScreen />} />
                 <Route path="configuracion" element={<SettingsScreen />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

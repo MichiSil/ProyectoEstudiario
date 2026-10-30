@@ -18,6 +18,9 @@ type ProposalInput struct {
 	// Now es el momento en que se pide la propuesta. Ninguna sesión puede
 	// empezar antes.
 	Now time.Time
+	// Materials es el material que entra en el examen (teóricos y prácticos
+	// reales del estudiante). Vacío si no cargó ninguno.
+	Materials []domain.Material
 	// Booked son las sesiones ya reservadas del estudiante. La propuesta no
 	// puede superponerse con ellas ni superar con ellas la capacidad diaria.
 	Booked []domain.Session
@@ -57,6 +60,20 @@ type PlanRepository interface {
 
 	CreateExam(ctx context.Context, e domain.Exam) error
 	GetExam(ctx context.Context, studentID, examID string) (domain.Exam, error)
+	// ListExams devuelve los exámenes del estudiante, con el estado de su plan vigente.
+	ListExams(ctx context.Context, studentID string) ([]domain.Exam, error)
+	// UpdateExam cambia un examen dentro de una transacción con las filas del
+	// estudiante bloqueadas. apply recibe el examen actual y devuelve el nuevo
+	// y si el plan confirmado pasa a desactualizado (RN-16).
+	UpdateExam(ctx context.Context, studentID, examID string, apply func(domain.Exam) (domain.Exam, bool, error)) (domain.Exam, error)
+	// CancelExam cancela el examen, cancela sus planes y libera sus sesiones
+	// no completadas, todo en una transacción (RN-17). Cancelar un examen ya
+	// cancelado no cambia nada.
+	CancelExam(ctx context.Context, studentID, examID string) (domain.Exam, error)
+
+	CreateMaterial(ctx context.Context, m domain.Material) error
+	ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error)
+	DeleteMaterial(ctx context.Context, studentID, materialID string) error
 
 	SaveAvailability(ctx context.Context, a domain.Availability) error
 	GetAvailability(ctx context.Context, studentID string) (domain.Availability, error)
@@ -69,7 +86,9 @@ type PlanRepository interface {
 	// Confirm reserva las sesiones del plan dentro de una única transacción.
 	// validate se ejecuta dentro de la transacción, con las sesiones del
 	// estudiante ya bloqueadas, para que dos confirmaciones concurrentes no
-	// pasen las validaciones a la vez (RN-12, RN-13, RN-14).
+	// pasen las validaciones a la vez (RN-12, RN-13, RN-14). Si el examen
+	// tenía un plan desactualizado, sus sesiones no completadas se liberan
+	// antes de validar: el plan nuevo las reemplaza (RN-16).
 	Confirm(ctx context.Context, req ConfirmRequest, validate func(booked []domain.Session) error) (ConfirmResult, error)
 }
 

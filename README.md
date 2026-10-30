@@ -212,6 +212,61 @@ cd ../..
 
 > Si ya tenías un `.env` de antes, volvé a copiar `.env.example` a `.env` (y, si tenías una `AI_API_KEY`, volvé a ponerla). Cambiaron las variables de PostgreSQL (`POSTGRES_ADMIN_*` y `PLANNER_DB_*`) y se sumaron `JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_*` y `ADMIN_EMAILS`: sin ellas, `docker compose` no levanta. No hace falta borrar la base: `db-init` adapta la que ya tenías.
 
+### Editar y cancelar exámenes
+
+El estudiante puede listar sus exámenes, editarlos y cancelarlos (RF-06), con el JWT de la sección anterior:
+
+```bash
+G=http://localhost:8080/api/planner
+curl -H "Authorization: Bearer $TOKEN" $G/exams
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
+  -H "Content-Type: application/json" -d '{"startsAt":"2026-11-27T09:00:00-03:00"}'
+curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
+```
+
+- `GET /exams` devuelve cada examen con `planStatus`: `confirmado`, `desactualizado` o ausente si todavía no tiene plan.
+- `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha de un examen con plan confirmado, el plan pasa a **desactualizado** y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
+- `POST /exams/{id}/cancel` cancela el examen y sus planes, libera las sesiones pendientes y conserva las completadas como historial (RN-17). Cancelar dos veces no falla. Un examen cancelado no se puede editar ni planificar: responde `409 EXAM_CANCELLED`.
+
+Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
+
+### Material de cada materia
+
+Cada materia tiene su **material**: los teóricos (apuntes, unidades, capítulos) y los prácticos (trabajos prácticos, guías, parciales viejos) que el estudiante tiene para estudiar, con un título y, opcional, lo que tiene adentro. Cada examen indica su **modalidad** (teórico, práctico o mixto) y qué material entra.
+
+```bash
+G=http://localhost:8080/api/planner
+curl -H "Authorization: Bearer $TOKEN" -X POST $G/subjects/<id de la materia>/materials \
+  -H "Content-Type: application/json" -d '{"kind":"practico","title":"TP 5 — Ondas estacionarias","content":"Ejercicios 1 a 10"}'
+curl -H "Authorization: Bearer $TOKEN" $G/subjects/<id de la materia>/materials
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
+  -H "Content-Type: application/json" -d '{"modality":"practico","materialIds":["<id del material>"]}'
+```
+
+**El plan se arma con ese material real.** El agente de IA recibe la lista con el contenido de cada material y la instrucción de no mencionar nada que no esté cargado; el motor de reglas arma las sesiones con los títulos ("Estudiar Unidad 4", "Resolver TP 5") según la modalidad. Si no hay material, se usan los temas del examen y, si tampoco se sabe la modalidad, el plan no supone si hay que leer teoría o hacer ejercicios. Sin material elegido en el examen, entra todo el de la materia.
+
+### Agente por MCP
+
+planner-service expone un servidor **MCP** (*Model Context Protocol*) en `/api/planner/mcp`, detrás del api-gateway y con el mismo JWT, para que un agente de IA opere Estudiario en nombre del estudiante (SPEC 10.1). Las herramientas usan los mismos casos de uso que la API, con las mismas reglas:
+
+| Herramienta | Qué hace |
+|---|---|
+| `listar_materias` | Las materias del estudiante, con su dificultad |
+| `listar_examenes` | Los próximos exámenes programados, con fecha, temas, modalidad y estado del plan |
+| `proponer_plan` | Pide una propuesta para un examen. No reserva nada |
+
+No hay herramienta para confirmar: el agente propone y el estudiante confirma desde la app (RN-37). Cada pedido arma su servidor con la identidad que validó el gateway, así que el agente nunca ve datos de otro estudiante (RN-36). Para probarlo con el inspector oficial:
+
+```bash
+npx @modelcontextprotocol/inspector
+# Transporte: Streamable HTTP · URL: http://localhost:8080/api/planner/mcp
+# Encabezado: Authorization: Bearer $TOKEN
+```
+
+### Tests end-to-end
+
+Recorren el flujo principal completo contra el sistema levantado, a través del gateway (SPEC 10.2): registro, materia, examen, disponibilidad, propuesta, confirmación, reintento idempotente y propuesta con la IA caída (`AI_FALLBACK`). Cómo correrlos: [tests/e2e/README.md](tests/e2e/README.md).
+
 ### Foro de resúmenes
 
 forum-service está organizado por capas (controller → service → repository, [ADR-002](docs/adr/ADR-002-arquitectura-interna.md)). Los resúmenes se guardan en MongoDB y los PDF en MinIO ([ADR-003](docs/adr/ADR-003-persistencia.md)). Desde el frontend se usa a través del api-gateway en `/api/forum/*`, con el JWT de la sección anterior.
@@ -461,7 +516,7 @@ npm install
 npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
 ```
 
-Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. planner-service todavía no expone `GET /exams` ni `GET /availability`, así que el frontend recuerda en el navegador los exámenes y la disponibilidad que el servidor le devolvió al guardarlos.
+Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. Los exámenes se leen de `GET /exams` y se editan o cancelan desde su detalle en el calendario. planner-service todavía no expone `GET /availability`, así que el frontend recuerda en el navegador la disponibilidad que el servidor aceptó al guardarla.
 
 ### Estructura del repositorio
 
@@ -470,10 +525,12 @@ Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/use
 | `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), con el ejecutable en `cmd/<nombre>/` y su `Dockerfile` |
 | `frontend/` | Interfaz web (React + TypeScript, Vite) con su `Dockerfile` y la configuración de nginx |
 | `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
+| `tests/e2e/` | [Tests end-to-end](tests/e2e/README.md) del flujo principal contra el sistema levantado |
+| `deploy/` | Inicialización de las bases y [despliegue en Azure](deploy/azure/README.md) |
 
 ### Entorno desplegado
 
-La capacidad que publicamos para otros grupos va a estar desplegada en la nube con una URL pública. La vamos a publicar acá cuando esté disponible.
+El sistema se despliega en una máquina virtual de Azure con el mismo `docker compose` y Caddy adelante con HTTPS: el paso a paso está en [deploy/azure/README.md](deploy/azure/README.md). La URL pública (la app y la capacidad en `/v1`) la vamos a publicar acá cuando esté levantada.
 
 **Integración con otros grupos** (asignada por la cátedra):
 

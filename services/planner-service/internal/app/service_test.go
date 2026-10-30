@@ -21,6 +21,7 @@ type memRepo struct {
 	subjects     map[string]domain.Subject
 	exams        map[string]domain.Exam
 	availability map[string]domain.Availability
+	materials    map[string]domain.Material
 	plans        map[string]domain.Plan
 	sessions     []domain.Session
 	idempotency  map[string]idemEntry
@@ -36,6 +37,7 @@ func newMemRepo() *memRepo {
 	return &memRepo{
 		subjects: map[string]domain.Subject{}, exams: map[string]domain.Exam{},
 		availability: map[string]domain.Availability{}, plans: map[string]domain.Plan{},
+		materials:   map[string]domain.Material{},
 		idempotency: map[string]idemEntry{},
 	}
 }
@@ -85,6 +87,7 @@ func (r *memRepo) ListBookedSessions(_ context.Context, st string, _ time.Time) 
 	var out []domain.Session
 	for _, s := range r.sessions {
 		if s.StudentID == st {
+			s.Outdated = r.plans[s.PlanID].Status == domain.PlanOutdated
 			out = append(out, s)
 		}
 	}
@@ -124,6 +127,13 @@ func (r *memRepo) Confirm(_ context.Context, req app.ConfirmRequest, validate fu
 			return app.ConfirmResult{}, domain.ErrAlreadyConfirmed
 		}
 	}
+	if r.exams[plan.ExamID].Status == domain.ExamCancelled {
+		return app.ConfirmResult{}, domain.ErrExamCancelled
+	}
+	// RN-16: se liberan las sesiones no completadas del plan desactualizado.
+	r.removeSessions(func(s domain.Session) bool {
+		return s.ExamID == plan.ExamID && s.Status != domain.SessionCompleted && r.plans[s.PlanID].Status == domain.PlanOutdated
+	})
 	var booked []domain.Session
 	for _, s := range r.sessions {
 		if s.StudentID == req.StudentID {

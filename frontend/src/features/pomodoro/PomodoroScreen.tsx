@@ -8,11 +8,19 @@ import { Input, Label } from '@/components/ui/Field'
 import { readJson, writeJson } from '@/lib/storage'
 import { usePomodoro } from './usePomodoro'
 
+// Pomodoros predefinidos. Con "Armar el mío" el estudiante elige sus propios minutos.
 const PRESETS = [
-  { label: '25 / 5', study: 25, rest: 5 },
-  { label: '50 / 10', study: 50, rest: 10 },
-  { label: '90 / 15', study: 90, rest: 15 },
+  { id: '25-5', study: 25, rest: 5 },
+  { id: '50-10', study: 50, rest: 10 },
 ]
+
+type Mode = (typeof PRESETS)[number]['id'] | 'propio'
+
+interface Preferences {
+  mode: Mode
+  study: number
+  rest: number
+}
 
 const RADIUS = 90
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
@@ -20,17 +28,25 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 const STORAGE_KEY = 'estudiario-pomodoro'
 
 export function PomodoroScreen() {
-  const [durations, setDurations] = useState(() => readJson(STORAGE_KEY, { study: 25, rest: 5 }))
-  const studyMinutes = durations.study
-  const breakMinutes = durations.rest
+  const [prefs, setPrefs] = useState<Preferences>(() => {
+    const stored = readJson<Partial<Preferences>>(STORAGE_KEY, {})
+    const study = stored.study ?? 25
+    const rest = stored.rest ?? 5
+    // Preferencias guardadas antes de que existieran los modos: si coinciden con
+    // un predefinido se muestran así; si no, como propias.
+    const mode = stored.mode ?? PRESETS.find((p) => p.study === study && p.rest === rest)?.id ?? 'propio'
+    return { mode, study, rest }
+  })
+  const studyMinutes = prefs.study
+  const breakMinutes = prefs.rest
 
-  function updateDurations(patch: Partial<typeof durations>) {
-    const next = { ...durations, ...patch }
+  function updatePrefs(patch: Partial<Preferences>) {
+    const next = { ...prefs, ...patch }
     writeJson(STORAGE_KEY, next)
-    setDurations(next)
+    setPrefs(next)
   }
 
-  const { phase, secondsLeft, running, completedCycles, start, pause, reset } = usePomodoro(studyMinutes, breakMinutes)
+  const { phase, secondsLeft, running, paused, completedCycles, start, pause, reset } = usePomodoro(studyMinutes, breakMinutes)
 
   const totalSeconds = (phase === 'estudio' ? studyMinutes : breakMinutes) * 60
   const progress = totalSeconds > 0 ? 1 - secondsLeft / totalSeconds : 0
@@ -69,14 +85,15 @@ export function PomodoroScreen() {
         </div>
 
         <div className="mt-6 flex items-center gap-3">
-          <Button size="icon" variant="secondary" onClick={reset} aria-label="Reiniciar">
+          <Button size="icon" variant="secondary" onClick={reset} aria-label="Reiniciar" title="Reiniciar: vuelve al comienzo">
             <RotateCcw size={18} />
           </Button>
           <Button size="lg" onClick={running ? pause : start} className="w-36">
             {running ? <Pause size={18} /> : <Play size={18} />}
-            {running ? 'Pausar' : 'Empezar'}
+            {running ? 'Pausar' : paused ? 'Reanudar' : 'Empezar'}
           </Button>
         </div>
+        {paused && <p className="mt-3 text-sm text-muted">En pausa. Reanudá para seguir donde quedaste.</p>}
 
         {completedCycles > 0 && (
           <p className="mt-4 text-sm text-muted">
@@ -86,37 +103,72 @@ export function PomodoroScreen() {
       </div>
 
       <Card className="mt-8">
-        <p className="text-sm font-medium text-ink">Duración</p>
-        <p className="mt-1 text-xs text-muted">Se aplica a partir del próximo cambio de fase.</p>
+        <p className="text-sm font-medium text-ink">Elegí tu pomodoro</p>
+        <p className="mt-1 text-xs text-muted">
+          Usá uno de los predefinidos o armá el tuyo. Si ya empezaste, el cambio se aplica en la próxima fase.
+        </p>
 
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Duración del pomodoro">
           {PRESETS.map((p) => (
-            <button
-              key={p.label}
-              onClick={() => updateDurations({ study: p.study, rest: p.rest })}
-              className={clsx(
-                'flex-1 rounded-xl border px-3 py-2 text-sm font-medium',
-                studyMinutes === p.study && breakMinutes === p.rest
-                  ? 'border-accent bg-accent-soft text-accent-ink'
-                  : 'border-border text-muted hover:bg-surface-raised',
-              )}
-            >
-              {p.label}
-            </button>
+            <ModeOption
+              key={p.id}
+              active={prefs.mode === p.id}
+              onClick={() => updatePrefs({ mode: p.id, study: p.study, rest: p.rest })}
+              title={`${p.study} / ${p.rest}`}
+              detail={`${p.study} min estudio · ${p.rest} descanso`}
+            />
           ))}
+          <ModeOption
+            active={prefs.mode === 'propio'}
+            onClick={() => updatePrefs({ mode: 'propio' })}
+            title="Armar el mío"
+            detail="Elegís los minutos"
+          />
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <div>
-            <Label>Estudio (min)</Label>
-            <Input type="number" min={5} step={5} value={studyMinutes} onChange={(e) => updateDurations({ study: Number(e.target.value) })} />
+        {prefs.mode === 'propio' && (
+          <div className="animate-fade-in mt-4 grid grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <Label>Estudio (min)</Label>
+              <Input
+                type="number"
+                min={5}
+                step={5}
+                value={studyMinutes}
+                onChange={(e) => updatePrefs({ study: Math.max(1, Number(e.target.value)) })}
+              />
+            </div>
+            <div className="min-w-0">
+              <Label>Descanso (min)</Label>
+              <Input
+                type="number"
+                min={1}
+                step={5}
+                value={breakMinutes}
+                onChange={(e) => updatePrefs({ rest: Math.max(1, Number(e.target.value)) })}
+              />
+            </div>
           </div>
-          <div>
-            <Label>Descanso (min)</Label>
-            <Input type="number" min={0} step={5} value={breakMinutes} onChange={(e) => updateDurations({ rest: Number(e.target.value) })} />
-          </div>
-        </div>
+        )}
       </Card>
     </div>
+  )
+}
+
+function ModeOption({ active, onClick, title, detail }: { active: boolean; onClick: () => void; title: string; detail: string }) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onClick}
+      className={clsx(
+        'flex min-w-0 flex-col items-center rounded-xl border px-2 py-2.5 text-center',
+        active ? 'border-accent bg-accent-soft text-accent-ink' : 'border-border text-muted hover:bg-surface-raised',
+      )}
+    >
+      <span className="text-sm font-semibold">{title}</span>
+      <span className="mt-0.5 text-[11px] leading-tight opacity-80">{detail}</span>
+    </button>
   )
 }

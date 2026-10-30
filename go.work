@@ -6,4 +6,5 @@ use (
 	./services/notification-service
 	./services/planner-service
 	./services/users-service
+	./tests/e2e
 )

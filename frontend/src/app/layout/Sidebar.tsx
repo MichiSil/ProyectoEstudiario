@@ -1,6 +1,6 @@
 import { Link, NavLink } from 'react-router-dom'
 import clsx from 'clsx'
-import { UserRound } from 'lucide-react'
+import { ShieldCheck, UserRound } from 'lucide-react'
 import { NAV_ITEMS } from '@/app/nav'
 import { useSession } from '@/app/providers/SessionProvider'
 
@@ -35,6 +35,16 @@ export function Sidebar() {
           </li>
         ))}
       </ul>
+
+      {user?.role === 'admin' && (
+        <Link
+          to="/foro?tab=moderacion"
+          className="mt-6 flex items-center gap-3 rounded-lg border border-accent/30 bg-accent-soft px-3 py-2.5 text-[14.5px] font-medium text-accent-ink hover:border-accent"
+        >
+          <ShieldCheck size={18} />
+          Panel de admin
+        </Link>
+      )}
 
       <Link to="/configuracion" className="mt-auto flex items-center gap-2.5 border-t border-border/70 pt-4">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-raised text-muted">

@@ -83,3 +83,21 @@ CREATE TABLE IF NOT EXISTS confirmations (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (student_id, idempotency_key)
 );
+
+-- Material de cada materia (teóricos y prácticos): el plan se arma con lo que
+-- el estudiante realmente tiene para estudiar.
+CREATE TABLE IF NOT EXISTS materials (
+    id          TEXT PRIMARY KEY,
+    student_id  TEXT NOT NULL,
+    subject_id  TEXT NOT NULL REFERENCES subjects (id),
+    kind        TEXT NOT NULL CHECK (kind IN ('teorico', 'practico')),
+    title       TEXT NOT NULL,
+    content     TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS materials_subject_idx ON materials (student_id, subject_id, created_at);
+
+-- Modalidad del examen y material que entra. Se agregan con ALTER para que las
+-- bases que ya existían se adapten solas al arrancar.
+ALTER TABLE exams ADD COLUMN IF NOT EXISTS modality TEXT NOT NULL DEFAULT '';
+ALTER TABLE exams ADD COLUMN IF NOT EXISTS material_ids TEXT[] NOT NULL DEFAULT '{}';
