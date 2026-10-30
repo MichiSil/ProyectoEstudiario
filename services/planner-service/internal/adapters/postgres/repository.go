@@ -97,19 +97,24 @@ func (r *Repository) CreateExam(ctx context.Context, e domain.Exam) error {
 	if topics == nil {
 		topics = []string{}
 	}
+	materialIDs := e.MaterialIDs
+	if materialIDs == nil {
+		materialIDs = []string{}
+	}
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO exams (id, student_id, subject_id, type, starts_at, topics, status) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		e.ID, e.StudentID, e.SubjectID, string(e.Type), e.StartsAt, topics, string(e.Status))
+		`INSERT INTO exams (id, student_id, subject_id, type, starts_at, topics, status, modality, material_ids)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		e.ID, e.StudentID, e.SubjectID, string(e.Type), e.StartsAt, topics, string(e.Status), string(e.Modality), materialIDs)
 	return err
 }
 
 func (r *Repository) GetExam(ctx context.Context, studentID, id string) (domain.Exam, error) {
 	var e domain.Exam
-	var typ, status string
+	var typ, status, modality string
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, student_id, subject_id, type, starts_at, topics, status FROM exams WHERE id = $1 AND student_id = $2`,
-		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status)
-	e.Type, e.Status = domain.ExamType(typ), domain.ExamStatus(status)
+		`SELECT id, student_id, subject_id, type, starts_at, topics, status, modality, material_ids FROM exams WHERE id = $1 AND student_id = $2`,
+		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs)
+	e.Type, e.Status, e.Modality = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality)
 	return e, notFound(err)
 }
 
@@ -122,7 +127,7 @@ const planStatusSQL = `COALESCE((SELECT p.status FROM plans p
 // ListExams devuelve los exámenes con el estado de su plan vigente.
 func (r *Repository) ListExams(ctx context.Context, studentID string) ([]domain.Exam, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status, `+planStatusSQL+`
+		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status, e.modality, e.material_ids, `+planStatusSQL+`
 		FROM exams e WHERE e.student_id = $1 ORDER BY e.starts_at`, studentID)
 	if err != nil {
 		return nil, err
@@ -131,11 +136,11 @@ func (r *Repository) ListExams(ctx context.Context, studentID string) ([]domain.
 	out := []domain.Exam{}
 	for rows.Next() {
 		var e domain.Exam
-		var typ, status, planStatus string
-		if err := rows.Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &planStatus); err != nil {
+		var typ, status, modality, planStatus string
+		if err := rows.Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs, &planStatus); err != nil {
 			return nil, err
 		}
-		e.Type, e.Status, e.PlanStatus = domain.ExamType(typ), domain.ExamStatus(status), domain.PlanStatus(planStatus)
+		e.Type, e.Status, e.Modality, e.PlanStatus = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality), domain.PlanStatus(planStatus)
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -154,12 +159,12 @@ func lockStudent(ctx context.Context, tx pgx.Tx, studentID string) error {
 
 func getExamForUpdate(ctx context.Context, tx pgx.Tx, studentID, id string) (domain.Exam, error) {
 	var e domain.Exam
-	var typ, status string
+	var typ, status, modality string
 	err := tx.QueryRow(ctx, `
-		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status
+		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status, e.modality, e.material_ids
 		FROM exams e WHERE e.id = $1 AND e.student_id = $2 FOR UPDATE`,
-		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status)
-	e.Type, e.Status = domain.ExamType(typ), domain.ExamStatus(status)
+		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs)
+	e.Type, e.Status, e.Modality = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality)
 	return e, notFound(err)
 }
 
@@ -187,8 +192,12 @@ func (r *Repository) UpdateExam(ctx context.Context, studentID, id string, apply
 	if topics == nil {
 		topics = []string{}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE exams SET type = $1, starts_at = $2, topics = $3 WHERE id = $4`,
-		string(next.Type), next.StartsAt, topics, id); err != nil {
+	materialIDs := next.MaterialIDs
+	if materialIDs == nil {
+		materialIDs = []string{}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exams SET type = $1, starts_at = $2, topics = $3, modality = $4, material_ids = $5 WHERE id = $6`,
+		string(next.Type), next.StartsAt, topics, string(next.Modality), materialIDs, id); err != nil {
 		return domain.Exam{}, err
 	}
 	if outdate {
@@ -232,6 +241,59 @@ func (r *Repository) CancelExam(ctx context.Context, studentID, id string) (doma
 	}
 	e.Status = domain.ExamCancelled
 	return e, tx.Commit(ctx)
+}
+
+func (r *Repository) CreateMaterial(ctx context.Context, m domain.Material) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO materials (id, student_id, subject_id, kind, title, content, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		m.ID, m.StudentID, m.SubjectID, string(m.Kind), m.Title, m.Content, m.CreatedAt)
+	return err
+}
+
+// ListMaterials devuelve el material de una materia: primero los teóricos y
+// después los prácticos, cada grupo en el orden en que se cargó.
+func (r *Repository) ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, student_id, subject_id, kind, title, content, created_at FROM materials
+		WHERE student_id = $1 AND subject_id = $2 ORDER BY kind = 'practico', created_at`, studentID, subjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.Material{}
+	for rows.Next() {
+		var m domain.Material
+		var kind string
+		if err := rows.Scan(&m.ID, &m.StudentID, &m.SubjectID, &kind, &m.Title, &m.Content, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		m.Kind = domain.MaterialKind(kind)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// DeleteMaterial borra un material propio y lo saca de los exámenes que lo
+// tenían elegido.
+func (r *Repository) DeleteMaterial(ctx context.Context, studentID, id string) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	tag, err := tx.Exec(ctx, `DELETE FROM materials WHERE id = $1 AND student_id = $2`, id, studentID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `UPDATE exams SET material_ids = array_remove(material_ids, $1) WHERE student_id = $2 AND $1 = ANY(material_ids)`,
+		id, studentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 type slotJSON struct {

@@ -228,6 +228,43 @@ curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
 
 Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
 
+### Material de cada materia
+
+Cada materia tiene su **material**: los teóricos (apuntes, unidades, capítulos) y los prácticos (trabajos prácticos, guías, parciales viejos) que el estudiante tiene para estudiar, con un título y, opcional, lo que tiene adentro. Cada examen indica su **modalidad** (teórico, práctico o mixto) y qué material entra.
+
+```bash
+G=http://localhost:8080/api/planner
+curl -H "Authorization: Bearer $TOKEN" -X POST $G/subjects/<id de la materia>/materials \
+  -H "Content-Type: application/json" -d '{"kind":"practico","title":"TP 5 — Ondas estacionarias","content":"Ejercicios 1 a 10"}'
+curl -H "Authorization: Bearer $TOKEN" $G/subjects/<id de la materia>/materials
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
+  -H "Content-Type: application/json" -d '{"modality":"practico","materialIds":["<id del material>"]}'
+```
+
+**El plan se arma con ese material real.** El agente de IA recibe la lista con el contenido de cada material y la instrucción de no mencionar nada que no esté cargado; el motor de reglas arma las sesiones con los títulos ("Estudiar Unidad 4", "Resolver TP 5") según la modalidad. Si no hay material, se usan los temas del examen y, si tampoco se sabe la modalidad, el plan no supone si hay que leer teoría o hacer ejercicios. Sin material elegido en el examen, entra todo el de la materia.
+
+### Agente por MCP
+
+planner-service expone un servidor **MCP** (*Model Context Protocol*) en `/api/planner/mcp`, detrás del api-gateway y con el mismo JWT, para que un agente de IA opere Estudiario en nombre del estudiante (SPEC 10.1). Las herramientas usan los mismos casos de uso que la API, con las mismas reglas:
+
+| Herramienta | Qué hace |
+|---|---|
+| `listar_materias` | Las materias del estudiante, con su dificultad |
+| `listar_examenes` | Los próximos exámenes programados, con fecha, temas, modalidad y estado del plan |
+| `proponer_plan` | Pide una propuesta para un examen. No reserva nada |
+
+No hay herramienta para confirmar: el agente propone y el estudiante confirma desde la app (RN-37). Cada pedido arma su servidor con la identidad que validó el gateway, así que el agente nunca ve datos de otro estudiante (RN-36). Para probarlo con el inspector oficial:
+
+```bash
+npx @modelcontextprotocol/inspector
+# Transporte: Streamable HTTP · URL: http://localhost:8080/api/planner/mcp
+# Encabezado: Authorization: Bearer $TOKEN
+```
+
+### Tests end-to-end
+
+Recorren el flujo principal completo contra el sistema levantado, a través del gateway (SPEC 10.2): registro, materia, examen, disponibilidad, propuesta, confirmación, reintento idempotente y propuesta con la IA caída (`AI_FALLBACK`). Cómo correrlos: [tests/e2e/README.md](tests/e2e/README.md).
+
 ### Foro de resúmenes
 
 forum-service está organizado por capas (controller → service → repository, [ADR-002](docs/adr/ADR-002-arquitectura-interna.md)). Los resúmenes se guardan en MongoDB y los PDF en MinIO ([ADR-003](docs/adr/ADR-003-persistencia.md)). Desde el frontend se usa a través del api-gateway en `/api/forum/*`, con el JWT de la sección anterior.

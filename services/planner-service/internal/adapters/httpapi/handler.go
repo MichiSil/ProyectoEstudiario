@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/mcpserver"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/app"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/domain"
 )
@@ -43,6 +44,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("POST /subjects", h.withStudent(h.createSubject))
 	mux.HandleFunc("GET /subjects", h.withStudent(h.listSubjects))
+	mux.HandleFunc("GET /subjects/{subjectId}/materials", h.withStudent(h.listMaterials))
+	mux.HandleFunc("POST /subjects/{subjectId}/materials", h.withStudent(h.addMaterial))
+	mux.HandleFunc("DELETE /materials/{materialId}", h.withStudent(h.deleteMaterial))
 	mux.HandleFunc("POST /exams", h.withStudent(h.createExam))
 	mux.HandleFunc("GET /exams", h.withStudent(h.listExams))
 	mux.HandleFunc("PATCH /exams/{examId}", h.withStudent(h.updateExam))
@@ -51,6 +55,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /exams/{examId}/proposals", h.withStudent(h.propose))
 	mux.HandleFunc("POST /plans/{planId}/confirm", h.withStudent(h.confirm))
 	mux.HandleFunc("GET /sessions", h.withStudent(h.listSessions))
+	// Agente por MCP (SPEC 10.1): mismas reglas y misma identidad que la API REST.
+	mux.HandleFunc("/mcp", h.withStudent(func(w http.ResponseWriter, r *http.Request, student string) {
+		mcpserver.Handler(h.Svc, student).ServeHTTP(w, r)
+	}))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := strings.TrimPrefix(r.URL.Path, "/api/planner"); p != r.URL.Path {
@@ -117,6 +125,10 @@ type examDTO struct {
 	// PlanStatus es "confirmado" o "desactualizado" (RN-16); se omite si el
 	// examen no tiene un plan confirmado.
 	PlanStatus string `json:"planStatus,omitempty"`
+	// Modality: "teorico", "practico", "mixto" o "" si no se indicó.
+	Modality string `json:"modality"`
+	// MaterialIDs: el material de la materia que entra; vacío = todo.
+	MaterialIDs []string `json:"materialIds"`
 }
 
 func toExamDTO(e domain.Exam) examDTO {
@@ -124,15 +136,35 @@ func toExamDTO(e domain.Exam) examDTO {
 	if topics == nil {
 		topics = []string{}
 	}
-	return examDTO{e.ID, e.SubjectID, string(e.Type), e.StartsAt.Format(time.RFC3339), topics, string(e.Status), string(e.PlanStatus)}
+	materialIDs := e.MaterialIDs
+	if materialIDs == nil {
+		materialIDs = []string{}
+	}
+	return examDTO{e.ID, e.SubjectID, string(e.Type), e.StartsAt.Format(time.RFC3339), topics, string(e.Status), string(e.PlanStatus),
+		string(e.Modality), materialIDs}
+}
+
+type materialDTO struct {
+	ID        string    `json:"id"`
+	SubjectID string    `json:"subjectId"`
+	Kind      string    `json:"kind"` // "teorico" o "practico"
+	Title     string    `json:"title"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func toMaterialDTO(m domain.Material) materialDTO {
+	return materialDTO{m.ID, m.SubjectID, string(m.Kind), m.Title, m.Content, m.CreatedAt.UTC()}
 }
 
 // examChangesDTO es el cuerpo de PATCH /exams/{examId}: sólo cambian los
 // campos presentes.
 type examChangesDTO struct {
-	Type     *string   `json:"type"`
-	StartsAt *string   `json:"startsAt"`
-	Topics   *[]string `json:"topics"`
+	Type        *string   `json:"type"`
+	StartsAt    *string   `json:"startsAt"`
+	Topics      *[]string `json:"topics"`
+	Modality    *string   `json:"modality"`
+	MaterialIDs *[]string `json:"materialIds"`
 }
 
 type slotDTO struct {
@@ -225,7 +257,8 @@ func (h *Handler) createExam(w http.ResponseWriter, r *http.Request, student str
 		h.problem(w, r, http.StatusBadRequest, "INVALID_DATE", "startsAt tiene que tener formato RFC 3339 (por ejemplo 2026-10-28T09:00:00-03:00)", nil)
 		return
 	}
-	e, err := h.Svc.CreateExam(r.Context(), domain.Exam{StudentID: student, SubjectID: in.SubjectID, Type: domain.ExamType(in.Type), StartsAt: startsAt, Topics: in.Topics})
+	e, err := h.Svc.CreateExam(r.Context(), domain.Exam{StudentID: student, SubjectID: in.SubjectID, Type: domain.ExamType(in.Type), StartsAt: startsAt, Topics: in.Topics,
+		Modality: domain.ExamModality(in.Modality), MaterialIDs: in.MaterialIDs})
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -265,6 +298,11 @@ func (h *Handler) updateExam(w http.ResponseWriter, r *http.Request, student str
 		ch.StartsAt = &startsAt
 	}
 	ch.Topics = in.Topics
+	if in.Modality != nil {
+		m := domain.ExamModality(*in.Modality)
+		ch.Modality = &m
+	}
+	ch.MaterialIDs = in.MaterialIDs
 	e, err := h.Svc.UpdateExam(r.Context(), student, r.PathValue("examId"), ch)
 	if err != nil {
 		h.fail(w, r, err)
@@ -282,6 +320,45 @@ func (h *Handler) cancelExam(w http.ResponseWriter, r *http.Request, student str
 	}
 	h.Logger.InfoContext(r.Context(), "examen cancelado", "examId", e.ID)
 	writeJSON(w, http.StatusOK, toExamDTO(e))
+}
+
+func (h *Handler) listMaterials(w http.ResponseWriter, r *http.Request, student string) {
+	list, err := h.Svc.ListMaterials(r.Context(), student, r.PathValue("subjectId"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out := make([]materialDTO, len(list))
+	for i, m := range list {
+		out[i] = toMaterialDTO(m)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) addMaterial(w http.ResponseWriter, r *http.Request, student string) {
+	var in struct {
+		Kind    string `json:"kind"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if !h.decode(w, r, &in) {
+		return
+	}
+	m, err := h.Svc.AddMaterial(r.Context(), domain.Material{StudentID: student, SubjectID: r.PathValue("subjectId"),
+		Kind: domain.MaterialKind(in.Kind), Title: in.Title, Content: in.Content})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toMaterialDTO(m))
+}
+
+func (h *Handler) deleteMaterial(w http.ResponseWriter, r *http.Request, student string) {
+	if err := h.Svc.DeleteMaterial(r.Context(), student, r.PathValue("materialId")); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func parseClock(s string) (int, bool) {

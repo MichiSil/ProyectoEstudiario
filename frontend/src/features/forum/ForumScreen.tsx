@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import clsx from 'clsx'
+import { useSearchParams } from 'react-router-dom'
 import { MessagesSquare, Search, Upload } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/Button'
@@ -20,7 +21,8 @@ type Tab = 'explorar' | 'mias' | 'moderacion'
 export function ForumScreen() {
   const { user } = useSession()
   const isAdmin = user?.role === 'admin'
-  const [tab, setTab] = useState<Tab>('explorar')
+  const [searchParams] = useSearchParams()
+  const [tab, setTab] = useState<Tab>(() => (isAdmin && searchParams.get('tab') === 'moderacion' ? 'moderacion' : 'explorar'))
   const [uploadOpen, setUploadOpen] = useState(false)
   const [selected, setSelected] = useState<Summary | null>(null)
   const [pendingCount, setPendingCount] = useState<number | null>(null)

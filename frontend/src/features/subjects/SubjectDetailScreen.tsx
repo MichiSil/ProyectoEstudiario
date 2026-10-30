@@ -6,6 +6,7 @@ import { subjectColor } from '@/lib/domain-ui'
 
 const TABS = [
   { to: '', label: 'Resumen' },
+  { to: 'material', label: 'Material' },
   { to: 'plan', label: 'Plan' },
 ]
 

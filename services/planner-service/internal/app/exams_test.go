@@ -3,6 +3,8 @@ package app_test
 import (
 	"context"
 	"errors"
+	"sort"
+	"sync"
 	"testing"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/app"
@@ -95,6 +97,41 @@ func (r *memRepo) removeSessions(match func(domain.Session) bool) {
 		}
 	}
 	r.sessions = kept
+}
+
+// materialsMu es aparte de r.mu: UpdateExam valida el material (ListMaterials)
+// mientras tiene tomado r.mu, como en PostgreSQL se lee dentro de la transacción.
+var materialsMu sync.Mutex
+
+func (r *memRepo) CreateMaterial(_ context.Context, m domain.Material) error {
+	materialsMu.Lock()
+	defer materialsMu.Unlock()
+	r.materials[m.ID] = m
+	return nil
+}
+
+func (r *memRepo) ListMaterials(_ context.Context, st, subjectID string) ([]domain.Material, error) {
+	materialsMu.Lock()
+	defer materialsMu.Unlock()
+	out := []domain.Material{}
+	for _, m := range r.materials {
+		if m.StudentID == st && m.SubjectID == subjectID {
+			out = append(out, m)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (r *memRepo) DeleteMaterial(_ context.Context, st, id string) error {
+	materialsMu.Lock()
+	defer materialsMu.Unlock()
+	m, ok := r.materials[id]
+	if !ok || m.StudentID != st {
+		return domain.ErrNotFound
+	}
+	delete(r.materials, id)
+	return nil
 }
 
 // ---------- tests ----------
@@ -263,5 +300,60 @@ func TestCancelExam_PropuestaPreviaNoSeConfirma(t *testing.T) {
 	}
 	if len(repo.sessions) != 0 {
 		t.Fatal("no se tendría que haber reservado ninguna sesión")
+	}
+}
+
+// El material se carga sólo en materias propias, y el examen sólo puede elegir material de su materia (RN-03).
+func TestMaterial_SoloDeLaMateriaPropia(t *testing.T) {
+	svc, _, exam := setup(t)
+	ctx := context.Background()
+	m, err := svc.AddMaterial(ctx, domain.Material{StudentID: "est-1", SubjectID: exam.SubjectID, Kind: domain.MaterialTheory, Title: "Unidad 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AddMaterial(ctx, domain.Material{StudentID: "est-2", SubjectID: exam.SubjectID, Kind: domain.MaterialTheory, Title: "Ajeno"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cargar material en una materia ajena tendría que dar ErrNotFound, llegó %v", err)
+	}
+	var verr *domain.ValidationError
+	if _, err := svc.AddMaterial(ctx, domain.Material{StudentID: "est-1", SubjectID: exam.SubjectID, Kind: "otro", Title: "X"}); !errors.As(err, &verr) {
+		t.Fatalf("un tipo de material inválido tendría que dar error de validación, llegó %v", err)
+	}
+
+	ids := []string{m.ID}
+	modality := domain.ModalityTheory
+	got, err := svc.UpdateExam(ctx, "est-1", exam.ID, app.ExamChanges{Modality: &modality, MaterialIDs: &ids})
+	if err != nil || got.Modality != domain.ModalityTheory || len(got.MaterialIDs) != 1 {
+		t.Fatalf("no se guardó la modalidad o el material: %+v %v", got, err)
+	}
+	bad := []string{"no-existe"}
+	if _, err := svc.UpdateExam(ctx, "est-1", exam.ID, app.ExamChanges{MaterialIDs: &bad}); !errors.As(err, &verr) {
+		t.Fatalf("elegir material que no es de la materia tendría que fallar, llegó %v", err)
+	}
+}
+
+// El plan se arma con el material que entra en el examen y no con material inventado.
+func TestProposePlan_ConElMaterialDelExamen(t *testing.T) {
+	svc, _, exam := setup(t)
+	ctx := context.Background()
+	theory, _ := svc.AddMaterial(ctx, domain.Material{StudentID: "est-1", SubjectID: exam.SubjectID, Kind: domain.MaterialTheory, Title: "Unidad 1 — Integrales"})
+	if _, err := svc.AddMaterial(ctx, domain.Material{StudentID: "est-1", SubjectID: exam.SubjectID, Kind: domain.MaterialTheory, Title: "Unidad 9 — no entra"}); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{theory.ID}
+	modality := domain.ModalityTheory
+	if _, err := svc.UpdateExam(ctx, "est-1", exam.ID, app.ExamChanges{Modality: &modality, MaterialIDs: &ids}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.ProposePlan(ctx, "est-1", exam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range plan.Drafts {
+		if d.Topic == "Unidad 9 — no entra" {
+			t.Fatal("el plan usó material que no entra en el examen")
+		}
+	}
+	if plan.Drafts[0].Topic != "Unidad 1 — Integrales" {
+		t.Fatalf("la primera sesión tendría que ser del material elegido, llegó %q", plan.Drafts[0].Topic)
 	}
 }

@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/Badge'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { plannerApi } from '@/api/planner'
-import { EXAM_TYPE_LABEL, type Exam } from '@/api/types'
+import { EXAM_TYPE_LABEL, MODALITY_LABEL, type Exam } from '@/api/types'
 import { examTypeColorVar, subjectColor } from '@/lib/domain-ui'
 import { formatDateLong, formatDaysUntil, formatTime, formatTimeRange, localDate } from '@/lib/format'
 import { ExamFormSheet } from './ExamFormSheet'
@@ -82,6 +82,7 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
         <Badge tone="neutral">{formatDateLong(date)}</Badge>
         {time !== '00:00' && <Badge tone="neutral">{time}</Badge>}
         <Badge tone={cancelled ? 'danger' : 'neutral'}>{cancelled ? 'Cancelado' : formatDaysUntil(date)}</Badge>
+        {exam.modality && <Badge tone="accent">{MODALITY_LABEL[exam.modality]}</Badge>}
       </div>
 
       {!!exam.topics.length && (

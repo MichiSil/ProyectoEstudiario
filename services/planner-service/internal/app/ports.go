@@ -18,6 +18,9 @@ type ProposalInput struct {
 	// Now es el momento en que se pide la propuesta. Ninguna sesión puede
 	// empezar antes.
 	Now time.Time
+	// Materials es el material que entra en el examen (teóricos y prácticos
+	// reales del estudiante). Vacío si no cargó ninguno.
+	Materials []domain.Material
 	// Booked son las sesiones ya reservadas del estudiante. La propuesta no
 	// puede superponerse con ellas ni superar con ellas la capacidad diaria.
 	Booked []domain.Session
@@ -67,6 +70,10 @@ type PlanRepository interface {
 	// no completadas, todo en una transacción (RN-17). Cancelar un examen ya
 	// cancelado no cambia nada.
 	CancelExam(ctx context.Context, studentID, examID string) (domain.Exam, error)
+
+	CreateMaterial(ctx context.Context, m domain.Material) error
+	ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error)
+	DeleteMaterial(ctx context.Context, studentID, materialID string) error
 
 	SaveAvailability(ctx context.Context, a domain.Availability) error
 	GetAvailability(ctx context.Context, studentID string) (domain.Availability, error)
