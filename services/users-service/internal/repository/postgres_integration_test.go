@@ -3,7 +3,7 @@ package repository_test
 // Tests de integración contra un PostgreSQL real (requisito 2.11 del
 // enunciado). Se ejecutan sólo si está definida USERS_TEST_DATABASE_URL:
 //
-//	docker compose up -d postgres users-db-init
+//	docker compose up -d postgres db-init
 //	USERS_TEST_DATABASE_URL=postgres://users_svc:users-local@localhost:5432/users go test ./internal/repository/
 
 import (

@@ -67,8 +67,8 @@ services:
       timeout: 3s
       retries: 5
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       jaeger:
         condition: service_started
 
@@ -94,7 +94,7 @@ services:
       timeout: 3s
       retries: 5
     depends_on:
-      users-db-init:
+      db-init:
         condition: service_completed_successfully
       jaeger:
         condition: service_started
@@ -146,8 +146,9 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_DB: planner
-      POSTGRES_USER: ${PLANNER_DB_USER:?falta el archivo .env (copiá .env.example a .env)}
-      POSTGRES_PASSWORD: ${PLANNER_DB_PASSWORD:?falta el archivo .env (copiá .env.example a .env)}
+      # Administrador del contenedor: sólo lo usa db-init, ningún servicio se conecta con él.
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?falta POSTGRES_ADMIN_USER en el .env (copiá de nuevo .env.example a .env)}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?falta POSTGRES_ADMIN_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -157,9 +158,10 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Crea la base `users` y su usuario. Corre una vez en cada `up` y termina; el
+  # Crea el usuario y la base de cada servicio (planner y users), sin superusuario
+  # y sin acceso a la base del otro. Corre una vez en cada `up` y termina; el
   # script es idempotente, así sirve también con un volumen que ya existía.
-  users-db-init:
+  db-init:
     image: postgres:16-alpine
     depends_on:
       postgres:
@@ -167,13 +169,15 @@ services:
     environment:
       PGHOST: postgres
       PGDATABASE: planner
-      PGUSER: ${PLANNER_DB_USER}
-      PGPASSWORD: ${PLANNER_DB_PASSWORD}
+      PGUSER: ${POSTGRES_ADMIN_USER}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      PLANNER_DB_USER: ${PLANNER_DB_USER:?falta PLANNER_DB_USER en el .env (ver .env.example)}
+      PLANNER_DB_PASSWORD: ${PLANNER_DB_PASSWORD:?falta PLANNER_DB_PASSWORD en el .env (ver .env.example)}
       USERS_DB_USER: ${USERS_DB_USER:?falta USERS_DB_USER en el .env (ver .env.example)}
       USERS_DB_PASSWORD: ${USERS_DB_PASSWORD:?falta USERS_DB_PASSWORD en el .env (ver .env.example)}
     volumes:
       - ./deploy/postgres:/scripts:ro
-    entrypoint: ["sh", "/scripts/init-users-db.sh"]
+    entrypoint: ["sh", "/scripts/init-databases.sh"]
     restart: "no"
 
   # ---------------------------------------------------------------
