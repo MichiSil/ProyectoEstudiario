@@ -1,6 +1,6 @@
 # ADR-006: Búsqueda
 
-- **Estado:** Propuesta (se valida al implementar forum-service)
+- **Estado:** Aceptada (implementada y validada el 2026-10-30, con los cambios de la sección *Actualización*)
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D6
 - **Reemplaza a:** —
@@ -183,3 +183,60 @@ Para comprobar el retraso y el estado del índice se suman al tablero ([ADR-011]
 - Probar la reconstrucción completa borrando el volumen de Solr y medir cuánto tarda.
 - Que la consulta *edismax* con el peso del título dé resultados razonables en español (acentos, plurales).
 - Demostrar la caída de Solr: la búsqueda responde `503 SEARCH_UNAVAILABLE`, el resto del foro sigue, y al volver el índice se pone al día ([ADR-010](ADR-010-resiliencia.md)).
+
+## Actualización (2026-10-30): implementación
+
+La búsqueda quedó implementada en forum-service (`internal/search`). Al implementarla cambiaron tres puntos de la decisión original. El resto (Solr, sólo aprobados en el índice, *edismax* con más peso en el título, `commitWithin` de 5 s, reconciliación cada 5 min y reconstrucción completa) se mantiene.
+
+### 1. El indexador lee los cambios de MongoDB en lugar de consumir una cola
+
+**Antes:** el indexador consumía `summary.approved` y `summary.deleted` de la cola `forum.search-indexer` (punto 3).
+
+**Ahora:** cada **5 s** lee de MongoDB los resúmenes con `updatedAt` posterior a la última lectura (con índice sobre `updatedAt`). Si están aprobados, los agrega o reemplaza en Solr; si no, los borra. Vuelve a mirar los últimos 30 s por si otra instancia escribió con el reloj un poco atrasado; repetir no cambia nada, porque siempre indexa el estado actual.
+
+**Por qué:**
+
+- El indexador ya releía el resumen en MongoDB y no usaba el contenido del evento: el evento sólo decía *qué* mirar. `updatedAt` da la misma información sin pasar por el *relay* ni por RabbitMQ.
+- La búsqueda deja de depender de dos componentes más. Si RabbitMQ o el *relay* fallan, el índice igual se mantiene al día.
+- No hace falta la cola, su DLQ ni la política de reintentos propia: si Solr falla, la marca de la última lectura no avanza y la vuelta siguiente reintenta lo mismo.
+- Es la misma idea que la reconciliación incremental por `updatedAt` que ya estaba decidida (punto 4), sólo que más seguido.
+
+**Costo aceptado:** una consulta a MongoDB cada 5 s por instancia, que usa el índice sobre `updatedAt` y casi siempre no devuelve nada. Los eventos `summary.*` se siguen publicando para notification-service y el programa de beneficios. La cola `forum.search-indexer` del [ADR-005](ADR-005-comunicacion.md) ya no se crea.
+
+### 2. Campos del índice y forma de la respuesta
+
+La [capacidad para el Grupo 4](ADR-014-contrato-documentos.md) usa la misma búsqueda, así que el índice sigue al contrato `documents-v1`:
+
+| Campo | Tipo | Cambio |
+|---|---|---|
+| `title`, `description` | `text_es_estudiario` | Tipo propio (ver abajo). |
+| `category_text` | `text_es_estudiario` | Antes `subject_text`. La materia del foro es la `category` del contrato. |
+| `categoryKey` | `string` | Antes `subject`. Se guarda normalizada (minúsculas, sin tildes), igual que en MongoDB: "Análisis II" y "analisis ii" son la misma categoría para el filtro. |
+| `tagKeys` | `string`, multivaluado | Nuevo: filtro por etiquetas del contrato. |
+| `source` | `string` | Nuevo: `estudiario` o `externo`. |
+| `ratingAvg`, `ratingCount`, `publishedAt` | `pfloat`, `pint`, `pdate` | Sin cambios. |
+
+- **`text_es_estudiario`:** minúsculas, palabras vacías del español, sin tildes (`ASCIIFoldingFilter`) y raíz en español (`SpanishLightStemFilter`). El `text_es` del configset no saca las tildes, y los estudiantes buscan "analisis" o "cinematica" sin acento.
+- **La respuesta se arma desde MongoDB.** Solr devuelve los ids, el total y el orden; forum-service lee esos resúmenes de MongoDB y devuelve el documento completo del contrato (autor, archivo, calificación). Así el índice no guarda datos del autor y la respuesta siempre tiene el dato actual. Si el índice todavía tiene algo que en MongoDB ya no está aprobado, no se muestra (RN-24).
+- **El esquema** está en `services/forum-service/internal/search/schema.json`, con el formato de la Schema API que usamos en la CLASE_5. forum-service lo aplica al arrancar (agrega lo que falta y reemplaza lo que existe) y apaga la creación automática de campos del configset `_default`. El core se crea con `solr-precreate summaries`, como en clase.
+- La ruta es la que ya tenía el foro, `GET /api/forum/summaries` (no `/summaries/search`), y `GET /v1/documents` para el Grupo 4.
+
+### 3. Calificaciones
+
+Se mantiene que el promedio llega al índice por la reconciliación (hasta 5 min). La reconciliación compara `ratingAvg` y `ratingCount` de cada documento y sólo reescribe los que cambiaron, así que su log (`added`, `updated` y `removed`) muestra cuántas correcciones hizo.
+
+### Validación
+
+Con el sistema completo levantado con `docker compose`:
+
+| Prueba | Resultado |
+|---|---|
+| Un resumen aprobado aparece en la búsqueda (CA-19) | **4,6 s** (límite: 60 s) |
+| Un resumen eliminado deja de aparecer (CA-20) | **6,8 s** (límite: 60 s) |
+| Buscar "analisis" e "integral" | Encuentra "Análisis Matemático II" e "Integrales dobles" |
+| Materia + orden por calificación (CA-21) | A igual promedio queda primero el de más votos |
+| Solr apagado | La búsqueda responde `503 SEARCH_UNAVAILABLE` en 70 ms; el detalle, la publicación y la moderación responden normalmente |
+| Solr vuelve | Lo aprobado mientras estaba caído aparece en 9 s, sin reiniciar forum-service |
+| Volumen de Solr borrado + `forum-service reindex` | Índice reconstruido, con el esquema aplicado de nuevo |
+
+El test de integración `internal/search/solr_integration_test.go` repite estas pruebas contra un Solr real: análisis en español, filtros, los tres órdenes, paginación, sincronización, reconciliación y reconstrucción. El retraso de cada sincronización queda en el log `índice sincronizado` (`lagMs`), para llevarlo al tablero del [ADR-011](ADR-011-observabilidad.md).
