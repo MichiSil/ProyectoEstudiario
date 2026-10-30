@@ -384,6 +384,24 @@ En http://localhost:8025 aparece **un solo mail** "Tu resumen fue publicado", y 
 
 Si el servidor de mail queda caído más de unos 10 minutos, se agotan los reintentos: el mensaje queda en `notifications.dlq` y el registro como `fallido` (CA-27). Cuando el mail vuelve, se **reinyecta** desde la interfaz de RabbitMQ: *Queues → notifications.dlq → Move messages*, con destino `notifications.summary-moderation`. Los mails que ya se habían enviado no se repiten.
 
+### Caché del foro
+
+El listado de resúmenes aprobados y el detalle de cada uno son las lecturas más repetidas del foro, y cambian poco. forum-service las guarda en **Memcached** con *cache-aside* ([ADR-007](docs/adr/ADR-007-cache.md)), con la caché trabajada en clase (`services/forum-service/internal/cache`, copiada de `claseCache-2026`).
+
+- **Qué se guarda:** el detalle de un resumen aprobado (10 min) y las páginas del listado por materia, orden y página (60 s). Sólo resúmenes aprobados; la búsqueda por texto, las pendientes y "mis publicaciones" no pasan por la caché.
+- **Invalidación**, después de que MongoDB confirma el cambio: aprobar cambia la *generación* del listado (todas las páginas viejas quedan sin uso); eliminar borra el detalle y cambia la generación, así que un resumen eliminado deja de verse enseguida; calificar borra el detalle (el promedio nuevo se ve enseguida en el detalle y, en el listado, en menos de 60 s).
+- **Si Memcached se cae**, cada operación espera como mucho 100 ms y el foro lee de MongoDB, sin errores: sólo más lento.
+- **La caché se elige** con `FORUM_CACHE_PROVIDER` en el `.env`: `memcached` (por defecto) o `none`, para medir el foro sin caché ([resultados](tests/load/RESULTADOS.md)).
+
+Los aciertos y fallos se cuentan en `forum_cache_requests_total` (para Prometheus) y se resumen en los logs cada minuto:
+
+```bash
+docker compose logs forum-service | grep '"caché del foro"'
+# {"msg":"caché del foro","provider":"memcached","operation":"listado","hits":512,"misses":31,"errors":0,"hitRatio":0.94,...}
+```
+
+**Demostración: Memcached se cae.** Con el sistema levantado, `docker compose stop memcached`: el foro sigue respondiendo igual (más lento), y en los logs aparecen `"la caché no respondió: se sigue sin caché"` y `"errors"` en el resumen de la caché. `docker compose start memcached` y la caché se vuelve a llenar sola.
+
 ### Capacidad de documentos para el Grupo 4
 
 forum-service expone directamente, sin pasar por el gateway, la API de [`docs/contracts/documents-v1.yaml`](docs/contracts/documents-v1.yaml) en `http://localhost:8083/v1`. La guía para el consumidor está en [`docs/contracts/README.md`](docs/contracts/README.md).
@@ -428,7 +446,7 @@ docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/sr
   golang:1.26-alpine go test ./internal/repository/ ./internal/storage/
 ```
 
-Los tests borran al terminar los datos que crean.
+Los tests borran al terminar los datos que crean. El de Memcached se corre igual, en la red de `docker compose`, con `-e FORUM_TEST_MEMCACHED_ADDR=memcached:11211` y el paquete `./internal/cache/`.
 
 El test de integración de Solr vacía el core que usa, así que se corre contra un Solr descartable, no contra el del `docker compose`:
 

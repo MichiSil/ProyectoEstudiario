@@ -22,19 +22,19 @@ const (
 // registro de Prometheus, sale en /metrics como
 //
 //	forum_cache_requests_total{operation="detalle|listado", result="hit|miss|error"}
-//	forum_cache_invalidations_total{write="aprobar|eliminar|calificar", result="ok|error"}
+//	forum_cache_invalidations_total{write="aprobar|eliminar|calificar|indexar", result="ok|error"}
 //
 // y el porcentaje de aciertos es hit / (hit + miss + error). Un *Metrics nil
 // no cuenta nada.
 type Metrics struct {
 	requests      [2][3]atomic.Int64 // [operación][hit, miss, error]
-	invalidations [3][2]atomic.Int64 // [escritura][ok, error]
+	invalidations [4][2]atomic.Int64 // [escritura][ok, error]
 }
 
 var (
 	ops     = []string{OpDetail, OpList}
 	reads   = []string{ResultHit, ResultMiss, ResultError}
-	writes  = []string{WriteApprove, WriteDelete, WriteRate}
+	writes  = []string{WriteApprove, WriteDelete, WriteRate, WriteIndex}
 	results = []string{ResultOK, ResultError}
 
 	requestsDesc = prometheus.NewDesc("forum_cache_requests_total",

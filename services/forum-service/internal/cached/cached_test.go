@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cache"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cached"
@@ -59,7 +60,7 @@ func newEnv(t *testing.T, c cache.Cache) *env {
 	db := &counting{Store: memory.NewStore()}
 	m := &cached.Metrics{}
 	repo := &cached.Repository{Repository: db, Cache: c, Metrics: m,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), DeleteRetries: []time.Duration{0, 0, 0}}
 	return &env{
 		svc: &service.Service{Repo: repo, Search: &cached.Search{Next: db, Repo: repo}, Files: memory.NewFiles()},
 		db:  db, repo: repo, metrics: m,

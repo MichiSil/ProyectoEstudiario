@@ -106,12 +106,32 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	// Caché de lectura del foro (ADR-007): Memcached en docker compose; la nula
+	// (none) para medir sin caché; la local para desarrollar sin contenedores.
+	forumCache, err := cache.New(env("CACHE_PROVIDER", "none"), os.Getenv("MEMCACHED_ADDR"))
+	if err != nil {
+		return err
+	}
+	logger.Info("caché del foro elegida", "provider", forumCache.Name())
+	// El envoltorio de caché va entre el service y el repositorio (cache-aside,
+	// ADR-002). Los aciertos y fallos se registran en Prometheus y se resumen
+	// en los logs cada minuto.
+	cacheMetrics := &cached.Metrics{}
+	prometheus.MustRegister(cacheMetrics)
+	go cacheMetrics.Log(ctx, logger, forumCache.Name(), time.Minute)
+	cachedRepo := &cached.Repository{Repository: repo, Cache: forumCache, Metrics: cacheMetrics, Logger: logger}
+
 	// Búsqueda sobre Solr (ADR-006), con el indexador corriendo aparte. Sin
 	// SOLR_URL (por ejemplo, al probar sin Docker) se usa la de MongoDB.
 	var summarySearch service.SummarySearch = repository.NewSearch(db)
 	if solrURL := os.Getenv("SOLR_URL"); solrURL != "" {
 		solr := search.NewSolr(solrURL)
-		indexer := &search.Indexer{Solr: solr, Source: repo, Logger: logger}
+		indexer := &search.Indexer{Solr: solr, Source: repo, Logger: logger,
+			// Cuando Solr ya muestra el cambio (CommitWithin), el listado
+			// cacheado se invalida otra vez (ver cached.Repository.InvalidateList).
+			Changed: func(ctx context.Context) {
+				time.AfterFunc(search.CommitWithin, func() { cachedRepo.InvalidateList(ctx) })
+			}}
 		if len(os.Args) > 1 && os.Args[1] == "reindex" {
 			started := time.Now()
 			n, err := indexer.Rebuild(ctx)
@@ -129,21 +149,6 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Warn("sin SOLR_URL: la búsqueda usa MongoDB")
 	}
-	// Caché de lectura del foro (ADR-007): Memcached en docker compose; la nula
-	// (none) para medir sin caché; la local para desarrollar sin contenedores.
-	forumCache, err := cache.New(env("CACHE_PROVIDER", "none"), os.Getenv("MEMCACHED_ADDR"))
-	if err != nil {
-		return err
-	}
-	logger.Info("caché del foro", "provider", forumCache.Name())
-	// El envoltorio de caché va entre el service y el repositorio (cache-aside,
-	// ADR-002). Los aciertos y fallos se registran en Prometheus y se resumen
-	// en los logs cada minuto.
-	cacheMetrics := &cached.Metrics{}
-	prometheus.MustRegister(cacheMetrics)
-	go cacheMetrics.Log(ctx, logger, forumCache.Name(), time.Minute)
-	cachedRepo := &cached.Repository{Repository: repo, Cache: forumCache, Metrics: cacheMetrics, Logger: logger}
-
 	svc := &service.Service{Repo: cachedRepo, Search: &cached.Search{Next: summarySearch, Repo: cachedRepo}, Files: files}
 
 	// Limpieza periódica de PDF huérfanos en MinIO (ADR-003).
