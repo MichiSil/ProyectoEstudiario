@@ -26,8 +26,9 @@ services:
     environment:
       PORT: "8080"
       PLANNER_SERVICE_URL: http://planner-service:8082
+      USERS_SERVICE_URL: http://users-service:8081
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
-      # Secreto para validar los JWT y secreto compartido con planner-service.
+      # Secreto para validar los JWT y secreto compartido con planner-service y users-service.
       JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
     healthcheck:
@@ -37,6 +38,8 @@ services:
       retries: 5
     depends_on:
       planner-service:
+        condition: service_healthy
+      users-service:
         condition: service_healthy
       jaeger:
         condition: service_started
@@ -76,11 +79,25 @@ services:
       - "8081:8081"
     environment:
       PORT: "8081"
+      # Base propia `users` con su propio usuario (ADR-001, ADR-003).
+      DATABASE_URL: postgres://${USERS_DB_USER}:${USERS_DB_PASSWORD}@postgres:5432/users?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Firma los JWT con el mismo secreto que usa el api-gateway para validarlos.
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
+      # GET /me sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
+      # Mails con rol admin (RF-03); se aplica en cada login.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      users-db-init:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
 
   forum-service:
     <<: *go-service
@@ -139,6 +156,25 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+
+  # Crea la base `users` y su usuario. Corre una vez en cada `up` y termina; el
+  # script es idempotente, así sirve también con un volumen que ya existía.
+  users-db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGDATABASE: planner
+      PGUSER: ${PLANNER_DB_USER}
+      PGPASSWORD: ${PLANNER_DB_PASSWORD}
+      USERS_DB_USER: ${USERS_DB_USER:?falta USERS_DB_USER en el .env (ver .env.example)}
+      USERS_DB_PASSWORD: ${USERS_DB_PASSWORD:?falta USERS_DB_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/postgres:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-users-db.sh"]
+    restart: "no"
 
   # ---------------------------------------------------------------
   # Observabilidad
