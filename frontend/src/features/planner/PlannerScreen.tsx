@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus, CheckCircle2, Settings, Sparkles } from 'lucide-react'
 import { plannerApi } from '@/api/planner'
 import { ApiError } from '@/api/client'
-import { EXAM_TYPE_LABEL, type PlanProposal } from '@/api/types'
+import { EXAM_TYPE_LABEL, type Availability, type PlanProposal } from '@/api/types'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -26,6 +26,7 @@ export function PlannerScreen() {
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [requestingId, setRequestingId] = useState<string | null>(null)
   const [requestError, setRequestError] = useState<unknown>(null)
+  const [requestedExamId, setRequestedExamId] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState<unknown>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -57,6 +58,7 @@ export function PlannerScreen() {
 
   async function requestProposal(examId: string) {
     setRequestingId(examId)
+    setRequestedExamId(examId)
     setRequestError(null)
     setConfirmError(null)
     setMessage(null)
@@ -108,6 +110,15 @@ export function PlannerScreen() {
 
   const proposalExam = proposal ? examsById.get(proposal.examId) : undefined
   const missingData = requestError instanceof ApiError && requestError.status === 404
+  const requestedExam = requestedExamId ? examsById.get(requestedExamId) : undefined
+  // planner-service responde 500 cuando no hay horarios libres antes del examen (ni la IA ni las reglas
+  // encuentran lugar). Se explica con lo que sabemos de la disponibilidad guardada.
+  const noSlotsHint =
+    requestError instanceof ApiError && requestError.status === 500
+      ? availability && requestedExam && !hasSlotBefore(availability, requestedExam.startsAt)
+        ? 'Entre hoy y el examen no tenés ningún horario disponible. Agregá franjas en tu disponibilidad para los próximos días o cargá el examen con más margen.'
+        : 'No pudimos armar el plan. Lo más común es que no queden horarios libres antes del examen: agregá franjas en tu disponibilidad o probá con un examen más adelante.'
+      : undefined
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6">
@@ -145,12 +156,13 @@ export function PlannerScreen() {
                 ? new ApiError(404, 'NOT_FOUND', 'Todavía no guardaste tu disponibilidad, así que el agente no puede armar el plan.', [], requestError.correlationId)
                 : requestError
             }
+            hint={noSlotsHint}
           />
-          {missingData && (
+          {(missingData || noSlotsHint) && (
             <Link to="/configuracion" className="mt-3 inline-block">
               <Button size="sm">
                 <Settings size={14} />
-                Cargar mi disponibilidad
+                {missingData ? 'Cargar mi disponibilidad' : 'Revisar mi disponibilidad'}
               </Button>
             </Link>
           )}
@@ -188,6 +200,9 @@ export function PlannerScreen() {
                     <p className="text-xs text-muted">
                       {formatDateLong(localDate(exam.startsAt))} · {formatDaysUntil(localDate(exam.startsAt))}
                     </p>
+                    {availability && !hasSlotBefore(availability, exam.startsAt) && (
+                      <p className="mt-0.5 text-xs text-warning">No tenés horarios disponibles antes de este examen.</p>
+                    )}
                   </div>
                   <Button
                     size="sm"
@@ -251,4 +266,21 @@ export function PlannerScreen() {
       </section>
     </div>
   )
+}
+
+/** ¿Alguna franja semanal de la disponibilidad cae entre ahora y el comienzo del examen? */
+function hasSlotBefore(availability: Availability, examStartsAt: string): boolean {
+  const now = new Date()
+  const examStart = new Date(examStartsAt)
+  for (const day = new Date(now.getFullYear(), now.getMonth(), now.getDate()); day < examStart; day.setDate(day.getDate() + 1)) {
+    for (const slot of availability.weeklySlots) {
+      if (slot.weekday !== day.getDay()) continue
+      const [sh, sm] = slot.startTime.split(':').map(Number)
+      const [eh, em] = slot.endTime.split(':').map(Number)
+      const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), sh, sm)
+      const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), eh, em)
+      if (end > now && start < examStart) return true
+    }
+  }
+  return false
 }
