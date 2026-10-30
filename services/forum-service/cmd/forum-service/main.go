@@ -18,14 +18,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/apikey"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cache"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cached"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cleanup"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/ratelimit"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/relay"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/repository"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/search"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
@@ -102,12 +106,32 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	// Caché de lectura del foro (ADR-007): Memcached en docker compose; la nula
+	// (none) para medir sin caché; la local para desarrollar sin contenedores.
+	forumCache, err := cache.New(env("CACHE_PROVIDER", "none"), os.Getenv("MEMCACHED_ADDR"))
+	if err != nil {
+		return err
+	}
+	logger.Info("caché del foro elegida", "provider", forumCache.Name())
+	// El envoltorio de caché va entre el service y el repositorio (cache-aside,
+	// ADR-002). Los aciertos y fallos se registran en Prometheus y se resumen
+	// en los logs cada minuto.
+	cacheMetrics := &cached.Metrics{}
+	prometheus.MustRegister(cacheMetrics)
+	go cacheMetrics.Log(ctx, logger, forumCache.Name(), time.Minute)
+	cachedRepo := &cached.Repository{Repository: repo, Cache: forumCache, Metrics: cacheMetrics, Logger: logger}
+
 	// Búsqueda sobre Solr (ADR-006), con el indexador corriendo aparte. Sin
 	// SOLR_URL (por ejemplo, al probar sin Docker) se usa la de MongoDB.
 	var summarySearch service.SummarySearch = repository.NewSearch(db)
 	if solrURL := os.Getenv("SOLR_URL"); solrURL != "" {
 		solr := search.NewSolr(solrURL)
-		indexer := &search.Indexer{Solr: solr, Source: repo, Logger: logger}
+		indexer := &search.Indexer{Solr: solr, Source: repo, Logger: logger,
+			// Cuando Solr ya muestra el cambio (CommitWithin), el listado
+			// cacheado se invalida otra vez (ver cached.Repository.InvalidateList).
+			Changed: func(ctx context.Context) {
+				time.AfterFunc(search.CommitWithin, func() { cachedRepo.InvalidateList(ctx) })
+			}}
 		if len(os.Args) > 1 && os.Args[1] == "reindex" {
 			started := time.Now()
 			n, err := indexer.Rebuild(ctx)
@@ -125,7 +149,7 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Warn("sin SOLR_URL: la búsqueda usa MongoDB")
 	}
-	svc := &service.Service{Repo: repo, Search: summarySearch, Files: files}
+	svc := &service.Service{Repo: cachedRepo, Search: &cached.Search{Next: summarySearch, Repo: cachedRepo}, Files: files}
 
 	// Limpieza periódica de PDF huérfanos en MinIO (ADR-003).
 	cleanInterval, err := durationEnv("FORUM_CLEANUP_INTERVAL", cleanup.DefaultInterval)
@@ -138,6 +162,17 @@ func run(logger *slog.Logger) error {
 	}
 	go (&cleanup.Cleaner{Files: files, Docs: repo, Logger: logger, Interval: cleanInterval, MinAge: cleanMinAge}).Run(ctx)
 	logger.Info("limpieza de PDF huérfanos programada", "intervalMs", cleanInterval.Milliseconds(), "minAgeMs", cleanMinAge.Milliseconds())
+
+	// Relay del outbox a RabbitMQ (ADR-005, 3.3). Corre aparte: si el broker
+	// está caído, la moderación sigue y los eventos esperan en el outbox (RN-33).
+	if amqpURL := os.Getenv("RABBITMQ_URL"); amqpURL != "" {
+		publisher := &relay.RabbitMQ{URL: amqpURL, Exchange: relay.Exchange}
+		defer publisher.Close()
+		go (&relay.Relay{Outbox: repo, Publisher: publisher, Logger: logger}).Run(ctx)
+		logger.Info("relay del outbox a RabbitMQ iniciado", "exchange", relay.Exchange)
+	} else {
+		logger.Warn("sin RABBITMQ_URL: los eventos del outbox no se publican")
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", controller.Health(repo))

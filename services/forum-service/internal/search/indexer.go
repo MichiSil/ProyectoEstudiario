@@ -46,6 +46,9 @@ type Indexer struct {
 	SyncInterval      time.Duration
 	ReconcileInterval time.Duration
 	Now               func() time.Time
+	// Changed, si no es nil, se llama después de una sincronización que
+	// agregó o sacó resúmenes del índice (la usa la caché del listado).
+	Changed func(ctx context.Context)
 }
 
 func (ix *Indexer) now() time.Time {
@@ -156,6 +159,9 @@ func (ix *Indexer) Sync(ctx context.Context, since time.Time) error {
 		// que se mandó a Solr (sin los ≤ 5 s de commitWithin). Sirve para medir
 		// RN-26: un aprobado aparece en menos de 1 minuto.
 		ix.Logger.Info("índice sincronizado", "indexed", indexed, "removed", removed, "lagMs", maxLag.Milliseconds())
+		if ix.Changed != nil {
+			ix.Changed(ctx)
+		}
 	}
 	return nil
 }
