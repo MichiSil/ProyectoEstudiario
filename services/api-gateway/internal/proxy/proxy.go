@@ -46,9 +46,10 @@ func Users(target *url.URL, logger *slog.Logger) http.Handler {
 }
 
 // Forum devuelve un reverse proxy hacia forum-service: /api/forum/<ruta> se
-// reenvía como /<ruta>, con 5 s y 20 s para subir un PDF.
-func Forum(target *url.URL, logger *slog.Logger) http.Handler {
-	return newProxy("forum-service", ForumPrefix, target, forumTimeout, logger)
+// reenvía como /<ruta>, con 5 s y 20 s para subir un PDF, repartido entre las
+// instancias del balanceador (ADR-012).
+func Forum(b *Balancer, logger *slog.Logger) http.Handler {
+	return Balanced(b, ForumPrefix, forumTimeout, logger)
 }
 
 // forumTimeout da 20 s a la subida de un resumen (PDF de hasta 10 MB) y 5 s al resto.

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,15 +59,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	forumURL := os.Getenv("FORUM_SERVICE_URL")
-	if forumURL == "" {
-		forumURL = defaultForumURL
+	// forum-service corre en varias instancias (ADR-012): FORUM_SERVICE_URLS
+	// las lista separadas por comas. FORUM_SERVICE_URL sigue sirviendo para una sola.
+	forumURLs := os.Getenv("FORUM_SERVICE_URLS")
+	if forumURLs == "" {
+		forumURLs = os.Getenv("FORUM_SERVICE_URL")
 	}
-	forumTarget, err := url.Parse(forumURL)
-	if err != nil {
-		logger.Error("FORUM_SERVICE_URL no es una URL válida", "error", err)
-		os.Exit(1)
+	if forumURLs == "" {
+		forumURLs = defaultForumURL
 	}
+	var forumTargets []*url.URL
+	for _, raw := range strings.Split(forumURLs, ",") {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			logger.Error("FORUM_SERVICE_URLS tiene una URL inválida", "url", raw)
+			os.Exit(1)
+		}
+		forumTargets = append(forumTargets, u)
+	}
+	forumBalancer := proxy.NewBalancer("forum-service", forumTargets, logger)
+	logger.Info("instancias de forum-service", "count", len(forumTargets))
 
 	// Los JWT los firma users-service con este secreto compartido (HS256).
 	// Sin un secreto válido el gateway no arranca: nunca acepta pedidos sin validar.
@@ -78,6 +90,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Chequeo de salud de las instancias del foro hasta que se apague el gateway.
+	go forumBalancer.Run(ctx)
 
 	shutdownTracing, err := observability.SetupTracing(ctx, serviceName)
 	if err != nil {
@@ -97,7 +111,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	forum, err := auth.WithInternalToken(os.Getenv("INTERNAL_TOKEN"), proxy.Forum(forumTarget, logger))
+	forum, err := auth.WithInternalToken(os.Getenv("INTERNAL_TOKEN"), proxy.Forum(forumBalancer, logger))
 	if err != nil {
 		logger.Error("no se puede llamar a los servicios internos", "error", err)
 		os.Exit(1)

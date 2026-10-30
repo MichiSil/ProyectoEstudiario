@@ -165,7 +165,7 @@ func TestForumReenviaSinElPrefijoYDa20sALaSubida(t *testing.T) {
 	defer forum.Close()
 
 	rec := httptest.NewRecorder()
-	Forum(mustURL(t, forum.URL), testLogger).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/forum/summaries/abc/file", nil))
+	Forum(NewBalancer("forum-service", []*url.URL{mustURL(t, forum.URL)}, testLogger), testLogger).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/forum/summaries/abc/file", nil))
 	if rec.Code != http.StatusOK || path != "/summaries/abc/file" {
 		t.Fatalf("status = %d, ruta = %q; se esperaba 200 y /summaries/abc/file", rec.Code, path)
 	}

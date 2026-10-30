@@ -183,7 +183,7 @@ func run(logger *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8083"),
-		Handler:           observability.Middleware(serviceName, logger, mux),
+		Handler:           withInstance(env("INSTANCE", env("HOSTNAME", "local")), observability.Middleware(serviceName, logger, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		// Subir un PDF de 10 MB puede tardar más que una lectura común (ADR-005: 20 s en el gateway).
 		ReadTimeout:  30 * time.Second,
@@ -237,4 +237,14 @@ func retry(ctx context.Context, logger *slog.Logger, name string, ping func(cont
 		}
 		wait *= 2
 	}
+}
+
+// withInstance agrega a cada respuesta el nombre de la instancia que la
+// atendió. El api-gateway lo devuelve en X-Served-By, así se ve el reparto
+// entre las dos instancias (ADR-012).
+func withInstance(instance string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Instance", instance)
+		next.ServeHTTP(w, r)
+	})
 }
