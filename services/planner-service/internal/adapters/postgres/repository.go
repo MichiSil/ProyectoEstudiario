@@ -66,7 +66,7 @@ func (r *Repository) GetSubject(ctx context.Context, studentID, id string) (doma
 	var s domain.Subject
 	var diff int
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, student_id, name, professors, difficulty FROM subjects WHERE id = $1 AND student_id = $2`,
+		`SELECT id, student_id, name, professors, difficulty FROM subjects WHERE id = $1 AND student_id = $2 AND deleted_at IS NULL`,
 		id, studentID).Scan(&s.ID, &s.StudentID, &s.Name, &s.Professors, &diff)
 	s.Difficulty = domain.Difficulty(diff)
 	return s, notFound(err)
@@ -74,7 +74,7 @@ func (r *Repository) GetSubject(ctx context.Context, studentID, id string) (doma
 
 func (r *Repository) ListSubjects(ctx context.Context, studentID string) ([]domain.Subject, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, student_id, name, professors, difficulty FROM subjects WHERE student_id = $1 ORDER BY name`, studentID)
+		`SELECT id, student_id, name, professors, difficulty FROM subjects WHERE student_id = $1 AND deleted_at IS NULL ORDER BY name`, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func (r *Repository) GetExam(ctx context.Context, studentID, id string) (domain.
 	var e domain.Exam
 	var typ, status, modality string
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, student_id, subject_id, type, starts_at, topics, status, modality, material_ids FROM exams WHERE id = $1 AND student_id = $2`,
+		`SELECT id, student_id, subject_id, type, starts_at, topics, status, modality, material_ids FROM exams e WHERE id = $1 AND student_id = $2 AND `+liveSubjectSQL,
 		id, studentID).Scan(&e.ID, &e.StudentID, &e.SubjectID, &typ, &e.StartsAt, &e.Topics, &status, &modality, &e.MaterialIDs)
 	e.Type, e.Status, e.Modality = domain.ExamType(typ), domain.ExamStatus(status), domain.ExamModality(modality)
 	return e, notFound(err)
@@ -124,11 +124,14 @@ const planStatusSQL = `COALESCE((SELECT p.status FROM plans p
 				WHERE p.exam_id = e.id AND p.status IN ('confirmado', 'desactualizado')
 				ORDER BY p.status = 'confirmado' DESC, p.created_at DESC LIMIT 1), '')`
 
+// liveSubjectSQL filtra los exámenes (alias e) cuya materia no fue borrada.
+const liveSubjectSQL = `EXISTS (SELECT 1 FROM subjects su WHERE su.id = e.subject_id AND su.deleted_at IS NULL)`
+
 // ListExams devuelve los exámenes con el estado de su plan vigente.
 func (r *Repository) ListExams(ctx context.Context, studentID string) ([]domain.Exam, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT e.id, e.student_id, e.subject_id, e.type, e.starts_at, e.topics, e.status, e.modality, e.material_ids, `+planStatusSQL+`
-		FROM exams e WHERE e.student_id = $1 ORDER BY e.starts_at`, studentID)
+		FROM exams e WHERE e.student_id = $1 AND `+liveSubjectSQL+` ORDER BY e.starts_at`, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +244,41 @@ func (r *Repository) CancelExam(ctx context.Context, studentID, id string) (doma
 	}
 	e.Status = domain.ExamCancelled
 	return e, tx.Commit(ctx)
+}
+
+// DeleteSubject borra una materia (RF-04): cancela sus exámenes y sus planes y
+// libera las sesiones no completadas, como CancelExam (RN-17), todo en una
+// transacción. La materia queda marcada como borrada: deja de verse junto con
+// sus exámenes y sesiones, pero las completadas se conservan en la base.
+func (r *Repository) DeleteSubject(ctx context.Context, studentID, id string) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	if err := lockStudent(ctx, tx, studentID); err != nil {
+		return err
+	}
+	var found string
+	err = tx.QueryRow(ctx, `SELECT id FROM subjects WHERE id = $1 AND student_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+		id, studentID).Scan(&found)
+	if err != nil {
+		return notFound(err)
+	}
+	for _, stmt := range []string{
+		`DELETE FROM sessions WHERE student_id = $2 AND status <> 'completada'
+			AND exam_id IN (SELECT id FROM exams WHERE subject_id = $1 AND student_id = $2)`,
+		`UPDATE plans SET status = 'cancelado' WHERE status IN ('propuesto', 'confirmado', 'desactualizado')
+			AND exam_id IN (SELECT id FROM exams WHERE subject_id = $1 AND student_id = $2)`,
+		`UPDATE exams SET status = 'cancelado' WHERE subject_id = $1 AND student_id = $2 AND status <> 'cancelado'`,
+		`UPDATE subjects SET deleted_at = now() WHERE id = $1 AND student_id = $2`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, id, studentID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) CreateMaterial(ctx context.Context, m domain.Material) error {
@@ -361,7 +399,9 @@ func listSessions(ctx context.Context, q interface {
 		`SELECT s.id, s.plan_id, s.student_id, s.exam_id, s.starts_at, s.ends_at, s.topic, s.objective, s.status,
 			p.status = 'desactualizado'
 		FROM sessions s JOIN plans p ON p.id = s.plan_id
-		WHERE s.student_id = $1 AND s.ends_at > $2 ORDER BY s.starts_at`, studentID, from)
+		WHERE s.student_id = $1 AND s.ends_at > $2
+			AND EXISTS (SELECT 1 FROM exams e WHERE e.id = s.exam_id AND `+liveSubjectSQL+`)
+		ORDER BY s.starts_at`, studentID, from)
 	if err != nil {
 		return nil, err
 	}

@@ -39,6 +39,11 @@ type Proposal struct {
 // el agente de IA no estaba disponible (RN-09).
 const WarningAIFallback = "AI_FALLBACK"
 
+// WarningInsufficientTime indica que entre hoy y el examen no hay horarios
+// libres para todas las sesiones que harían falta: el plan junta temas en
+// menos sesiones. El estudiante puede sumar franjas o subir la capacidad diaria.
+const WarningInsufficientTime = "INSUFFICIENT_TIME"
+
 // PlanGenerator propone las sesiones de un plan. Lo implementan el motor de
 // reglas (adapters/rules) y el agente de IA (adapters/ai).
 type PlanGenerator interface {
@@ -70,6 +75,9 @@ type PlanRepository interface {
 	// no completadas, todo en una transacción (RN-17). Cancelar un examen ya
 	// cancelado no cambia nada.
 	CancelExam(ctx context.Context, studentID, examID string) (domain.Exam, error)
+	// DeleteSubject borra la materia, cancela sus exámenes y planes y libera
+	// sus sesiones no completadas, todo en una transacción.
+	DeleteSubject(ctx context.Context, studentID, subjectID string) error
 
 	CreateMaterial(ctx context.Context, m domain.Material) error
 	ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error)

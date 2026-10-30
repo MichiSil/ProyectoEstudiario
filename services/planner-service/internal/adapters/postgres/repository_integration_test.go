@@ -164,3 +164,87 @@ func TestIntegration_RestriccionDeSuperposicion(t *testing.T) {
 		t.Fatal("la base debería rechazar una sesión superpuesta")
 	}
 }
+
+// RF-04: borrar una materia cancela sus exámenes y planes y libera las
+// sesiones pendientes; las completadas se conservan en la base, pero la
+// materia deja de verse con todo lo suyo.
+func TestIntegration_BorrarMateria(t *testing.T) {
+	svc, pool, ids := newService(t)
+	student, examID := split(ids)
+	ctx := context.Background()
+
+	plan, err := svc.ProposePlan(ctx, student, examID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.ConfirmPlan(ctx, student, plan.ID, "clave-borrar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE sessions SET status = 'completada' WHERE id = $1`, res.Sessions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	exam, err := svc.Repo.GetExam(ctx, student, examID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.DeleteSubject(ctx, student, exam.SubjectID); err != nil {
+		t.Fatalf("borrar la materia: %v", err)
+	}
+	subjects, _ := svc.ListSubjects(ctx, student)
+	exams, _ := svc.ListExams(ctx, student)
+	sessions, _ := svc.ListSessions(ctx, student)
+	if len(subjects) != 0 || len(exams) != 0 || len(sessions) != 0 {
+		t.Errorf("después de borrar se ven %d materias, %d exámenes y %d sesiones", len(subjects), len(exams), len(sessions))
+	}
+	if got := countSessions(t, pool, student); got != 1 {
+		t.Errorf("en la base tienen que quedar sólo la sesión completada, quedan %d", got)
+	}
+	var planStatus, examStatus string
+	_ = pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, plan.ID).Scan(&planStatus)
+	_ = pool.QueryRow(ctx, `SELECT status FROM exams WHERE id = $1`, examID).Scan(&examStatus)
+	if planStatus != "cancelado" || examStatus != "cancelado" {
+		t.Errorf("plan %q y examen %q, se esperaban cancelados", planStatus, examStatus)
+	}
+	if err := svc.DeleteSubject(ctx, student, exam.SubjectID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("borrar dos veces: se esperaba ErrNotFound, llegó %v", err)
+	}
+}
+
+// RN-16: cambiar los temas desactualiza el plan, y rehacerlo a pedido también;
+// el plan nuevo reemplaza las sesiones pendientes del anterior.
+func TestIntegration_RehacerPlan(t *testing.T) {
+	svc, pool, ids := newService(t)
+	student, examID := split(ids)
+	ctx := context.Background()
+
+	if _, err := svc.Replan(ctx, student, examID); !errors.Is(err, domain.ErrNoConfirmedPlan) {
+		t.Fatalf("sin plan: se esperaba ErrNoConfirmedPlan, llegó %v", err)
+	}
+	first, _ := svc.ProposePlan(ctx, student, examID)
+	if _, err := svc.ConfirmPlan(ctx, student, first.ID, "clave-1"); err != nil {
+		t.Fatal(err)
+	}
+	topics := []string{"Integrales", "Series", "Ecuaciones diferenciales"}
+	e, err := svc.UpdateExam(ctx, student, examID, app.ExamChanges{Topics: &topics})
+	if err != nil || e.PlanStatus != domain.PlanOutdated {
+		t.Fatalf("cambiar los temas: estado %q, error %v", e.PlanStatus, err)
+	}
+	second, _ := svc.ProposePlan(ctx, student, examID)
+	res, err := svc.ConfirmPlan(ctx, student, second.ID, "clave-2")
+	if err != nil {
+		t.Fatalf("confirmar el plan nuevo: %v", err)
+	}
+	if got := countSessions(t, pool, student); got != len(res.Sessions) {
+		t.Fatalf("tendrían que quedar las %d sesiones del plan nuevo, hay %d", len(res.Sessions), got)
+	}
+
+	// A pedido, sin cambiar el examen.
+	if e, err := svc.Replan(ctx, student, examID); err != nil || e.PlanStatus != domain.PlanOutdated {
+		t.Fatalf("rehacer a pedido: estado %q, error %v", e.PlanStatus, err)
+	}
+	if got := countSessions(t, pool, student); got != len(res.Sessions) {
+		t.Fatalf("hasta confirmar el nuevo, las sesiones siguen: hay %d de %d", got, len(res.Sessions))
+	}
+}

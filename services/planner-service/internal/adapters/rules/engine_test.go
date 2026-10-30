@@ -169,3 +169,84 @@ func TestGenerate_SinDisponibilidad(t *testing.T) {
 		t.Fatalf("se esperaba ErrNoAvailability, llegó %v", err)
 	}
 }
+
+// El caso que encontramos probando: hoy viernes, el sábado libre de 8 a 20 y
+// el parcial el lunes a las 9. Antes el motor proponía una sola sesión de un
+// solo tema, porque buscaba como máximo un horario por día.
+func weekendInput(maxDaily int) app.ProposalInput {
+	friday := time.Date(2026, 10, 23, 10, 0, 0, 0, cba)
+	return app.ProposalInput{
+		Subject: domain.Subject{ID: "mat-1", Name: "Análisis", Difficulty: domain.DifficultyHard},
+		Exam: domain.Exam{ID: "ex-1", StartsAt: time.Date(2026, 10, 26, 9, 0, 0, 0, cba),
+			Topics: []string{"Límites", "Derivadas", "Integrales"}, Status: domain.ExamScheduled},
+		Availability: domain.Availability{
+			Slots:                   []domain.Slot{{Weekday: time.Saturday, StartMinute: 8 * 60, EndMinute: 20 * 60}},
+			MaxDailyMinutes:         maxDaily,
+			PreferredSessionMinutes: 60,
+			Location:                cba,
+		},
+		Now: friday,
+	}
+}
+
+func coveredTopics(p app.Proposal) string {
+	var all []string
+	for _, d := range p.Drafts {
+		all = append(all, d.Topic)
+	}
+	return strings.Join(all, " | ")
+}
+
+func TestGenerate_VariasSesionesElMismoDia(t *testing.T) {
+	p := generate(t, weekendInput(600))
+	if len(p.Drafts) != 8 { // 7 por dificultad + 3 temas / 2
+		t.Fatalf("se esperaban 8 sesiones el sábado, llegaron %d: %s", len(p.Drafts), coveredTopics(p))
+	}
+	for i := 1; i < len(p.Drafts); i++ {
+		if gap := p.Drafts[i].Start.Sub(p.Drafts[i-1].End()); gap < breakMinutes*time.Minute {
+			t.Errorf("entre la sesión %d y la %d hay %s de descanso, se esperaban al menos %d min", i-1, i, gap, breakMinutes)
+		}
+	}
+	for _, topic := range []string{"Límites", "Derivadas", "Integrales", "Repaso general"} {
+		if !strings.Contains(coveredTopics(p), topic) {
+			t.Errorf("falta %q en el plan: %s", topic, coveredTopics(p))
+		}
+	}
+	if len(p.Warnings) != 0 {
+		t.Errorf("con tiempo suficiente no tiene que haber avisos: %v", p.Warnings)
+	}
+}
+
+// Si la capacidad diaria no alcanza, el plan cubre igual todos los temas
+// (juntándolos) y avisa que falta tiempo.
+func TestGenerate_PocoTiempoCubreTodosLosTemasYAvisa(t *testing.T) {
+	p := generate(t, weekendInput(120))
+	if len(p.Drafts) != 2 {
+		t.Fatalf("con 120 minutos de capacidad entran 2 sesiones de 60, llegaron %d", len(p.Drafts))
+	}
+	for _, topic := range []string{"Límites", "Derivadas", "Integrales"} {
+		if !strings.Contains(coveredTopics(p), topic) {
+			t.Errorf("falta %q en el plan: %s", topic, coveredTopics(p))
+		}
+	}
+	if len(p.Warnings) != 1 || p.Warnings[0] != app.WarningInsufficientTime {
+		t.Errorf("se esperaba el aviso %s, llegó %v", app.WarningInsufficientTime, p.Warnings)
+	}
+}
+
+// Con varios días disponibles, primero se reparte una sesión por día y recién
+// después se agrega una segunda en el mismo día.
+func TestGenerate_PrimeroUnaSesionPorDia(t *testing.T) {
+	in := input(domain.DifficultyEasy, 10*24*time.Hour, "Tema")
+	in.Availability.MaxDailyMinutes = 300
+	in.Availability.PreferredSessionMinutes = 60
+	p := generate(t, in)
+	seen := map[string]bool{}
+	for _, d := range p.Drafts {
+		day := d.Start.Format("2006-01-02")
+		if seen[day] {
+			t.Errorf("hay dos sesiones el %s habiendo días libres", day)
+		}
+		seen[day] = true
+	}
+}

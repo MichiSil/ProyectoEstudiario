@@ -11,8 +11,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +46,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("POST /subjects", h.withStudent(h.createSubject))
 	mux.HandleFunc("GET /subjects", h.withStudent(h.listSubjects))
+	mux.HandleFunc("DELETE /subjects/{subjectId}", h.withStudent(h.deleteSubject))
 	mux.HandleFunc("GET /subjects/{subjectId}/materials", h.withStudent(h.listMaterials))
 	mux.HandleFunc("POST /subjects/{subjectId}/materials", h.withStudent(h.addMaterial))
 	mux.HandleFunc("DELETE /materials/{materialId}", h.withStudent(h.deleteMaterial))
@@ -51,6 +54,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /exams", h.withStudent(h.listExams))
 	mux.HandleFunc("PATCH /exams/{examId}", h.withStudent(h.updateExam))
 	mux.HandleFunc("POST /exams/{examId}/cancel", h.withStudent(h.cancelExam))
+	mux.HandleFunc("POST /exams/{examId}/replan", h.withStudent(h.replan))
+	mux.HandleFunc("GET /availability", h.withStudent(h.getAvailability))
 	mux.HandleFunc("PUT /availability", h.withStudent(h.setAvailability))
 	mux.HandleFunc("POST /exams/{examId}/proposals", h.withStudent(h.propose))
 	mux.HandleFunc("POST /plans/{planId}/confirm", h.withStudent(h.confirm))
@@ -396,6 +401,56 @@ func (h *Handler) setAvailability(w http.ResponseWriter, r *http.Request, studen
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// replan deja desactualizado el plan confirmado del examen a pedido del
+// estudiante: 200 con el examen, o 409 NO_CONFIRMED_PLAN si no tiene plan.
+func (h *Handler) replan(w http.ResponseWriter, r *http.Request, student string) {
+	e, err := h.Svc.Replan(r.Context(), student, r.PathValue("examId"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toExamDTO(e))
+}
+
+// deleteSubject borra una materia con sus exámenes: 204, o 404 si no existe
+// o ya estaba borrada.
+func (h *Handler) deleteSubject(w http.ResponseWriter, r *http.Request, student string) {
+	if err := h.Svc.DeleteSubject(r.Context(), student, r.PathValue("subjectId")); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getAvailability devuelve la disponibilidad con la misma forma que recibe el
+// PUT, así el frontend la lee del servidor y no sólo del navegador.
+func (h *Handler) getAvailability(w http.ResponseWriter, r *http.Request, student string) {
+	av, err := h.Svc.Availability(r.Context(), student)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	slots := append([]domain.Slot(nil), av.Slots...)
+	sort.Slice(slots, func(a, b int) bool {
+		if slots[a].Weekday != slots[b].Weekday {
+			return slots[a].Weekday < slots[b].Weekday
+		}
+		return slots[a].StartMinute < slots[b].StartMinute
+	})
+	out := availabilityDTO{Slots: []slotDTO{}, MaxDailyMinutes: av.MaxDailyMinutes, PreferredSessionMinutes: av.PreferredSessionMinutes, Timezone: "UTC"}
+	if av.Location != nil {
+		out.Timezone = av.Location.String()
+	}
+	for _, s := range slots {
+		out.Slots = append(out.Slots, slotDTO{Weekday: int(s.Weekday), StartTime: formatClock(s.StartMinute), EndTime: formatClock(s.EndMinute)})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func formatClock(minute int) string {
+	return fmt.Sprintf("%02d:%02d", minute/60, minute%60)
+}
+
 func (h *Handler) propose(w http.ResponseWriter, r *http.Request, student string) {
 	p, err := h.Svc.ProposePlan(r.Context(), student, r.PathValue("examId"))
 	if err != nil {
@@ -450,6 +505,10 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.As(err, &verr):
 		h.problem(w, r, http.StatusUnprocessableEntity, "BUSINESS_RULE_VIOLATION", "la operación incumple reglas de negocio", verr.Violations)
+	case errors.Is(err, domain.ErrNoConfirmedPlan):
+		h.problem(w, r, http.StatusConflict, "NO_CONFIRMED_PLAN", "el examen no tiene un plan confirmado para rehacer", nil)
+	case errors.Is(err, domain.ErrAvailabilityNotSet):
+		h.problem(w, r, http.StatusNotFound, "AVAILABILITY_NOT_SET", "todavía no cargaste tu disponibilidad", nil)
 	case errors.Is(err, domain.ErrNotFound):
 		h.problem(w, r, http.StatusNotFound, "NOT_FOUND", "el recurso no existe", nil)
 	case errors.Is(err, domain.ErrPlanNotProposed):

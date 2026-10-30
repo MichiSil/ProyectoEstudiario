@@ -225,10 +225,13 @@ curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
 ```
 
 - `GET /exams` devuelve cada examen con `planStatus`: `confirmado`, `desactualizado` o ausente si todavía no tiene plan.
-- `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha de un examen con plan confirmado, el plan pasa a **desactualizado** y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
+- `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`, `modality`, `materialIds`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha, los temas, la modalidad o el material de un examen con plan confirmado, el plan pasa a **desactualizado** (cambiar sólo el tipo no lo afecta) y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
+- `POST /exams/{id}/replan` rehace el plan a pedido, aunque el examen no haya cambiado (por ejemplo, después de cambiar la disponibilidad): el plan confirmado pasa a **desactualizado** y sigue el mismo camino. Sus sesiones siguen en el calendario hasta confirmar uno nuevo. Responde `409 NO_CONFIRMED_PLAN` si el examen no tiene plan confirmado.
 - `POST /exams/{id}/cancel` cancela el examen y sus planes, libera las sesiones pendientes y conserva las completadas como historial (RN-17). Cancelar dos veces no falla. Un examen cancelado no se puede editar ni planificar: responde `409 EXAM_CANCELLED`.
 
-Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
+**Borrar una materia:** `DELETE /subjects/{id}` responde `204` (o `404` si no existe o ya estaba borrada). Cancela sus exámenes y planes y libera las sesiones pendientes, igual que cancelar cada examen. La materia deja de verse junto con sus exámenes y sesiones; las sesiones completadas se conservan en la base.
+
+Editar, cancelar, borrar una materia y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
 
 ### Material de cada materia
 
@@ -533,6 +536,7 @@ H=(-H Content-Type:application/json -H X-Correlation-Id:prueba-ia -H "Authorizat
 G=localhost:8080/api/planner
 curl "${H[@]}" -X POST $G/subjects -d '{"name":"Análisis II","difficulty":3}'          # devuelve el id de la materia
 curl "${H[@]}" -X PUT $G/availability -d '{"weeklySlots":[{"weekday":1,"startTime":"18:00","endTime":"21:00"},{"weekday":3,"startTime":"18:00","endTime":"21:00"}],"maxDailyMinutes":120,"preferredSessionMinutes":90,"timezone":"America/Argentina/Cordoba"}'
+curl "${H[@]}" $G/availability                                                      # la misma forma que el PUT; 404 AVAILABILITY_NOT_SET si nunca se cargó
 curl "${H[@]}" -X POST $G/exams -d '{"subjectId":"<id de la materia>","type":"parcial","startsAt":"2026-11-10T09:00:00-03:00","topics":["Integrales dobles","Series"]}'
 curl "${H[@]}" -X POST $G/exams/<id del examen>/proposals
 docker compose logs planner-service | grep prueba-ia
@@ -548,7 +552,7 @@ npm install
 npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
 ```
 
-Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. Los exámenes se leen de `GET /exams` y se editan o cancelan desde su detalle en el calendario. planner-service todavía no expone `GET /availability`, así que el frontend recuerda en el navegador la disponibilidad que el servidor aceptó al guardarla.
+Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. Los exámenes se leen de `GET /exams` y se editan o cancelan desde su detalle en el calendario. La disponibilidad se guarda con `PUT /availability` y se lee con `GET /availability`, con la misma forma.
 
 ### Estructura del repositorio
 

@@ -100,4 +100,7 @@ CREATE INDEX IF NOT EXISTS materials_subject_idx ON materials (student_id, subje
 -- Modalidad del examen y material que entra. Se agregan con ALTER para que las
 -- bases que ya existían se adapten solas al arrancar.
 ALTER TABLE exams ADD COLUMN IF NOT EXISTS modality TEXT NOT NULL DEFAULT '';
+-- Una materia borrada (RF-04) se marca y deja de verse con sus exámenes y
+-- sesiones; la fila queda porque sus sesiones completadas la referencian.
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE exams ADD COLUMN IF NOT EXISTS material_ids TEXT[] NOT NULL DEFAULT '{}';
