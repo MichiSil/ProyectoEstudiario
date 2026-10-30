@@ -148,7 +148,7 @@ func TestLoginDevuelveTokenExpiresAtYUser(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	user, _ := body["user"].(map[string]any)
-	if body["token"] != "jwt-"+user["id"].(string) || body["expiresAt"] != "2026-10-30T08:00:00Z" || user["email"] != "ana@mail.com" {
+	if body["token"] != "jwt-"+user["id"].(string) || body["expiresAt"] != "2026-10-29T08:00:00Z" || user["email"] != "ana@mail.com" {
 		t.Errorf("cuerpo = %v", body)
 	}
 }

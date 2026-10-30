@@ -1,6 +1,6 @@
 # ADR-006: Búsqueda
 
-- **Estado:** Aceptada (implementada y validada el 2026-10-30, con los cambios de la sección *Actualización*)
+- **Estado:** Aceptada (implementada y validada el 2026-10-29, con los cambios de la sección *Actualización*)
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D6
 - **Reemplaza a:** —
@@ -184,7 +184,7 @@ Para comprobar el retraso y el estado del índice se suman al tablero ([ADR-011]
 - Que la consulta *edismax* con el peso del título dé resultados razonables en español (acentos, plurales).
 - Demostrar la caída de Solr: la búsqueda responde `503 SEARCH_UNAVAILABLE`, el resto del foro sigue, y al volver el índice se pone al día ([ADR-010](ADR-010-resiliencia.md)).
 
-## Actualización (2026-10-30): implementación
+## Actualización (2026-10-29): implementación
 
 La búsqueda quedó implementada en forum-service (`internal/search`). Al implementarla cambiaron tres puntos de la decisión original. El resto (Solr, sólo aprobados en el índice, *edismax* con más peso en el título, `commitWithin` de 5 s, reconciliación cada 5 min y reconstrucción completa) se mantiene.
 

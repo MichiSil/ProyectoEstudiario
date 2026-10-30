@@ -16,7 +16,7 @@ type Source interface {
 	EachApproved(ctx context.Context, fn func(model.Summary) error) error
 }
 
-// Valores por defecto del indexador (ADR-006, actualización del 2026-10-30).
+// Valores por defecto del indexador (ADR-006, actualización del 2026-10-29).
 const (
 	DefaultSyncInterval      = 5 * time.Second
 	DefaultReconcileInterval = 5 * time.Minute
