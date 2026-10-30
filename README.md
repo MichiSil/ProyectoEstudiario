@@ -111,7 +111,7 @@ Además de lo obligatorio, el grupo encara dos desafíos adicionales. El alcance
 
 Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.
 
-En la Entrega 2 funciona **planner-service** (pedir y confirmar el plan de estudio) con PostgreSQL. Los demás servicios son esqueletos que sólo responden `GET /health`.
+Funcionan **users-service** (registro, inicio de sesión y emisión del JWT) y **planner-service** (pedir y confirmar el plan de estudio), cada uno con su base en PostgreSQL. forum-service y notification-service todavía son esqueletos que sólo responden `GET /health`.
 
 ### Requisitos
 
@@ -127,7 +127,7 @@ cp .env.example .env        # variables locales; los secretos reales nunca se su
 docker compose up --build
 ```
 
-La primera vez tarda unos minutos porque descarga las imágenes y compila los servicios. La base `planner` se crea sola con el usuario y la contraseña del `.env`.
+La primera vez tarda unos minutos porque descarga las imágenes y compila los servicios. Las bases `planner` y `users` se crean solas, cada una con su usuario y su contraseña del `.env`.
 
 Para detenerlo:
 
@@ -141,12 +141,12 @@ docker compose down         # agregar -v para borrar también los datos locales
 |---|---|---|
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
 | planner-service | http://localhost:8082 | Plan de estudio (publicado también para la capacidad de otros grupos, ADR-008) |
-| users-service | http://localhost:8081 | Esqueleto: sólo `GET /health` |
+| users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
 | forum-service | http://localhost:8083 | Esqueleto: sólo `GET /health` |
 | notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
-| PostgreSQL (base `planner`) | `localhost:5432` | Usuario y contraseña: variables `PLANNER_DB_*` del `.env` |
+| PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
 
@@ -164,24 +164,51 @@ docker compose up planner-mock
 
 > Las credenciales del proveedor de IA se configuran sólo en el `.env` local y nunca se suben al repositorio. Sin credenciales de IA, el plan se arma con el motor de reglas (RN-09).
 
-### Identidad y tokens de prueba
+### Cuentas e identidad
 
-Todo pedido a `/api/planner/*` pasa por el api-gateway y necesita un **JWT** en `Authorization: Bearer <token>`. El gateway lo valida, borra cualquier `X-User-Id` que mande el cliente y completa la identidad a partir del token ([ADR-001](docs/adr/ADR-001-limites-de-servicios.md)). planner-service sólo acepta `X-User-Id` si el pedido trae además el secreto interno que le manda el gateway, así que llamarlo directo a su puerto con el id de otro estudiante devuelve `401`.
+Todo pedido a `/api/planner/*` pasa por el api-gateway y necesita un **JWT** en `Authorization: Bearer <token>`. El token lo emite **users-service** al iniciar sesión. El gateway lo valida, borra cualquier `X-User-Id` que mande el cliente y completa la identidad a partir del token ([ADR-001](docs/adr/ADR-001-limites-de-servicios.md)). planner-service y users-service sólo aceptan `X-User-Id` si el pedido trae además el secreto interno que les manda el gateway, así que llamarlos directo a su puerto con el id de otro usuario devuelve `401`.
 
-Mientras users-service no emita tokens, se genera uno de prueba con el mismo `JWT_SECRET` del `.env`:
+**1. Registrarse** (público, no necesita token):
+
+```bash
+curl -X POST http://localhost:8080/api/users/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Ana Pérez","email":"ana@mail.com","password":"secreta123"}'
+```
+
+Devuelve `201` con el usuario. La contraseña tiene como mínimo 8 caracteres y se guarda sólo como hash bcrypt (RN-02). Un mail ya registrado devuelve `409 EMAIL_IN_USE` (RN-01), y datos inválidos, `422 VALIDATION_ERROR`. El rol es `estudiante`; el rol `admin` no se elige (RF-03): lo reciben los mails de la variable `ADMIN_EMAILS` del `.env`.
+
+**2. Iniciar sesión** y guardar el token (vale 8 horas):
+
+```bash
+export TOKEN=$(curl -s -X POST http://localhost:8080/api/users/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ana@mail.com","password":"secreta123"}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+```
+
+El login devuelve `{"token": ..., "expiresAt": ..., "user": {...}}`. Si el mail no existe o la contraseña está mal, responde `401 INVALID_CREDENTIALS` con el mismo mensaje en los dos casos.
+
+**3. Usar el token:**
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/users/me
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/planner/sessions
+```
+
+**Tokens de prueba.** Para tests o scripts que no quieren pasar por el registro, el comando `devtoken` firma un token con el mismo formato y el `JWT_SECRET` del `.env`:
 
 ```bash
 cd services/api-gateway
 export TOKEN=$(JWT_SECRET=$(grep ^JWT_SECRET= ../../.env | cut -d= -f2 | tr -d '\r') go run ./cmd/devtoken -sub estudiante-1)
 cd ../..
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/planner/sessions
 ```
 
-> Si ya tenías un `.env` de antes, agregale `JWT_SECRET` e `INTERNAL_TOKEN` copiándolos de `.env.example`: sin ellos, `docker compose` no levanta.
+> Si ya tenías un `.env` de antes, agregale las variables nuevas copiándolas de `.env.example` (`JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_USER`, `USERS_DB_PASSWORD` y `ADMIN_EMAILS`): sin ellas, `docker compose` no levanta.
 
 ### Logs y trazas
 
-El api-gateway y planner-service escriben **un log JSON por pedido** con `time`, `level`, `service`, `correlationId`, `method`, `path`, `status` y `durationMs`. Cada pedido lleva un `X-Correlation-Id`: si el cliente no lo manda, lo genera el gateway, lo reenvía al servicio y lo devuelve en la respuesta. La estrategia completa está en el [ADR-011](docs/adr/ADR-011-observabilidad.md).
+El api-gateway, users-service y planner-service escriben **un log JSON por pedido** con `time`, `level`, `service`, `correlationId`, `method`, `path`, `status` y `durationMs`. Cada pedido lleva un `X-Correlation-Id`: si el cliente no lo manda, lo genera el gateway, lo reenvía al servicio y lo devuelve en la respuesta. La estrategia completa está en el [ADR-011](docs/adr/ADR-011-observabilidad.md).
 
 **Ver los logs:**
 
