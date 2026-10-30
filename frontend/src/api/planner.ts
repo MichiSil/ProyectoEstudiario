@@ -14,6 +14,16 @@ export const plannerApi = {
   createExam: (input: { subjectId: string; type: ExamType; startsAt: string; topics: string[] }) =>
     request<Exam>(`${base}/exams`, { method: 'POST', body: input }),
 
+  listExams: () => request<Exam[]>(`${base}/exams`),
+
+  /** RF-06: sólo se mandan los campos que cambian. Cambiar la fecha desactualiza el plan (RN-16). */
+  updateExam: (examId: string, changes: { type?: ExamType; startsAt?: string; topics?: string[] }) =>
+    request<Exam>(`${base}/exams/${encodeURIComponent(examId)}`, { method: 'PATCH', body: changes }),
+
+  /** RF-06: libera las sesiones pendientes y conserva las completadas (RN-17). */
+  cancelExam: (examId: string) =>
+    request<Exam>(`${base}/exams/${encodeURIComponent(examId)}/cancel`, { method: 'POST' }),
+
   setAvailability: (input: Availability) =>
     request<void>(`${base}/availability`, { method: 'PUT', body: input }),
 

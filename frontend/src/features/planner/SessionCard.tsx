@@ -26,6 +26,7 @@ export function SessionCard({ session, subjectName }: { session: Session; subjec
               {formatTimeRange(session.start, session.end)}
             </Badge>
             <Badge tone="neutral">{formatMinutes(minutesBetween(session.start, session.end))}</Badge>
+            {session.outdated && session.status !== 'completada' && <Badge tone="warning">Desactualizada</Badge>}
             {session.status !== 'pendiente' && (
               <Badge tone={session.status === 'completada' ? 'success' : 'warning'}>{SESSION_STATUS_LABEL[session.status]}</Badge>
             )}
