@@ -59,8 +59,12 @@ func (Engine) Generate(_ context.Context, in app.ProposalInput) (app.Proposal, e
 		windowStart = startOfDay(now)
 	}
 
-	candidates := freeStarts(windowStart, now, examStart, duration, av, in.Booked, loc)
-	if len(candidates) == 0 {
+	days := freeStarts(windowStart, now, examStart, duration, av, in.Booked, loc)
+	available := 0
+	for _, d := range days {
+		available += len(d)
+	}
+	if available == 0 {
 		return app.Proposal{}, ErrNoAvailability
 	}
 
@@ -71,9 +75,11 @@ func (Engine) Generate(_ context.Context, in app.ProposalInput) (app.Proposal, e
 	if len(in.Materials) > 0 {
 		units = len(in.Materials)
 	}
-	count := baseSessions[in.Subject.Difficulty] + units/2
-	if count > len(candidates) {
-		count = len(candidates)
+	wanted := baseSessions[in.Subject.Difficulty] + units/2
+	count := min(wanted, available)
+	var warnings []string
+	if count < wanted {
+		warnings = append(warnings, app.WarningInsufficientTime)
 	}
 
 	items := objectives(in.Exam.Modality, in.Materials, topics, count)
@@ -83,59 +89,96 @@ func (Engine) Generate(_ context.Context, in app.ProposalInput) (app.Proposal, e
 	}
 	reasoning := fmt.Sprintf("%s recibió %d sesiones porque está marcada como %s y %s; el estudio empieza %d días antes del examen.",
 		in.Subject.Name, count, difficultyLabel(in.Subject.Difficulty), what, domain.AnticipationDays[in.Subject.Difficulty])
+	if count < wanted {
+		reasoning = fmt.Sprintf("%s Harían falta %d sesiones, pero antes del examen sólo hay lugar para %d: se juntaron temas.",
+			reasoning, wanted, count)
+	}
 
+	starts := spread(days, count)
 	drafts := make([]domain.SessionDraft, count)
 	for i := range drafts {
-		// Reparte las sesiones a lo largo de la ventana; la última queda lo
-		// más cerca posible del examen (repaso).
-		idx := len(candidates) - 1
-		if count > 1 {
-			idx = i * (len(candidates) - 1) / (count - 1)
-		}
 		drafts[i] = domain.SessionDraft{
-			Start:           candidates[idx],
+			Start:           starts[i],
 			DurationMinutes: duration,
 			Topic:           items[i].topic,
 			Objective:       items[i].objective,
 			Reasoning:       reasoning,
 		}
 	}
-	return app.Proposal{Drafts: drafts, GeneratedBy: domain.GeneratedByRules}, nil
+	return app.Proposal{Drafts: drafts, GeneratedBy: domain.GeneratedByRules, Warnings: warnings}, nil
 }
 
-// freeStarts devuelve, como máximo, un horario de inicio libre por día entre
-// windowStart y el examen: el primero de las franjas de ese día que no se
-// superpone con sesiones reservadas ni supera la capacidad diaria.
-func freeStarts(windowStart, now, examStart time.Time, duration int, av domain.Availability, booked []domain.Session, loc *time.Location) []time.Time {
+// breakMinutes es el descanso entre dos sesiones del mismo día.
+const breakMinutes = 15
+
+// freeStarts devuelve, día por día entre windowStart y el examen, los horarios
+// de inicio libres: tantas sesiones como entren en las franjas de ese día, con
+// un descanso entre una y otra, sin superponerse con sesiones reservadas y sin
+// superar la capacidad diaria (RN-10 a RN-13).
+func freeStarts(windowStart, now, examStart time.Time, duration int, av domain.Availability, booked []domain.Session, loc *time.Location) [][]time.Time {
 	slots := append([]domain.Slot(nil), av.Slots...)
 	sort.Slice(slots, func(a, b int) bool { return slots[a].StartMinute < slots[b].StartMinute })
 
-	var result []time.Time
+	var result [][]time.Time
 	for day := windowStart; day.Before(examStart); day = day.AddDate(0, 0, 1) {
-		used := bookedMinutes(day, booked, loc)
-		if av.MaxDailyMinutes > 0 && used+duration > av.MaxDailyMinutes {
-			continue
+		left := -1 // sin límite
+		if av.MaxDailyMinutes > 0 {
+			left = av.MaxDailyMinutes - bookedMinutes(day, booked, loc)
 		}
-	slots:
+		var starts []time.Time
 		for _, s := range slots {
 			if s.Weekday != day.Weekday() {
 				continue
 			}
-			for m := s.StartMinute; m+duration <= s.EndMinute; m += 15 {
+			for m := s.StartMinute; m+duration <= s.EndMinute && (left < 0 || left >= duration); {
 				start := day.Add(time.Duration(m) * time.Minute)
 				end := start.Add(time.Duration(duration) * time.Minute)
-				if start.Before(now) || end.After(examStart) {
+				if start.Before(now) || end.After(examStart) || overlaps(start, end, booked) {
+					m += 15
 					continue
 				}
-				if overlaps(start, end, booked) {
-					continue
+				starts = append(starts, start)
+				if left >= 0 {
+					left -= duration
 				}
-				result = append(result, start)
-				break slots
+				m += duration + breakMinutes
 			}
+		}
+		if len(starts) > 0 {
+			result = append(result, starts)
 		}
 	}
 	return result
+}
+
+// spread elige count horarios repartidos a lo largo de la ventana: primero uno
+// por día (repartidos entre el primero y el último, así la última sesión queda
+// cerca del examen), después un segundo en cada día, y así. Devuelve los
+// horarios en orden.
+func spread(days [][]time.Time, count int) []time.Time {
+	var chosen []time.Time
+	for layer := 0; len(chosen) < count; layer++ {
+		var row []time.Time
+		for _, d := range days {
+			if layer < len(d) {
+				row = append(row, d[layer])
+			}
+		}
+		need := count - len(chosen)
+		if need >= len(row) {
+			chosen = append(chosen, row...)
+			continue
+		}
+		for i := 0; i < need; i++ {
+			idx := len(row) - 1
+			if need > 1 {
+				idx = i * (len(row) - 1) / (need - 1)
+			}
+			chosen = append(chosen, row[idx])
+		}
+	}
+	sort.Slice(chosen, func(a, b int) bool { return chosen[a].Before(chosen[b]) })
+	return chosen
 }
 
 func bookedMinutes(day time.Time, booked []domain.Session, loc *time.Location) int {
@@ -182,8 +225,24 @@ func objectives(modality domain.ExamModality, materials []domain.Material, topic
 	case count >= 3:
 		review = 1
 	}
+	// Primero se cubren todos los temas: si no alcanzan las sesiones, se
+	// resigna el repaso y, si aun así faltan, se juntan temas en una sesión.
+	review = max(0, min(review, count-len(units)))
+	study := count - review
+
 	var items []item
-	for i := 0; i < count-review; i++ {
+	if study < len(units) {
+		for i := 0; i < study; i++ {
+			group := units[i*len(units)/study : (i+1)*len(units)/study]
+			var names, goals []string
+			for _, u := range group {
+				names = append(names, u.topic)
+				goals = append(goals, u.first)
+			}
+			items = append(items, item{joinList(names), strings.Join(goals, "; ")})
+		}
+	}
+	for i := 0; len(items) < study; i++ {
 		u := units[i%len(units)]
 		if i < len(units) {
 			items = append(items, item{u.topic, u.first})
@@ -251,6 +310,14 @@ func studyUnits(modality domain.ExamModality, materials []domain.Material, topic
 		}
 		return units, "Repaso general del temario"
 	}
+}
+
+// joinList une nombres como en castellano: "A", "A y B", "A, B y C".
+func joinList(names []string) string {
+	if len(names) <= 1 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " y " + names[len(names)-1]
 }
 
 func cleanTopics(raw []string) []string {

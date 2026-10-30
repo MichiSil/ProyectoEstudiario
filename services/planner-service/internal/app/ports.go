@@ -39,6 +39,11 @@ type Proposal struct {
 // el agente de IA no estaba disponible (RN-09).
 const WarningAIFallback = "AI_FALLBACK"
 
+// WarningInsufficientTime indica que entre hoy y el examen no hay horarios
+// libres para todas las sesiones que harían falta: el plan junta temas en
+// menos sesiones. El estudiante puede sumar franjas o subir la capacidad diaria.
+const WarningInsufficientTime = "INSUFFICIENT_TIME"
+
 // PlanGenerator propone las sesiones de un plan. Lo implementan el motor de
 // reglas (adapters/rules) y el agente de IA (adapters/ai).
 type PlanGenerator interface {
