@@ -416,6 +416,7 @@ Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/use
 | `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), con el ejecutable en `cmd/<nombre>/` y su `Dockerfile` |
 | `frontend/` | Interfaz web (React + TypeScript, Vite) con su `Dockerfile` y la configuración de nginx |
 | `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
+| `tests/e2e/` | [Tests end-to-end](tests/e2e/README.md) del flujo principal contra el sistema levantado |
 | `deploy/` | Inicialización de las bases y [despliegue en Azure](deploy/azure/README.md) |
 
 ### Entorno desplegado
