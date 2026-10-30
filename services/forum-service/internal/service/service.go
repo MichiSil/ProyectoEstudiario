@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -277,4 +278,14 @@ func (s *Service) Download(ctx context.Context, v Viewer, id string) (model.Summ
 		return model.Summary{}, nil, err
 	}
 	return doc, r, nil
+}
+
+// newEventID genera el eventId de un evento: un UUID v4 (ADR-005, 3.2), que
+// es la clave con la que los consumidores descartan duplicados.
+func (s *Service) newEventID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // versión 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variante RFC 4122
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
