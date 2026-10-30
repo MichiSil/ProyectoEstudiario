@@ -3,8 +3,12 @@ package repository_test
 // Tests de integración contra un MongoDB real (requisito 2.11 del enunciado).
 // Se ejecutan sólo si está definida FORUM_TEST_MONGO_URI:
 //
-//	docker compose up -d mongo mongo-init
-//	FORUM_TEST_MONGO_URI='mongodb://forum_svc:forum-local@localhost:27017/forum?authSource=forum' go test ./internal/repository/
+// Los puertos de MongoDB no se publican fuera de Docker: se corren en un
+// contenedor conectado a la red de docker compose (ver el README):
+//
+//	docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/src" -w /src \
+//	  -e FORUM_TEST_MONGO_URI='mongodb://forum_svc:forum-local@mongo:27017/forum?authSource=forum' \
+//	  golang:1.26-alpine go test ./internal/repository/
 
 import (
 	"context"

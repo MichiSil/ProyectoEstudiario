@@ -146,8 +146,8 @@ docker compose down         # agregar -v para borrar también los datos locales
 | notification-service | http://localhost:8084 | Esqueleto: sólo `GET /health` |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
-| MongoDB (base `forum`) | `localhost:27017` | Usuario y contraseña de forum-service: variables `FORUM_DB_*` del `.env`. Sólo lee y escribe la base `forum`; el administrador (`MONGO_ROOT_*`) sólo lo usa el contenedor `mongo-init` |
-| MinIO (bucket `summaries`) | API S3 en `localhost:9000`, consola en http://localhost:9001 | PDF de los resúmenes. forum-service usa su propio usuario (`FORUM_MINIO_*`), que sólo puede usar el bucket `summaries`; la consola se abre con `MINIO_ROOT_*` |
+| MongoDB (base `forum`) | Sin puerto publicado | Sólo lo usan forum-service y `mongo-init`, por la red interna de Docker. forum-service entra con su usuario (`FORUM_DB_*`), que sólo lee y escribe la base `forum`; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
+| MinIO (bucket `summaries`) | Consola web en http://localhost:9001 | PDF de los resúmenes. La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar el bucket `summaries`. La consola se abre con `MINIO_ROOT_*` |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
@@ -289,11 +289,20 @@ Repetir el registro con la misma `Idempotency-Key` y el mismo cuerpo devuelve el
 ```bash
 cd services/forum-service
 go test ./...                                                   # unitarios y de contrato (en memoria)
-FORUM_TEST_MONGO_URI='mongodb://forum_svc:forum-local@localhost:27017/forum?authSource=forum' \
-FORUM_TEST_MINIO_ENDPOINT=localhost:9000 go test ./internal/repository/ ./internal/storage/   # integración, con docker compose levantado
 FORUM_CONTRACT_URL=http://localhost:8083 FORUM_CONTRACT_API_KEY=clave-de-prueba-grupo4 \
   go test -run Contrato ./internal/controller/                  # contrato contra el servicio real
 ```
+
+Los tests de integración usan MongoDB y MinIO reales. Como sus puertos no se publican fuera de Docker, se corren en un contenedor de Go conectado a la red de `docker compose` (con el sistema levantado, desde la raíz del repositorio):
+
+```bash
+docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/src" -w /src \
+  -e FORUM_TEST_MONGO_URI='mongodb://forum_svc:forum-local@mongo:27017/forum?authSource=forum' \
+  -e FORUM_TEST_MINIO_ENDPOINT=minio:9000 \
+  golang:1.26-alpine go test ./internal/repository/ ./internal/storage/
+```
+
+Los tests borran al terminar los datos que crean.
 
 El test de contrato valida cada respuesta de `/v1/*` y de `/health`, de éxito y de error, contra `docs/contracts/documents-v1.yaml` con [kin-openapi](https://github.com/getkin/kin-openapi). Si el servicio y el contrato no coinciden, el test falla.
 

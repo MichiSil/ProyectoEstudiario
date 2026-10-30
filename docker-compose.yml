@@ -204,8 +204,7 @@ services:
 
   mongo:
     image: mongo:7.0
-    ports:
-      - "27017:27017"
+    # Sin puertos publicados: sólo lo usan forum-service y mongo-init, por la red interna de Docker.
     environment:
       # Administrador del contenedor: sólo lo usa mongo-init. forum-service tiene su propio usuario.
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?falta MONGO_ROOT_USER en el .env (ver .env.example)}
@@ -240,9 +239,9 @@ services:
   # Hub: se usa la de Bitnami, que es el mismo MinIO, con versión fija.
   minio:
     image: bitnamilegacy/minio:2025.4.22
+    # Sólo se publica la consola web; la API S3 (9000) la usa forum-service por la red interna de Docker.
     ports:
-      - "9000:9000" # API S3
-      - "9001:9001" # consola web
+      - "9001:9001"
     environment:
       # Administrador del contenedor: sólo lo usa minio-init. forum-service tiene su propio usuario.
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?falta MINIO_ROOT_USER en el .env (ver .env.example)}
