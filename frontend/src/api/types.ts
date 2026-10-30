@@ -41,6 +41,8 @@ export interface Exam {
   startsAt: string
   topics: string[]
   status: ExamStatus
+  /** Plan vigente: confirmado, o desactualizado si cambió la fecha (RN-16). Ausente si no tiene plan. */
+  planStatus?: 'confirmado' | 'desactualizado'
 }
 
 export interface WeeklySlot {
@@ -89,6 +91,8 @@ export interface Session {
   topic: string
   objective: string
   status: SessionStatus
+  /** El examen cambió de fecha después de confirmar el plan (RN-16). */
+  outdated: boolean
 }
 
 export interface ConfirmResult {

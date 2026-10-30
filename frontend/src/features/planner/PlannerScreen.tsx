@@ -20,7 +20,7 @@ import { SessionCard } from './SessionCard'
  * o un doble clic nunca duplica sesiones (RN-14).
  */
 export function PlannerScreen() {
-  const { exams, sessions, availability, subjectsById, examsById, refreshSessions } = usePlannerData()
+  const { exams, sessions, availability, subjectsById, examsById, refresh, refreshSessions, rememberExam } = usePlannerData()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
@@ -36,7 +36,13 @@ export function PlannerScreen() {
   const plannableExams = useMemo(
     () =>
       exams
-        .filter((e) => e.status === 'programado' && new Date(e.startsAt) > new Date() && !examsWithPlan.has(e.id))
+        // Sin plan, o con el plan desactualizado porque cambió la fecha (RN-16): se puede replanificar.
+        .filter(
+          (e) =>
+            e.status === 'programado' &&
+            new Date(e.startsAt) > new Date() &&
+            (e.planStatus === 'desactualizado' || (!e.planStatus && !examsWithPlan.has(e.id))),
+        )
         .sort((a, b) => a.startsAt.localeCompare(b.startsAt)),
     [exams, examsWithPlan],
   )
@@ -92,12 +98,14 @@ export function PlannerScreen() {
     setConfirmError(null)
     try {
       const result = await plannerApi.confirmPlan(proposal.id, key)
+      const exam = examsById.get(proposal.examId)
+      if (exam) rememberExam({ ...exam, planStatus: 'confirmado' })
       setProposal(null)
       setMessage(`Listo: reservamos ${result.sessions.length} sesión${result.sessions.length === 1 ? '' : 'es'} en tu calendario.`)
       await refreshSessions()
     } catch (err) {
       setConfirmError(err)
-      if (err instanceof ApiError && err.code === 'PLAN_ALREADY_CONFIRMED') await refreshSessions()
+      if (err instanceof ApiError && (err.code === 'PLAN_ALREADY_CONFIRMED' || err.code === 'EXAM_CANCELLED')) await refresh()
     } finally {
       setConfirming(false)
     }
@@ -200,6 +208,9 @@ export function PlannerScreen() {
                     <p className="text-xs text-muted">
                       {formatDateLong(localDate(exam.startsAt))} · {formatDaysUntil(localDate(exam.startsAt))}
                     </p>
+                    {exam.planStatus === 'desactualizado' && (
+                      <p className="mt-0.5 text-xs text-warning">Cambió la fecha: el plan quedó desactualizado.</p>
+                    )}
                     {availability && !hasSlotBefore(availability, exam.startsAt) && (
                       <p className="mt-0.5 text-xs text-warning">No tenés horarios disponibles antes de este examen.</p>
                     )}
@@ -211,7 +222,13 @@ export function PlannerScreen() {
                     disabled={requestingId !== null || confirming}
                   >
                     <Sparkles size={14} />
-                    {requestingId === exam.id ? 'Pensando…' : isCurrent ? 'Pedir otra' : 'Pedir propuesta'}
+                    {requestingId === exam.id
+                      ? 'Pensando…'
+                      : isCurrent
+                        ? 'Pedir otra'
+                        : exam.planStatus === 'desactualizado'
+                          ? 'Replanificar'
+                          : 'Pedir propuesta'}
                   </Button>
                 </Card>
               )

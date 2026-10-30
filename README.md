@@ -31,6 +31,24 @@ Cada estudiante tiene **sus propias materias**, a las que les asigna una **dific
 
 A partir de todo eso, un **agente de IA arma el plan de estudio**. Propone sesiones con fecha, horario, duración, tema y objetivo, y el estudiante las confirma para que queden reservadas en su calendario.
 
+### Editar y cancelar exámenes
+
+El estudiante puede listar sus exámenes, editarlos y cancelarlos (RF-06), con el JWT de la sección anterior:
+
+```bash
+G=http://localhost:8080/api/planner
+curl -H "Authorization: Bearer $TOKEN" $G/exams
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
+  -H "Content-Type: application/json" -d '{"startsAt":"2026-11-27T09:00:00-03:00"}'
+curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
+```
+
+- `GET /exams` devuelve cada examen con `planStatus`: `confirmado`, `desactualizado` o ausente si todavía no tiene plan.
+- `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha de un examen con plan confirmado, el plan pasa a **desactualizado** y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
+- `POST /exams/{id}/cancel` cancela el examen y sus planes, libera las sesiones pendientes y conserva las completadas como historial (RN-17). Cancelar dos veces no falla. Un examen cancelado no se puede editar ni planificar: responde `409 EXAM_CANCELLED`.
+
+Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
+
 ### Foro de resúmenes
 
 Los estudiantes suben **resúmenes** de una materia al foro. Antes de hacerse visible, cada publicación pasa por la **moderación del administrador**:
@@ -389,7 +407,7 @@ npm install
 npm run dev                 # http://localhost:5173, reenvía /api a http://localhost:8080
 ```
 
-Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. planner-service todavía no expone `GET /exams` ni `GET /availability`, así que el frontend recuerda en el navegador los exámenes y la disponibilidad que el servidor le devolvió al guardarlos.
+Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/users/register` y `/api/users/login`, guarda el JWT en el navegador y lo manda como `Authorization: Bearer ...` en cada pedido (nunca `X-User-Id`, que lo pone el gateway). Si el gateway responde 401 (token vencido o inválido), vuelve a la pantalla de ingreso; cerrar sesión borra el token. Los exámenes se leen de `GET /exams` y se editan o cancelan desde su detalle en el calendario. planner-service todavía no expone `GET /availability`, así que el frontend recuerda en el navegador la disponibilidad que el servidor aceptó al guardarla.
 
 ### Estructura del repositorio
 

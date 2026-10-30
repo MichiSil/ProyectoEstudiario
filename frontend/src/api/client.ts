@@ -51,6 +51,7 @@ const CODE_MESSAGES: Record<string, string> = {
   BUSINESS_RULE_VIOLATION: 'La operación incumple reglas del plan.',
   PLAN_NOT_PROPOSED: 'Esta propuesta ya no se puede confirmar.',
   PLAN_ALREADY_CONFIRMED: 'Este examen ya tiene un plan confirmado.',
+  EXAM_CANCELLED: 'Este examen está cancelado: no se puede editar ni planificar.',
   REQUEST_IN_PROGRESS: 'La confirmación ya se está procesando. Esperá unos segundos.',
   IDEMPOTENCY_KEY_REUSED: 'La confirmación se mezcló con otro plan. Volvé a pedir la propuesta.',
   SERVICE_UNAVAILABLE: 'El servicio no está disponible en este momento. Probá de nuevo en unos segundos.',
