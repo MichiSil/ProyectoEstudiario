@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -161,15 +162,17 @@ type ExamChanges struct {
 	MaterialIDs *[]string
 }
 
-// UpdateExam edita un examen (RF-06). Si cambia la fecha y el examen tenía un
-// plan confirmado, el plan pasa a desactualizado y sus sesiones pendientes
-// quedan marcadas hasta que el estudiante replanifique (RN-16).
+// UpdateExam edita un examen (RF-06). Si cambia la fecha, los temas, la
+// modalidad o el material y el examen tenía un plan confirmado, el plan pasa a
+// desactualizado y sus sesiones pendientes quedan marcadas hasta que el
+// estudiante replanifique (RN-16).
 func (s *Service) UpdateExam(ctx context.Context, studentID, examID string, ch ExamChanges) (domain.Exam, error) {
 	now := s.Clock.Now()
 	return s.Repo.UpdateExam(ctx, studentID, examID, func(e domain.Exam) (domain.Exam, bool, error) {
 		if e.Status == domain.ExamCancelled {
 			return e, false, domain.ErrExamCancelled
 		}
+		before := e
 		verr := &domain.ValidationError{}
 		if ch.Type != nil {
 			if !ch.Type.Valid() {
@@ -205,8 +208,33 @@ func (s *Service) UpdateExam(ctx context.Context, studentID, examID string, ch E
 		if len(verr.Violations) > 0 {
 			return e, false, verr
 		}
-		return e, dateChanged, nil
+		// RN-16: el plan confirmado queda desactualizado si cambia algo con lo
+		// que se armó: la fecha, los temas, la modalidad o el material.
+		outdated := dateChanged || !slices.Equal(before.Topics, e.Topics) ||
+			before.Modality != e.Modality || !slices.Equal(before.MaterialIDs, e.MaterialIDs)
+		return e, outdated, nil
 	})
+}
+
+// Replan deja desactualizado el plan confirmado de un examen a pedido del
+// estudiante, aunque el examen no haya cambiado (por ejemplo, porque cambió
+// su disponibilidad). Sigue el mismo camino que RN-16: las sesiones siguen en
+// el calendario hasta que confirme un plan nuevo, que las reemplaza. Si el
+// examen no tiene plan confirmado ni desactualizado, devuelve ErrNoConfirmedPlan.
+func (s *Service) Replan(ctx context.Context, studentID, examID string) (domain.Exam, error) {
+	e, err := s.Repo.UpdateExam(ctx, studentID, examID, func(e domain.Exam) (domain.Exam, bool, error) {
+		if e.Status == domain.ExamCancelled {
+			return e, false, domain.ErrExamCancelled
+		}
+		return e, true, nil
+	})
+	if err != nil {
+		return e, err
+	}
+	if e.PlanStatus != domain.PlanOutdated {
+		return e, domain.ErrNoConfirmedPlan
+	}
+	return e, nil
 }
 
 // DeleteSubject borra una materia (RF-04): sus exámenes se cancelan y sus

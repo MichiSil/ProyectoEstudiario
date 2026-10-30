@@ -211,3 +211,40 @@ func TestIntegration_BorrarMateria(t *testing.T) {
 		t.Errorf("borrar dos veces: se esperaba ErrNotFound, llegó %v", err)
 	}
 }
+
+// RN-16: cambiar los temas desactualiza el plan, y rehacerlo a pedido también;
+// el plan nuevo reemplaza las sesiones pendientes del anterior.
+func TestIntegration_RehacerPlan(t *testing.T) {
+	svc, pool, ids := newService(t)
+	student, examID := split(ids)
+	ctx := context.Background()
+
+	if _, err := svc.Replan(ctx, student, examID); !errors.Is(err, domain.ErrNoConfirmedPlan) {
+		t.Fatalf("sin plan: se esperaba ErrNoConfirmedPlan, llegó %v", err)
+	}
+	first, _ := svc.ProposePlan(ctx, student, examID)
+	if _, err := svc.ConfirmPlan(ctx, student, first.ID, "clave-1"); err != nil {
+		t.Fatal(err)
+	}
+	topics := []string{"Integrales", "Series", "Ecuaciones diferenciales"}
+	e, err := svc.UpdateExam(ctx, student, examID, app.ExamChanges{Topics: &topics})
+	if err != nil || e.PlanStatus != domain.PlanOutdated {
+		t.Fatalf("cambiar los temas: estado %q, error %v", e.PlanStatus, err)
+	}
+	second, _ := svc.ProposePlan(ctx, student, examID)
+	res, err := svc.ConfirmPlan(ctx, student, second.ID, "clave-2")
+	if err != nil {
+		t.Fatalf("confirmar el plan nuevo: %v", err)
+	}
+	if got := countSessions(t, pool, student); got != len(res.Sessions) {
+		t.Fatalf("tendrían que quedar las %d sesiones del plan nuevo, hay %d", len(res.Sessions), got)
+	}
+
+	// A pedido, sin cambiar el examen.
+	if e, err := svc.Replan(ctx, student, examID); err != nil || e.PlanStatus != domain.PlanOutdated {
+		t.Fatalf("rehacer a pedido: estado %q, error %v", e.PlanStatus, err)
+	}
+	if got := countSessions(t, pool, student); got != len(res.Sessions) {
+		t.Fatalf("hasta confirmar el nuevo, las sesiones siguen: hay %d de %d", got, len(res.Sessions))
+	}
+}

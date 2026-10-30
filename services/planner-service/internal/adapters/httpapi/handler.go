@@ -54,6 +54,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /exams", h.withStudent(h.listExams))
 	mux.HandleFunc("PATCH /exams/{examId}", h.withStudent(h.updateExam))
 	mux.HandleFunc("POST /exams/{examId}/cancel", h.withStudent(h.cancelExam))
+	mux.HandleFunc("POST /exams/{examId}/replan", h.withStudent(h.replan))
 	mux.HandleFunc("GET /availability", h.withStudent(h.getAvailability))
 	mux.HandleFunc("PUT /availability", h.withStudent(h.setAvailability))
 	mux.HandleFunc("POST /exams/{examId}/proposals", h.withStudent(h.propose))
@@ -400,6 +401,17 @@ func (h *Handler) setAvailability(w http.ResponseWriter, r *http.Request, studen
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// replan deja desactualizado el plan confirmado del examen a pedido del
+// estudiante: 200 con el examen, o 409 NO_CONFIRMED_PLAN si no tiene plan.
+func (h *Handler) replan(w http.ResponseWriter, r *http.Request, student string) {
+	e, err := h.Svc.Replan(r.Context(), student, r.PathValue("examId"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toExamDTO(e))
+}
+
 // deleteSubject borra una materia con sus exámenes: 204, o 404 si no existe
 // o ya estaba borrada.
 func (h *Handler) deleteSubject(w http.ResponseWriter, r *http.Request, student string) {
@@ -493,6 +505,8 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.As(err, &verr):
 		h.problem(w, r, http.StatusUnprocessableEntity, "BUSINESS_RULE_VIOLATION", "la operación incumple reglas de negocio", verr.Violations)
+	case errors.Is(err, domain.ErrNoConfirmedPlan):
+		h.problem(w, r, http.StatusConflict, "NO_CONFIRMED_PLAN", "el examen no tiene un plan confirmado para rehacer", nil)
 	case errors.Is(err, domain.ErrAvailabilityNotSet):
 		h.problem(w, r, http.StatusNotFound, "AVAILABILITY_NOT_SET", "todavía no cargaste tu disponibilidad", nil)
 	case errors.Is(err, domain.ErrNotFound):

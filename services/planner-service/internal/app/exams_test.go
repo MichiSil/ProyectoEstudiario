@@ -151,22 +151,23 @@ func confirmPlan(t *testing.T, svc *app.Service, examID, key string) app.Confirm
 	return res
 }
 
-// RF-06: se pueden editar el tipo y los temas sin tocar el plan confirmado.
-func TestUpdateExam_TemasSinCambiarFecha(t *testing.T) {
+// RF-06: cambiar sólo el tipo de examen no toca el plan confirmado, porque el
+// plan no se arma con el tipo.
+func TestUpdateExam_TipoSinTocarElPlan(t *testing.T) {
 	svc, repo, exam := setup(t)
 	confirmPlan(t, svc, exam.ID, "clave-1")
 
-	typ, topics := domain.ExamRecuperatorio, []string{"Series"}
+	typ, topics := domain.ExamRecuperatorio, append([]string(nil), exam.Topics...)
 	got, err := svc.UpdateExam(context.Background(), "est-1", exam.ID, app.ExamChanges{Type: &typ, Topics: &topics})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Type != typ || len(got.Topics) != 1 || got.PlanStatus != domain.PlanConfirmed {
+	if got.Type != typ || got.PlanStatus != domain.PlanConfirmed {
 		t.Fatalf("el examen no quedó como se esperaba: %+v", got)
 	}
 	for _, s := range repo.sessions {
 		if repo.plans[s.PlanID].Status != domain.PlanConfirmed {
-			t.Fatal("sin cambio de fecha el plan tiene que seguir confirmado")
+			t.Fatal("cambiando sólo el tipo (y los mismos temas) el plan tiene que seguir confirmado")
 		}
 	}
 }
