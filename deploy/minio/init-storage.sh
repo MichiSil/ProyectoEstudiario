@@ -23,7 +23,20 @@ fi
 
 # mc guarda su configuración en el HOME; en este contenedor se usa /tmp.
 export HOME=/tmp
-mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+
+# La imagen de Bitnami arranca MinIO, pasa el healthcheck y se reinicia una vez
+# para aplicar su configuración: se reintenta hasta que responda de verdad.
+for intento in $(seq 1 30); do
+	if mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 &&
+		mc ready local >/dev/null 2>&1; then
+		break
+	fi
+	if [ "$intento" = 30 ]; then
+		echo "MinIO no respondió después de 30 intentos" >&2
+		exit 1
+	fi
+	sleep 1
+done
 
 mc mb --ignore-existing "local/$BUCKET"
 
