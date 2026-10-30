@@ -75,8 +75,59 @@ func TestGenerate_MuyDificilRespetaAnticipacionYRepaso(t *testing.T) {
 			t.Errorf("se esperaba que las últimas sesiones fueran de repaso, llegó %q", d.Topic)
 		}
 	}
-	if !strings.HasPrefix(p.Drafts[0].Objective, "Leer teoría de") {
-		t.Errorf("la primera sesión debería ser de teoría, llegó %q", p.Drafts[0].Objective)
+	// Sin material ni modalidad, el plan no supone que hay teoría para leer.
+	if p.Drafts[0].Objective != "Estudiar Integrales dobles" {
+		t.Errorf("la primera sesión debería ser estudiar el primer tema, llegó %q", p.Drafts[0].Objective)
+	}
+	for _, d := range p.Drafts {
+		if strings.Contains(strings.ToLower(d.Objective), "teoría") || strings.Contains(strings.ToLower(d.Objective), "teórico") {
+			t.Errorf("sin material ni modalidad no tiene que inventar teoría: %q", d.Objective)
+		}
+	}
+}
+
+// Con material cargado, cada sesión trabaja sobre un material real, nombrado por su título.
+func TestGenerate_UsaElMaterialCargado(t *testing.T) {
+	in := input(domain.DifficultyMedium, 30*24*time.Hour, "Ondas")
+	in.Exam.Modality = domain.ModalityMixed
+	in.Materials = []domain.Material{
+		{ID: "m1", Kind: domain.MaterialTheory, Title: "Unidad 1 — Ondas"},
+		{ID: "m2", Kind: domain.MaterialPractice, Title: "TP 3"},
+	}
+	p := generate(t, in)
+	if p.Drafts[0].Objective != "Estudiar Unidad 1 — Ondas" || p.Drafts[1].Objective != "Resolver TP 3" {
+		t.Fatalf("se esperaba estudiar el teórico y después resolver el práctico, llegó %q y %q", p.Drafts[0].Objective, p.Drafts[1].Objective)
+	}
+	known := map[string]bool{"Unidad 1 — Ondas": true, "TP 3": true, "Repaso general": true}
+	for _, d := range p.Drafts {
+		if !known[d.Topic] {
+			t.Errorf("la sesión habla de algo que no está cargado: %q", d.Topic)
+		}
+	}
+}
+
+// Un examen teórico se arma con los teóricos, aunque haya prácticos cargados.
+func TestGenerate_ExamenTeoricoUsaLosTeoricos(t *testing.T) {
+	in := input(domain.DifficultyEasy, 30*24*time.Hour)
+	in.Exam.Modality = domain.ModalityTheory
+	in.Materials = []domain.Material{
+		{ID: "m1", Kind: domain.MaterialTheory, Title: "Capítulo 2"},
+		{ID: "m2", Kind: domain.MaterialPractice, Title: "Guía de ejercicios"},
+	}
+	for _, d := range generate(t, in).Drafts {
+		if d.Topic == "Guía de ejercicios" {
+			t.Fatalf("un examen teórico no debería planificar el práctico: %q", d.Objective)
+		}
+	}
+}
+
+// Un examen práctico sin material propone ejercicios de los temas, no lectura de teoría.
+func TestGenerate_ExamenPracticoSinMaterial(t *testing.T) {
+	in := input(domain.DifficultyEasy, 30*24*time.Hour, "Derivadas")
+	in.Exam.Modality = domain.ModalityPractice
+	p := generate(t, in)
+	if p.Drafts[0].Objective != "Practicar ejercicios de Derivadas" {
+		t.Fatalf("se esperaba practicar ejercicios, llegó %q", p.Drafts[0].Objective)
 	}
 }
 

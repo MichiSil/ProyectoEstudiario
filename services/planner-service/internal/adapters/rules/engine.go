@@ -64,16 +64,25 @@ func (Engine) Generate(_ context.Context, in app.ProposalInput) (app.Proposal, e
 		return app.Proposal{}, ErrNoAvailability
 	}
 
-	// RN-07: la cantidad de sesiones crece con la dificultad y con los temas.
+	// RN-07: la cantidad de sesiones crece con la dificultad y con lo que hay
+	// para estudiar (el material cargado o, si no hay, los temas del examen).
 	topics := cleanTopics(in.Exam.Topics)
-	count := baseSessions[in.Subject.Difficulty] + len(topics)/2
+	units := len(topics)
+	if len(in.Materials) > 0 {
+		units = len(in.Materials)
+	}
+	count := baseSessions[in.Subject.Difficulty] + units/2
 	if count > len(candidates) {
 		count = len(candidates)
 	}
 
-	items := objectives(topics, count)
-	reasoning := fmt.Sprintf("%s recibió %d sesiones porque está marcada como %s y el examen tiene %d temas; el estudio empieza %d días antes del examen.",
-		in.Subject.Name, count, difficultyLabel(in.Subject.Difficulty), len(topics), domain.AnticipationDays[in.Subject.Difficulty])
+	items := objectives(in.Exam.Modality, in.Materials, topics, count)
+	what := fmt.Sprintf("el examen tiene %d temas", len(topics))
+	if len(in.Materials) > 0 {
+		what = fmt.Sprintf("hay %d materiales cargados para el examen", len(in.Materials))
+	}
+	reasoning := fmt.Sprintf("%s recibió %d sesiones porque está marcada como %s y %s; el estudio empieza %d días antes del examen.",
+		in.Subject.Name, count, difficultyLabel(in.Subject.Difficulty), what, domain.AnticipationDays[in.Subject.Difficulty])
 
 	drafts := make([]domain.SessionDraft, count)
 	for i := range drafts {
@@ -151,13 +160,21 @@ func overlaps(start, end time.Time, booked []domain.Session) bool {
 
 type item struct{ topic, objective string }
 
-// objectives arma el tema y el objetivo de cada sesión: primero teoría, después
-// ejercicios y repaso de errores por tema, y al final simulacro y repaso
-// liviano (RN-07: las últimas sesiones son de repaso o simulacro).
-func objectives(topics []string, count int) []item {
-	if len(topics) == 0 {
-		topics = []string{"el temario"}
-	}
+// unit es algo concreto para estudiar: un material cargado o un tema del examen.
+type unit struct {
+	topic string
+	// first y again son lo que se hace en la primera pasada y en las siguientes.
+	first, again string
+}
+
+// objectives arma el tema y el objetivo de cada sesión con lo que el
+// estudiante realmente tiene: su material (teóricos y prácticos) y la
+// modalidad del examen. Nunca inventa un teórico o un práctico que no está
+// cargado: si no hay material, usa los temas del examen sin suponer si hay que
+// leer teoría o hacer ejercicios, salvo que la modalidad lo diga. Las últimas
+// sesiones son de repaso o simulacro (RN-07).
+func objectives(modality domain.ExamModality, materials []domain.Material, topics []string, count int) []item {
+	units, closing := studyUnits(modality, materials, topics)
 	review := 0
 	switch {
 	case count >= 5:
@@ -167,23 +184,73 @@ func objectives(topics []string, count int) []item {
 	}
 	var items []item
 	for i := 0; i < count-review; i++ {
-		topic := topics[i%len(topics)]
-		switch i / len(topics) {
-		case 0:
-			items = append(items, item{topic, "Leer teoría de " + topic})
-		case 1:
-			items = append(items, item{topic, "Resolver ejercicios de " + topic})
-		default:
-			items = append(items, item{topic, "Repasar errores de " + topic})
+		u := units[i%len(units)]
+		if i < len(units) {
+			items = append(items, item{u.topic, u.first})
+		} else {
+			items = append(items, item{u.topic, u.again})
 		}
 	}
 	if review >= 1 {
-		items = append(items, item{"Repaso general", "Simulacro o parcial de práctica"})
+		items = append(items, item{"Repaso general", closing})
 	}
 	if review >= 2 {
 		items = append(items, item{"Repaso general", "Repaso liviano antes del examen"})
 	}
 	return items
+}
+
+// studyUnits ordena lo que hay para estudiar y elige el cierre del plan.
+func studyUnits(modality domain.ExamModality, materials []domain.Material, topics []string) ([]unit, string) {
+	if len(materials) > 0 {
+		var theory, practice []unit
+		for _, m := range materials {
+			if m.Kind == domain.MaterialPractice {
+				practice = append(practice, unit{m.Title, "Resolver " + m.Title, "Rehacer lo que costó de " + m.Title})
+			} else {
+				theory = append(theory, unit{m.Title, "Estudiar " + m.Title, "Repasar " + m.Title})
+			}
+		}
+		switch {
+		case modality == domain.ModalityTheory && len(theory) > 0:
+			return theory, "Repasar todos los teóricos que entran"
+		case modality == domain.ModalityPractice && len(practice) > 0:
+			// La teoría que haya cargada va primero, como base para los prácticos.
+			return append(theory, practice...), "Simulacro: resolver ejercicios como en el examen"
+		case len(practice) > 0:
+			return append(theory, practice...), "Simulacro: resolver ejercicios como en el examen"
+		default:
+			return theory, "Repasar todo el material que entra"
+		}
+	}
+
+	if len(topics) == 0 {
+		topics = []string{"el temario"}
+	}
+	var units []unit
+	switch modality {
+	case domain.ModalityTheory:
+		for _, t := range topics {
+			units = append(units, unit{t, "Estudiar " + t, "Repasar " + t})
+		}
+		return units, "Repasar todos los temas"
+	case domain.ModalityPractice:
+		for _, t := range topics {
+			units = append(units, unit{t, "Practicar ejercicios de " + t, "Rehacer los ejercicios que costaron de " + t})
+		}
+		return units, "Simulacro: resolver ejercicios como en el examen"
+	case domain.ModalityMixed:
+		for _, t := range topics {
+			units = append(units, unit{t, "Estudiar " + t, "Practicar ejercicios de " + t})
+		}
+		return units, "Simulacro: repasar teoría y resolver ejercicios"
+	default:
+		// Sin material ni modalidad no se sabe si hay teoría o ejercicios: no se supone.
+		for _, t := range topics {
+			units = append(units, unit{t, "Estudiar " + t, "Repasar " + t})
+		}
+		return units, "Repaso general del temario"
+	}
 }
 
 func cleanTopics(raw []string) []string {

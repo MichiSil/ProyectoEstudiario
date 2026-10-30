@@ -18,8 +18,8 @@ Respondés SIEMPRE con un único objeto JSON, sin texto antes ni después, con e
       "date": "YYYY-MM-DD",
       "startTime": "HH:mm",
       "durationMinutes": 90,
-      "topic": "tema del examen que se estudia",
-      "objective": "qué se hace en la sesión, por ejemplo Leer teoría de Integrales",
+      "topic": "el material o el tema que se estudia",
+      "objective": "qué se hace en la sesión con ese material, por ejemplo Estudiar Unidad 2 o Resolver TP 3",
       "reasoning": "por qué la sesión va en ese día y con ese objetivo"
     }
   ]
@@ -31,7 +31,12 @@ Reglas que el plan tiene que cumplir sí o sí:
 - Todas las sesiones terminan antes del inicio del examen.
 - Ninguna sesión se superpone con otra ni con las sesiones ya reservadas.
 - La suma de minutos de un día (contando las reservadas) no supera la capacidad diaria.
-- Las sesiones van en orden cronológico: primero teoría, después ejercicios y, si hay 3 sesiones o más, las últimas son de simulacro o repaso.
+- Si hay 3 sesiones o más, las últimas son de simulacro o repaso.
+Reglas sobre el contenido (lo más importante: el plan no puede ser ficticio):
+- Usá SÓLO el material que el estudiante cargó. Nunca menciones un teórico, un práctico, un apunte o una guía que no esté en la lista.
+- Si hay material, cada sesión trabaja sobre uno o más materiales concretos, nombrados por su título, y el objetivo dice qué se hace con él según su contenido.
+- Respetá la modalidad del examen: si es teórico, priorizá estudiar y repasar los teóricos; si es práctico, priorizá resolver los prácticos (la teoría cargada sirve de base); si es mixto, combiná los dos.
+- Si no hay material, trabajá con los temas del examen. Si además la modalidad no se conoce, no supongas que hay que leer teoría ni hacer ejercicios: usá objetivos como "Estudiar <tema>" o "Repasar <tema>".
 Las fechas y horas son locales a la zona horaria indicada. Escribí los textos en español.`
 
 var weekdayNames = [...]string{"domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"}
@@ -63,17 +68,25 @@ func userPrompt(in app.ProposalInput) string {
 	fmt.Fprintf(&b, "Momento actual: %s\n", in.Now.In(loc).Format("2006-01-02 15:04"))
 	fmt.Fprintf(&b, "Materia: %s (dificultad %s)\n", in.Subject.Name, difficultyNames[in.Subject.Difficulty])
 	fmt.Fprintf(&b, "Examen: %s, empieza el %s\n", examType(in.Exam.Type), in.Exam.StartsAt.In(loc).Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "Modalidad del examen: %s\n", modalityText(in.Exam.Modality))
 	if len(topics) > 0 {
 		fmt.Fprintf(&b, "Temas, en el orden en que conviene estudiarlos: %s\n", strings.Join(topics, "; "))
+	} else if len(in.Materials) > 0 {
+		b.WriteString("Temas: no se indicaron; el tema de cada sesión es el título del material que se trabaja.\n")
 	} else {
 		b.WriteString("Temas: no se indicaron; usá \"el temario\" como tema.\n")
 	}
+	writeMaterials(&b, in.Materials)
 	fmt.Fprintf(&b, "Ventana de estudio: desde el %s (RN-06: %d días de anticipación según la dificultad)\n",
 		windowStart(in).Format("2006-01-02"), domain.AnticipationDays[in.Subject.Difficulty])
 	fmt.Fprintf(&b, "Duración de cada sesión: %d minutos\n", sessionMinutes(in.Availability))
 	fmt.Fprintf(&b, "Capacidad diaria: %d minutos\n", in.Availability.MaxDailyMinutes)
+	units := len(topics)
+	if len(in.Materials) > 0 {
+		units = len(in.Materials)
+	}
 	fmt.Fprintf(&b, "Cantidad sugerida de sesiones: %d (puede ser menor si no entran)\n",
-		suggestedSessions[in.Subject.Difficulty]+len(topics)/2)
+		suggestedSessions[in.Subject.Difficulty]+units/2)
 
 	b.WriteString("Franjas disponibles cada semana:\n")
 	slots := append([]domain.Slot(nil), in.Availability.Slots...)
@@ -119,6 +132,47 @@ func userPrompt(in app.ProposalInput) string {
 		}
 	}
 	return b.String()
+}
+
+func modalityText(m domain.ExamModality) string {
+	switch m {
+	case domain.ModalityTheory:
+		return "teórico"
+	case domain.ModalityPractice:
+		return "práctico"
+	case domain.ModalityMixed:
+		return "mixto (teoría y práctica)"
+	default:
+		return "no indicada (no supongas si es teórico o práctico)"
+	}
+}
+
+// maxContentChars acota lo que se manda de cada material para no pasarse del
+// tamaño del pedido a la IA.
+const maxContentChars = 600
+
+// writeMaterials lista el material real del estudiante con su contenido.
+func writeMaterials(b *strings.Builder, materials []domain.Material) {
+	if len(materials) == 0 {
+		b.WriteString("Material cargado: ninguno. No inventes teóricos ni prácticos.\n")
+		return
+	}
+	b.WriteString("Material cargado que entra en el examen (usá sólo este):\n")
+	for _, m := range materials {
+		kind := "teórico"
+		if m.Kind == domain.MaterialPractice {
+			kind = "práctico"
+		}
+		content := strings.Join(strings.Fields(m.Content), " ")
+		if r := []rune(content); len(r) > maxContentChars {
+			content = string(r[:maxContentChars]) + "…"
+		}
+		if content == "" {
+			fmt.Fprintf(b, "- [%s] %s\n", kind, m.Title)
+		} else {
+			fmt.Fprintf(b, "- [%s] %s: %s\n", kind, m.Title, content)
+		}
+	}
 }
 
 func location(in app.ProposalInput) *time.Location {

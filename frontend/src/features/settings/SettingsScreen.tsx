@@ -1,5 +1,6 @@
 import clsx from 'clsx'
-import { LogOut, UserRound } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { LogOut, ShieldCheck, UserRound } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -8,16 +9,40 @@ import { useTheme } from '@/app/providers/ThemeProvider'
 import { AvailabilitySection } from './AvailabilitySection'
 
 export function SettingsScreen() {
+  const { user } = useSession()
   return (
     <div className="mx-auto max-w-2xl px-4 py-6">
       <PageHeader title="Configuración" subtitle="Tu perfil, disponibilidad y preferencias." />
 
       <div className="mt-5 flex flex-col gap-4">
         <ProfileSection />
+        {user?.role === 'admin' && <AdminSection />}
         <AvailabilitySection />
         <AppearanceSection />
       </div>
     </div>
+  )
+}
+
+function AdminSection() {
+  return (
+    <Card className="border-accent/30">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent-ink">
+          <ShieldCheck size={20} />
+        </span>
+        <div className="min-w-0">
+          <h3 className="font-medium text-ink">Panel de administración</h3>
+          <p className="mt-0.5 text-sm text-muted">Revisá los resúmenes que subieron al foro: aprobalos, rechazalos con un motivo o eliminalos.</p>
+        </div>
+      </div>
+      <Link to="/foro?tab=moderacion" className="mt-4 block">
+        <Button className="w-full sm:w-auto">
+          <ShieldCheck size={16} />
+          Abrir el panel de admin
+        </Button>
+      </Link>
+    </Card>
   )
 }
 

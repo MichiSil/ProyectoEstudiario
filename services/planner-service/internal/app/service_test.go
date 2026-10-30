@@ -21,6 +21,7 @@ type memRepo struct {
 	subjects     map[string]domain.Subject
 	exams        map[string]domain.Exam
 	availability map[string]domain.Availability
+	materials    map[string]domain.Material
 	plans        map[string]domain.Plan
 	sessions     []domain.Session
 	idempotency  map[string]idemEntry
@@ -36,6 +37,7 @@ func newMemRepo() *memRepo {
 	return &memRepo{
 		subjects: map[string]domain.Subject{}, exams: map[string]domain.Exam{},
 		availability: map[string]domain.Availability{}, plans: map[string]domain.Plan{},
+		materials:   map[string]domain.Material{},
 		idempotency: map[string]idemEntry{},
 	}
 }

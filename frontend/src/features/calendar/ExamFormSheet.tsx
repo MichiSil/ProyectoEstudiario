@@ -7,7 +7,7 @@ import { FieldGroup, Input, Label, Select } from '@/components/ui/Field'
 import { TagInput } from '@/components/ui/TagInput'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { plannerApi } from '@/api/planner'
-import { EXAM_TYPE_LABEL, type Exam, type ExamType } from '@/api/types'
+import { EXAM_TYPE_LABEL, MODALITY_LABEL, type Exam, type ExamModality, type ExamType, type Material } from '@/api/types'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { formatTime, localDate, toRfc3339 } from '@/lib/format'
 
@@ -41,6 +41,9 @@ export function ExamFormSheet({
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [topics, setTopics] = useState<string[]>([])
+  const [modality, setModality] = useState<ExamModality>('')
+  const [materialIds, setMaterialIds] = useState<string[]>([])
+  const [materials, setMaterials] = useState<Material[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
@@ -53,15 +56,35 @@ export function ExamFormSheet({
       setDate(localDate(exam.startsAt))
       setTime(examTime === '00:00' ? '' : examTime)
       setTopics(exam.topics)
+      setModality(exam.modality ?? '')
+      setMaterialIds(exam.materialIds ?? [])
     } else {
       setSubjectId(defaultSubjectId ?? subjects[0]?.id ?? '')
       setType('parcial')
       setDate(defaultDate ?? '')
       setTime('')
       setTopics([])
+      setModality('')
+      setMaterialIds([])
     }
     setError(null)
   }, [open, exam, defaultDate, defaultSubjectId, subjects])
+
+  useEffect(() => {
+    if (!open || !subjectId) return
+    let cancelled = false
+    plannerApi
+      .listMaterials(subjectId)
+      .then((list) => !cancelled && setMaterials(list))
+      .catch(() => !cancelled && setMaterials([]))
+    return () => {
+      cancelled = true
+    }
+  }, [open, subjectId])
+
+  function toggleMaterial(id: string) {
+    setMaterialIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
 
   // RN-04: la fecha no puede estar en el pasado. El backend también lo valida.
   const startsAt = date ? toRfc3339(date, time || null) : null
@@ -75,16 +98,18 @@ export function ExamFormSheet({
     setError(null)
     try {
       if (exam) {
-        const changes: { type?: ExamType; startsAt?: string; topics?: string[] } = {}
+        const changes: { type?: ExamType; startsAt?: string; topics?: string[]; modality?: ExamModality; materialIds?: string[] } = {}
         if (type !== exam.type) changes.type = type
         if (dateChanged) changes.startsAt = startsAt
         if (topics.join('\n') !== exam.topics.join('\n')) changes.topics = topics
+        if (modality !== (exam.modality ?? '')) changes.modality = modality
+        if ([...materialIds].sort().join() !== [...(exam.materialIds ?? [])].sort().join()) changes.materialIds = materialIds
         const updated = await plannerApi.updateExam(exam.id, changes)
         rememberExam(updated)
         // RN-16: si cambió la fecha, las sesiones vuelven marcadas como desactualizadas.
         if (changes.startsAt) await refreshSessions()
       } else {
-        const created = await plannerApi.createExam({ subjectId, type, startsAt, topics })
+        const created = await plannerApi.createExam({ subjectId, type, startsAt, topics, modality, materialIds })
         rememberExam(created)
         onCreated?.(created)
       }
@@ -152,6 +177,48 @@ export function ExamFormSheet({
           siguen en el calendario hasta que pidas uno nuevo.
         </p>
       )}
+
+      <FieldGroup>
+        <Label>¿Cómo se evalúa?</Label>
+        <Select value={modality} onChange={(e) => setModality(e.target.value as ExamModality)}>
+          {(Object.keys(MODALITY_LABEL) as ExamModality[]).map((m) => (
+            <option key={m} value={m}>
+              {MODALITY_LABEL[m]}
+            </option>
+          ))}
+        </Select>
+        <p className="mt-1 text-xs text-subtle">Así el plan sabe si conviene estudiar teoría, resolver ejercicios o las dos cosas.</p>
+      </FieldGroup>
+
+      <FieldGroup>
+        <Label>Material que entra</Label>
+        {!materials.length ? (
+          <p className="rounded-xl bg-paper px-3 py-2.5 text-xs text-muted">
+            Esta materia no tiene material cargado. Podés agregar teóricos y prácticos en Materias → la materia → Material; mientras
+            tanto, el plan se arma con los temas.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              {materials.map((m) => (
+                <label key={m.id} className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-paper px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={materialIds.includes(m.id)}
+                    onChange={() => toggleMaterial(m.id)}
+                    className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-ink">{m.title}</span>
+                    <span className="text-xs text-subtle">{m.kind === 'teorico' ? 'Teórico' : 'Práctico'}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-subtle">Si no marcás ninguno, entra todo el material de la materia.</p>
+          </>
+        )}
+      </FieldGroup>
 
       <FieldGroup>
         <Label>Temas incluidos</Label>

@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { Availability, ConfirmResult, Difficulty, Exam, ExamType, PlanProposal, Session, Subject } from './types'
+import type { Availability, ConfirmResult, Difficulty, Exam, ExamModality, ExamType, Material, MaterialKind, PlanProposal, Session, Subject } from './types'
 
 // Endpoints de planner-service publicados en el api-gateway bajo /api/planner.
 
@@ -11,13 +11,31 @@ export const plannerApi = {
   createSubject: (input: { name: string; professors: string[]; difficulty: Difficulty }) =>
     request<Subject>(`${base}/subjects`, { method: 'POST', body: input }),
 
-  createExam: (input: { subjectId: string; type: ExamType; startsAt: string; topics: string[] }) =>
+  listMaterials: (subjectId: string) => request<Material[]>(`${base}/subjects/${encodeURIComponent(subjectId)}/materials`),
+
+  createMaterial: (subjectId: string, input: { kind: MaterialKind; title: string; content: string }) =>
+    request<Material>(`${base}/subjects/${encodeURIComponent(subjectId)}/materials`, { method: 'POST', body: input }),
+
+  deleteMaterial: (materialId: string) =>
+    request<void>(`${base}/materials/${encodeURIComponent(materialId)}`, { method: 'DELETE' }),
+
+  createExam: (input: {
+    subjectId: string
+    type: ExamType
+    startsAt: string
+    topics: string[]
+    modality: ExamModality
+    materialIds: string[]
+  }) =>
     request<Exam>(`${base}/exams`, { method: 'POST', body: input }),
 
   listExams: () => request<Exam[]>(`${base}/exams`),
 
   /** RF-06: sólo se mandan los campos que cambian. Cambiar la fecha desactualiza el plan (RN-16). */
-  updateExam: (examId: string, changes: { type?: ExamType; startsAt?: string; topics?: string[] }) =>
+  updateExam: (
+    examId: string,
+    changes: { type?: ExamType; startsAt?: string; topics?: string[]; modality?: ExamModality; materialIds?: string[] },
+  ) =>
     request<Exam>(`${base}/exams/${encodeURIComponent(examId)}`, { method: 'PATCH', body: changes }),
 
   /** RF-06: libera las sesiones pendientes y conserva las completadas (RN-17). */

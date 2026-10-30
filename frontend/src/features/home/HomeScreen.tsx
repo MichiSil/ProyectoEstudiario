@@ -6,7 +6,6 @@ import { AlertCircle, ArrowRight, CalendarPlus, CheckCircle2, Circle, Clock, Lay
 import { WeekActivityChart } from './WeekActivityChart'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { EXAM_TYPE_LABEL, type Exam } from '@/api/types'
@@ -55,11 +54,8 @@ export function HomeScreen() {
   const weeklyCompleted = weekBreakdown.reduce((sum, d) => sum + d.completed, 0)
 
   return (
-    <div className="mx-auto max-w-3xl px-5 py-8 sm:px-8">
-      <div className="flex justify-end">
-        <ThemeToggle />
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+    <div className="mx-auto max-w-3xl px-5 pt-2 pb-8 sm:px-8 sm:pt-8">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="text-[30px] leading-tight sm:text-[32px]">Tu semana académica</h1>
         <span className="text-sm capitalize text-muted">{format(new Date(), "EEEE d 'de' MMMM", { locale: es })}</span>
       </div>

@@ -99,6 +99,22 @@ func (g Guarded) CancelExam(ctx context.Context, studentID, id string) (e domain
 	return e, err
 }
 
+func (g Guarded) CreateMaterial(ctx context.Context, m domain.Material) error {
+	return g.run(ctx, func(ctx context.Context) error { return g.Repo.CreateMaterial(ctx, m) })
+}
+
+func (g Guarded) ListMaterials(ctx context.Context, studentID, subjectID string) (out []domain.Material, err error) {
+	err = g.run(ctx, func(ctx context.Context) error {
+		out, err = g.Repo.ListMaterials(ctx, studentID, subjectID)
+		return err
+	})
+	return out, err
+}
+
+func (g Guarded) DeleteMaterial(ctx context.Context, studentID, id string) error {
+	return g.run(ctx, func(ctx context.Context) error { return g.Repo.DeleteMaterial(ctx, studentID, id) })
+}
+
 func (g Guarded) SaveAvailability(ctx context.Context, a domain.Availability) error {
 	return g.run(ctx, func(ctx context.Context) error { return g.Repo.SaveAvailability(ctx, a) })
 }
