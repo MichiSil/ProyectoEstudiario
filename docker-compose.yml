@@ -137,6 +137,9 @@ services:
       SOLR_URL: http://solr:8983/solr/summaries
       # Relay del outbox: publica los eventos summary.* en forum.events (ADR-005).
       RABBITMQ_URL: amqp://${FORUM_RABBITMQ_USER}:${FORUM_RABBITMQ_PASSWORD}@rabbitmq:5672/
+      # Caché del listado y del detalle de aprobados (ADR-007): memcached, o none para medir sin caché.
+      CACHE_PROVIDER: ${FORUM_CACHE_PROVIDER:-memcached}
+      MEMCACHED_ADDR: memcached:11211
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
@@ -153,6 +156,9 @@ services:
         condition: service_completed_successfully
       # Sólo "started": sin Solr el foro funciona y la búsqueda responde 503 hasta que vuelva (ADR-010).
       solr:
+        condition: service_started
+      # Sólo "started": sin Memcached el foro funciona igual, leyendo de MongoDB (ADR-007, ADR-010).
+      memcached:
         condition: service_started
       jaeger:
         condition: service_started
@@ -378,6 +384,14 @@ services:
       - ./deploy/rabbitmq:/scripts:ro
     entrypoint: ["sh", "/scripts/init-broker.sh"]
     restart: "no"
+
+  # Caché compartida por las instancias de forum-service (ADR-007). No es
+  # fuente de verdad: si se reinicia, todo se vuelve a leer de MongoDB. Sin
+  # puerto publicado: sólo la usa forum-service por la red interna de Docker.
+  memcached:
+    image: memcached:1.6.32-alpine
+    command: ["-m", "64"]
+    restart: unless-stopped
 
   # Servidor SMTP de prueba: guarda los mails en lugar de mandarlos y los
   # muestra en http://localhost:8025. notification-service le habla por SMTP

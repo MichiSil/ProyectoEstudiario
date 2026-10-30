@@ -22,6 +22,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/apikey"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cache"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cleanup"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
@@ -126,6 +127,14 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Warn("sin SOLR_URL: la búsqueda usa MongoDB")
 	}
+	// Caché de lectura del foro (ADR-007): Memcached en docker compose; la nula
+	// (none) para medir sin caché; la local para desarrollar sin contenedores.
+	forumCache, err := cache.New(env("CACHE_PROVIDER", "none"), os.Getenv("MEMCACHED_ADDR"))
+	if err != nil {
+		return err
+	}
+	logger.Info("caché del foro", "provider", forumCache.Name())
+
 	svc := &service.Service{Repo: repo, Search: summarySearch, Files: files}
 
 	// Limpieza periódica de PDF huérfanos en MinIO (ADR-003).
