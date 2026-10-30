@@ -116,4 +116,27 @@ Implementado en `services/planner-service/internal/adapters/postgres/schema.sql`
 ### Pendiente de validar
 
 - **users-service** (PostgreSQL) y **forum-service** (MongoDB, MinIO, Solr y Memcached) siguen en esqueleto, y **notification-service** (MongoDB) todavía no consume eventos. Sus almacenamientos se validan para la presentación final.
-- En el `docker-compose.yml` de esta entrega, el usuario de la base `planner` es también el usuario administrador del contenedor, porque es la única base. Cuando se sume la base `users`, cada servicio tiene que tener su propio usuario sin permisos sobre la otra.
+- En el `docker-compose.yml` de esta entrega, el usuario de la base `planner` es también el usuario administrador del contenedor, porque es la única base. Cuando se sume la base `users`, cada servicio tiene que tener su propio usuario sin permisos sobre la otra. *(Resuelto el 2026-10-29: ver la actualización de abajo.)*
+
+## Actualización (2026-10-29): cada servicio con su propio usuario de PostgreSQL
+
+**Resultado: se cumple lo que pedía este ADR, que ningún servicio tenga credenciales para la base de otro.** Hasta ahora no era así: planner-service se conectaba con el administrador del contenedor, un superusuario, que podía leer cualquier base, incluida la de `users`.
+
+| Usuario | Para qué | Puede entrar a |
+|---|---|---|
+| `POSTGRES_ADMIN_USER` (`planner_svc`) | Administrador del contenedor. Sólo lo usa el contenedor `db-init` para crear las bases y sus usuarios. **Ningún servicio se conecta con él.** | Todo (superusuario) |
+| `PLANNER_DB_USER` (`planner_app`) | planner-service. Dueño de la base `planner`, de su esquema y de sus tablas. No es superusuario. | Sólo `planner` |
+| `USERS_DB_USER` (`users_svc`) | users-service. Dueño de la base `users`. No es superusuario. | Sólo `users` |
+
+**Cómo se hace sin borrar las bases que ya existían.** El contenedor `db-init` corre un script idempotente (`deploy/postgres/init-databases.sh`) en cada `docker compose up`: crea los usuarios si no existen, le pasa a cada uno la propiedad de su base, quita el permiso de conexión por defecto (`REVOKE CONNECT ... FROM PUBLIC`) y, en una base `planner` de antes, le pasa las tablas que había creado el administrador a `planner_app`. El administrador conserva el nombre `planner_svc` porque así lo crearon los volúmenes existentes, que no permiten cambiarlo sin recrear la base.
+
+**Evidencia.**
+
+| Prueba | Resultado |
+|---|---|
+| Volumen de antes, con tablas y datos creados por el administrador | Las tablas pasan a `planner_app`, los datos se conservan y el flujo completo (registro, login, propuesta y confirmación por el gateway) funciona |
+| Volumen nuevo | `planner_app` crea las tablas, la extensión `btree_gist` (que PostgreSQL permite instalar a un no superusuario) y la restricción `sessions_no_overlap` |
+| `planner_app` intenta entrar a `users` | `permission denied for database "users"` |
+| `users_svc` intenta entrar a `planner` | `permission denied for database "planner"` |
+
+**Limitación aceptada.** Las dos bases siguen en la misma instancia de PostgreSQL: una falla de esa instancia afecta a los dos servicios. Separarlas en instancias distintas es la alternativa si la carga o la disponibilidad lo pidieran ([ADR-013](ADR-013-capacidad-y-costos.md)).
