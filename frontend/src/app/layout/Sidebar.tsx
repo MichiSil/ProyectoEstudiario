@@ -41,8 +41,8 @@ export function Sidebar() {
           <UserRound size={16} />
         </span>
         <div className="min-w-0">
-          <p className="truncate text-[13px] font-medium text-ink">{user?.displayName || user?.id || 'Tu cuenta'}</p>
-          <p className="truncate text-[11px] text-subtle">{user?.id}</p>
+          <p className="truncate text-[13px] font-medium text-ink">{user?.name || 'Tu cuenta'}</p>
+          <p className="truncate text-[11px] text-subtle">{user?.email}</p>
         </div>
       </Link>
     </aside>

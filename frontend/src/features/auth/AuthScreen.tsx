@@ -1,36 +1,76 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Info } from 'lucide-react'
+import clsx from 'clsx'
 import { useSession } from '@/app/providers/SessionProvider'
+import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { Button } from '@/components/ui/Button'
 import { FieldGroup, Input, Label } from '@/components/ui/Field'
 
+type Mode = 'login' | 'register'
+
+/** Mínimo de la contraseña (RN-02); users-service lo vuelve a validar. */
+const MIN_PASSWORD = 8
+
 /**
- * Ingreso del estudiante. Todavía no hay contraseña porque users-service es un
- * esqueleto (RF-01 y RF-02 llegan con él): el mail identifica al estudiante
- * ante planner-service y sus datos quedan separados de los de los demás (RN-03).
+ * Registro (RF-01) e inicio de sesión (RF-02) contra users-service. El mail es
+ * único (RN-01) y el rol no se elige: lo asigna users-service (RF-03).
  */
 export function AuthScreen() {
-  const { signIn } = useSession()
+  const { signIn, register } = useSession()
+  const [mode, setMode] = useState<Mode>('login')
+  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
-  const [displayName, setDisplayName] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<unknown>(null)
+  const [busy, setBusy] = useState(false)
 
-  function handleSubmit(e: FormEvent) {
+  const isRegister = mode === 'register'
+  const passwordTooShort = isRegister && password.length > 0 && password.length < MIN_PASSWORD
+  const canSubmit =
+    !busy && !!email.trim() && !!password && (!isRegister || (!!name.trim() && password.length >= MIN_PASSWORD))
+
+  function switchMode(next: Mode) {
+    setMode(next)
+    setError(null)
+  }
+
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!email.trim()) return
-    signIn({ id: email, displayName: displayName || email.split('@')[0] })
+    if (!canSubmit) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (isRegister) await register(name, email, password)
+      else await signIn(email, password)
+    } catch (err) {
+      setError(err)
+      setBusy(false)
+    }
   }
 
   return (
     <AuthShell>
+      <div className="mb-5 grid grid-cols-2 gap-1 rounded-xl bg-surface-raised p-1" role="tablist">
+        <ModeTab active={!isRegister} onClick={() => switchMode('login')}>
+          Iniciar sesión
+        </ModeTab>
+        <ModeTab active={isRegister} onClick={() => switchMode('register')}>
+          Crear cuenta
+        </ModeTab>
+      </div>
+
       <form onSubmit={handleSubmit}>
-        <FieldGroup>
-          <Label>Nombre</Label>
-          <Input
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="Cómo querés que te llamemos"
-          />
-        </FieldGroup>
+        {isRegister && (
+          <FieldGroup>
+            <Label>Nombre</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Cómo querés que te llamemos"
+              autoComplete="name"
+              required
+            />
+          </FieldGroup>
+        )}
         <FieldGroup>
           <Label>Mail</Label>
           <Input
@@ -42,18 +82,50 @@ export function AuthScreen() {
             required
           />
         </FieldGroup>
+        <FieldGroup>
+          <Label>Contraseña</Label>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={isRegister ? `Mínimo ${MIN_PASSWORD} caracteres` : ''}
+            autoComplete={isRegister ? 'new-password' : 'current-password'}
+            minLength={isRegister ? MIN_PASSWORD : undefined}
+            required
+          />
+          {passwordTooShort && (
+            <p className="mt-1.5 text-xs text-danger">La contraseña tiene que tener al menos {MIN_PASSWORD} caracteres.</p>
+          )}
+        </FieldGroup>
 
-        <Button type="submit" className="w-full" disabled={!email.trim()}>
-          Ingresar
+        {!!error && (
+          <div className="mb-4">
+            <ApiErrorNotice error={error} />
+          </div>
+        )}
+
+        <Button type="submit" className="w-full" disabled={!canSubmit}>
+          {busy ? 'Un momento…' : isRegister ? 'Crear cuenta' : 'Ingresar'}
         </Button>
       </form>
-
-      <p className="mt-5 flex gap-2 rounded-xl bg-surface-raised/70 px-3 py-2.5 text-xs text-muted">
-        <Info size={14} className="mt-0.5 shrink-0 text-subtle" />
-        El registro con contraseña se habilita cuando esté operativo el servicio de usuarios. Por ahora, tu mail
-        identifica tus materias, exámenes y plan.
-      </p>
     </AuthShell>
+  )
+}
+
+function ModeTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={clsx(
+        'rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+        active ? 'bg-surface text-ink shadow-[var(--shadow-sm)]' : 'text-muted hover:text-ink',
+      )}
+    >
+      {children}
+    </button>
   )
 }
 

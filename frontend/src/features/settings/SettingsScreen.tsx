@@ -31,8 +31,8 @@ function ProfileSection() {
           <UserRound size={24} />
         </span>
         <div className="min-w-0 text-sm">
-          <p className="truncate font-medium text-ink">{user?.displayName}</p>
-          <p className="truncate text-muted">{user?.id}</p>
+          <p className="truncate font-medium text-ink">{user?.name}</p>
+          <p className="truncate text-muted">{user?.email}</p>
         </div>
       </div>
       <Button variant="ghost" className="mt-4" onClick={signOut}>
