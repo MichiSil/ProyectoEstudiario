@@ -27,8 +27,13 @@ const (
 	FailsToRemove = 2
 )
 
-// InstanceHeader indica en la respuesta qué instancia atendió el pedido (ADR-012).
-const InstanceHeader = "X-Served-By"
+// InstanceHeader indica en la respuesta qué instancia atendió el pedido
+// (ADR-012). Se toma del X-Instance que manda la instancia (su nombre en los
+// logs, por ejemplo forum-service-2) o, si no viene, de su dirección.
+const (
+	InstanceHeader         = "X-Served-By"
+	UpstreamInstanceHeader = "X-Instance"
+)
 
 // Instance es una instancia de un servicio, por ejemplo forum-service-2:8083.
 type Instance struct {
@@ -172,8 +177,12 @@ func Balanced(b *Balancer, prefix string, timeout func(*http.Request) time.Durat
 		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		ModifyResponse: func(resp *http.Response) error {
 			resp.Header.Del(observability.CorrelationHeader)
-			inst := resp.Request.Context().Value(instanceKey{}).(*Instance)
-			resp.Header.Set(InstanceHeader, inst.Name)
+			name := resp.Header.Get(UpstreamInstanceHeader)
+			if name == "" {
+				name = resp.Request.Context().Value(instanceKey{}).(*Instance).Name
+			}
+			resp.Header.Del(UpstreamInstanceHeader)
+			resp.Header.Set(InstanceHeader, name)
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {

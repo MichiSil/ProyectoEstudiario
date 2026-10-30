@@ -39,7 +39,8 @@ services:
       PORT: "8080"
       PLANNER_SERVICE_URL: http://planner-service:8082
       USERS_SERVICE_URL: http://users-service:8081
-      FORUM_SERVICE_URL: http://forum-service:8083
+      # forum-service corre en dos instancias y el gateway las balancea (ADR-012).
+      FORUM_SERVICE_URLS: http://forum-service:8083,http://forum-service-2:8083
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       # Secreto para validar los JWT y secreto compartido con planner-service y users-service.
       JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
@@ -55,6 +56,8 @@ services:
       users-service:
         condition: service_healthy
       forum-service:
+        condition: service_healthy
+      forum-service-2:
         condition: service_healthy
       jaeger:
         condition: service_started
@@ -122,6 +125,8 @@ services:
       - "8083:8083"
     environment:
       PORT: "8083"
+      # Nombre de la instancia en los logs, las trazas y X-Served-By (ADR-012).
+      INSTANCE: forum-service-1
       # Base `forum` en MongoDB y bucket `summaries` en MinIO, con usuarios propios (ADR-003).
       MONGO_URI: mongodb://${FORUM_DB_USER}:${FORUM_DB_PASSWORD}@mongo:27017/forum?authSource=forum
       MINIO_ENDPOINT: minio:9000
@@ -149,6 +154,26 @@ services:
       minio-init:
         condition: service_completed_successfully
       # Sólo "started": sin Solr el foro funciona y la búsqueda responde 503 hasta que vuelva (ADR-010).
+      solr:
+        condition: service_started
+      jaeger:
+        condition: service_started
+
+  # Segunda instancia de forum-service (ADR-012): la misma imagen y la misma
+  # configuración que la primera, que se toma de ahí con extends. No publica
+  # puertos: le llegan los pedidos del foro por el api-gateway. Las dos
+  # comparten MongoDB, MinIO y Solr, y no guardan estado en memoria.
+  forum-service-2:
+    extends:
+      service: forum-service
+    ports: !reset []
+    environment:
+      INSTANCE: forum-service-2
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
       solr:
         condition: service_started
       jaeger:

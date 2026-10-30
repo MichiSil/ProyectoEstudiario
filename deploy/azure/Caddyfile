@@ -2,14 +2,24 @@
 # solo el certificado HTTPS (Let's Encrypt) para el dominio de la VM.
 #
 # - /v1/* es la capacidad de documentos para el Grupo 4 (docs/contracts/documents-v1.yaml):
-#   va directo a forum-service, sin pasar por el api-gateway (ADR-014).
+#   va directo a forum-service, sin pasar por el api-gateway (ADR-014), repartida
+#   entre sus dos instancias con los mismos criterios que el gateway (ADR-012):
+#   round robin, chequeo de GET /health cada 5 s y, si una instancia no responde,
+#   se reintenta en la otra.
 # - Todo lo demás es el frontend; su nginx reenvía /api al api-gateway.
 
 {$DOMAIN} {
 	encode gzip
 
 	handle /v1/* {
-		reverse_proxy forum-service:8083
+		reverse_proxy forum-service:8083 forum-service-2:8083 {
+			lb_policy round_robin
+			lb_try_duration 2s
+			health_uri /health
+			health_interval 5s
+			health_timeout 2s
+			fail_duration 10s
+		}
 	}
 
 	handle {
