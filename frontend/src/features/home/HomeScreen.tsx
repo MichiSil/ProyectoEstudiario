@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { addDays, format, formatISO, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
-import { EXAM_TYPE_LABEL } from '@/api/types'
+import { EXAM_TYPE_LABEL, type Exam } from '@/api/types'
+import { ExamDetailSheet } from '@/features/calendar/ExamDetailSheet'
 import { examTypeColorVar } from '@/lib/domain-ui'
 import { formatDateLong, formatDaysUntil, formatMinutes, formatTimeRange, localDate, minutesBetween } from '@/lib/format'
 
@@ -27,6 +28,7 @@ export function HomeScreen() {
     [sessions, today],
   )
 
+  const [detailExam, setDetailExam] = useState<Exam | null>(null)
   const upcomingExams = useMemo(
     () =>
       exams
@@ -158,10 +160,11 @@ export function HomeScreen() {
               const subject = subjectsById.get(exam.subjectId)
               const date = localDate(exam.startsAt)
               return (
-                <Link
+                <button
                   key={exam.id}
-                  to={subject ? `/materias/${subject.id}` : '/calendario'}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-sm)] hover:border-accent/40"
+                  type="button"
+                  onClick={() => setDetailExam(exam)}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 text-left shadow-[var(--shadow-sm)] hover:border-accent/40"
                 >
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: examTypeColorVar(exam.type) }} />
                   <div className="min-w-0 flex-1">
@@ -172,7 +175,7 @@ export function HomeScreen() {
                     <p className="text-xs text-muted">{formatDateLong(date)}</p>
                   </div>
                   <Badge tone="accent">{formatDaysUntil(date)}</Badge>
-                </Link>
+                </button>
               )
             })}
           </div>
@@ -186,6 +189,8 @@ export function HomeScreen() {
         </p>
         <WeekActivityChart days={weekBreakdown} />
       </section>
+
+      <ExamDetailSheet exam={detailExam} onClose={() => setDetailExam(null)} />
     </div>
   )
 }
