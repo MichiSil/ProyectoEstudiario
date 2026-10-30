@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AlertTriangle, BookOpen, Pencil, Sparkles, XCircle } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
@@ -14,6 +14,7 @@ import { ExamFormSheet } from './ExamFormSheet'
 
 export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null; onClose: () => void }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { subjectsById, examsById, sessions, rememberExam, refreshSessions } = usePlannerData()
   const [editing, setEditing] = useState(false)
   const [confirmingCancel, setConfirmingCancel] = useState(false)
@@ -33,6 +34,13 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
   if (editing) return <ExamFormSheet open exam={exam} onClose={() => setEditing(false)} />
 
   const subject = subjectsById.get(exam.subjectId)
+  // Desde la página de la propia materia, "Ver materia" no lleva a ningún lado nuevo.
+  const onSubjectPage = !!subject && location.pathname.startsWith(`/materias/${subject.id}`)
+  // Cerrar el detalle antes de navegar: si no, queda abierto encima de la otra pantalla.
+  function goTo(path: string) {
+    onClose()
+    navigate(path)
+  }
   const plan = sessions.filter((s) => s.examId === exam.id).sort((a, b) => a.start.localeCompare(b.start))
   const date = localDate(exam.startsAt)
   const time = formatTime(exam.startsAt)
@@ -65,7 +73,7 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
 
       <div className="mb-4 flex flex-wrap gap-2">
         {subject && (
-          <button onClick={() => navigate(`/materias/${subject.id}`)}>
+          <button onClick={() => goTo(`/materias/${subject.id}`)}>
             <Badge tone="accent" dotColor={subjectColor(subject.id)}>
               {subject.name}
             </Badge>
@@ -117,13 +125,13 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
 
       <div className="flex flex-col gap-2">
         {!cancelled && (!plan.length || outdated) && (
-          <Button onClick={() => navigate(`/plan?examen=${exam.id}`)}>
+          <Button onClick={() => goTo(`/plan?examen=${exam.id}`)}>
             <Sparkles size={16} />
             {outdated ? 'Replanificar' : 'Pedir plan de estudio'}
           </Button>
         )}
-        {subject && (
-          <Button variant="secondary" onClick={() => navigate(`/materias/${subject.id}`)}>
+        {subject && !onSubjectPage && (
+          <Button variant="secondary" onClick={() => goTo(`/materias/${subject.id}`)}>
             <BookOpen size={16} />
             Ver materia
           </Button>
