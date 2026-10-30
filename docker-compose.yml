@@ -121,6 +121,9 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
       # API keys de la capacidad /v1 (consumidor:sha256 de la clave), nunca las claves (ADR-014).
       FORUM_API_KEYS: ${FORUM_API_KEYS:-}
+      # Limpieza de PDF huérfanos (ADR-003): cada cuánto corre y desde qué antigüedad borra.
+      FORUM_CLEANUP_INTERVAL: ${FORUM_CLEANUP_INTERVAL:-1h}
+      FORUM_CLEANUP_MIN_AGE: ${FORUM_CLEANUP_MIN_AGE:-1h}
       # Core de Solr para la búsqueda de aprobados (ADR-006). El indexador corre dentro de forum-service.
       SOLR_URL: http://solr:8983/solr/summaries
     healthcheck:

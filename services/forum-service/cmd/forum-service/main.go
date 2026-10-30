@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/apikey"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/cleanup"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/ratelimit"
@@ -125,6 +127,18 @@ func run(logger *slog.Logger) error {
 	}
 	svc := &service.Service{Repo: repo, Search: summarySearch, Files: files}
 
+	// Limpieza periódica de PDF huérfanos en MinIO (ADR-003).
+	cleanInterval, err := durationEnv("FORUM_CLEANUP_INTERVAL", cleanup.DefaultInterval)
+	if err != nil {
+		return err
+	}
+	cleanMinAge, err := durationEnv("FORUM_CLEANUP_MIN_AGE", cleanup.DefaultMinAge)
+	if err != nil {
+		return err
+	}
+	go (&cleanup.Cleaner{Files: files, Docs: repo, Logger: logger, Interval: cleanInterval, MinAge: cleanMinAge}).Run(ctx)
+	logger.Info("limpieza de PDF huérfanos programada", "intervalMs", cleanInterval.Milliseconds(), "minAgeMs", cleanMinAge.Milliseconds())
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", controller.Health(repo))
 	forum := &controller.Forum{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
@@ -152,6 +166,20 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// durationEnv lee una duración de una variable de entorno (por ejemplo "1h" o
+// "30s"), con un valor por defecto si no está.
+func durationEnv(key string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("%s tiene que ser una duración como 1h o 30s: %q", key, v)
+	}
+	return d, nil
 }
 
 // retry espera a que una dependencia responda, con espera exponencial, como
