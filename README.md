@@ -31,24 +31,6 @@ Cada estudiante tiene **sus propias materias**, a las que les asigna una **dific
 
 A partir de todo eso, un **agente de IA arma el plan de estudio**. Propone sesiones con fecha, horario, duración, tema y objetivo, y el estudiante las confirma para que queden reservadas en su calendario.
 
-### Editar y cancelar exámenes
-
-El estudiante puede listar sus exámenes, editarlos y cancelarlos (RF-06), con el JWT de la sección anterior:
-
-```bash
-G=http://localhost:8080/api/planner
-curl -H "Authorization: Bearer $TOKEN" $G/exams
-curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
-  -H "Content-Type: application/json" -d '{"startsAt":"2026-11-27T09:00:00-03:00"}'
-curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
-```
-
-- `GET /exams` devuelve cada examen con `planStatus`: `confirmado`, `desactualizado` o ausente si todavía no tiene plan.
-- `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha de un examen con plan confirmado, el plan pasa a **desactualizado** y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
-- `POST /exams/{id}/cancel` cancela el examen y sus planes, libera las sesiones pendientes y conserva las completadas como historial (RN-17). Cancelar dos veces no falla. Un examen cancelado no se puede editar ni planificar: responde `409 EXAM_CANCELLED`.
-
-Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
-
 ### Foro de resúmenes
 
 Los estudiantes suben **resúmenes** de una materia al foro. Antes de hacerse visible, cada publicación pasa por la **moderación del administrador**:
@@ -227,6 +209,24 @@ cd ../..
 ```
 
 > Si ya tenías un `.env` de antes, volvé a copiar `.env.example` a `.env` (y, si tenías una `AI_API_KEY`, volvé a ponerla). Cambiaron las variables de PostgreSQL (`POSTGRES_ADMIN_*` y `PLANNER_DB_*`) y se sumaron `JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_*` y `ADMIN_EMAILS`: sin ellas, `docker compose` no levanta. No hace falta borrar la base: `db-init` adapta la que ya tenías.
+
+### Editar y cancelar exámenes
+
+El estudiante puede listar sus exámenes, editarlos y cancelarlos (RF-06), con el JWT de la sección anterior:
+
+```bash
+G=http://localhost:8080/api/planner
+curl -H "Authorization: Bearer $TOKEN" $G/exams
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
+  -H "Content-Type: application/json" -d '{"startsAt":"2026-11-27T09:00:00-03:00"}'
+curl -H "Authorization: Bearer $TOKEN" -X POST $G/exams/<id del examen>/cancel
+```
+
+- `GET /exams` devuelve cada examen con `planStatus`: `confirmado`, `desactualizado` o ausente si todavía no tiene plan.
+- `PATCH /exams/{id}` cambia sólo los campos que se mandan (`type`, `startsAt`, `topics`); la materia no se cambia. La fecha nueva tampoco puede estar en el pasado (RN-04). Si cambia la fecha de un examen con plan confirmado, el plan pasa a **desactualizado** y sus sesiones pendientes siguen en `GET /sessions` con `"outdated": true` hasta que el estudiante replanifique (RN-16). Al confirmar el plan nuevo, esas sesiones se reemplazan.
+- `POST /exams/{id}/cancel` cancela el examen y sus planes, libera las sesiones pendientes y conserva las completadas como historial (RN-17). Cancelar dos veces no falla. Un examen cancelado no se puede editar ni planificar: responde `409 EXAM_CANCELLED`.
+
+Editar, cancelar y confirmar un plan bloquean la fila del estudiante en la misma transacción, así que no se pisan entre sí ([ADR-004](docs/adr/ADR-004-concurrencia.md)).
 
 ### Foro de resúmenes
 
@@ -416,10 +416,11 @@ Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/use
 | `services/` | Un módulo de Go por servicio (`api-gateway`, `users-service`, `planner-service`, `forum-service`, `notification-service`), con el ejecutable en `cmd/<nombre>/` y su `Dockerfile` |
 | `frontend/` | Interfaz web (React + TypeScript, Vite) con su `Dockerfile` y la configuración de nginx |
 | `docs/` | Arquitectura, ADR y contrato de la capacidad publicada |
+| `deploy/` | Inicialización de las bases y [despliegue en Azure](deploy/azure/README.md) |
 
 ### Entorno desplegado
 
-La capacidad que publicamos para otros grupos va a estar desplegada en la nube con una URL pública. La vamos a publicar acá cuando esté disponible.
+El sistema se despliega en una máquina virtual de Azure con el mismo `docker compose` y Caddy adelante con HTTPS: el paso a paso está en [deploy/azure/README.md](deploy/azure/README.md). La URL pública (la app y la capacidad en `/v1`) la vamos a publicar acá cuando esté levantada.
 
 **Integración con otros grupos** (asignada por la cátedra):
 
