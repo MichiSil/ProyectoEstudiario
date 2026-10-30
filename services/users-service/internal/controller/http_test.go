@@ -64,6 +64,21 @@ func (m *memRepo) GetByID(_ context.Context, id string) (model.User, error) {
 	return m.find(func(u model.User) bool { return u.ID == id })
 }
 
+func (m *memRepo) UpdateRole(_ context.Context, id, role string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	for i := range m.users {
+		if m.users[i].ID == id {
+			m.users[i].Role = role
+			return nil
+		}
+	}
+	return model.ErrNotFound
+}
+
 func (m *memRepo) Ping(context.Context) error { return m.err }
 
 type fakeTokens struct{}

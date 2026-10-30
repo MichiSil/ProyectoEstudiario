@@ -176,7 +176,7 @@ curl -X POST http://localhost:8080/api/users/register \
   -d '{"name":"Ana Pérez","email":"ana@mail.com","password":"secreta123"}'
 ```
 
-Devuelve `201` con el usuario. La contraseña tiene como mínimo 8 caracteres y se guarda sólo como hash bcrypt (RN-02). Un mail ya registrado devuelve `409 EMAIL_IN_USE` (RN-01), y datos inválidos, `422 VALIDATION_ERROR`. El rol es `estudiante`; el rol `admin` no se elige (RF-03): lo reciben los mails de la variable `ADMIN_EMAILS` del `.env`.
+Devuelve `201` con el usuario. La contraseña tiene como mínimo 8 caracteres y se guarda sólo como hash bcrypt (RN-02). Un mail ya registrado devuelve `409 EMAIL_IN_USE` (RN-01), y datos inválidos, `422 VALIDATION_ERROR`. El rol es `estudiante`; el rol `admin` no se elige (RF-03): lo tienen los mails de la variable `ADMIN_EMAILS` del `.env`. El rol se recalcula en cada inicio de sesión, así que agregar o sacar un mail de esa lista vale desde el próximo login, sin tocar la base (después de cambiar el `.env`, recreá el servicio con `docker compose up -d users-service`).
 
 **2. Iniciar sesión** y guardar el token (vale 8 horas):
 

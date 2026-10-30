@@ -53,9 +53,25 @@ func (m *memRepo) GetByID(_ context.Context, id string) (model.User, error) {
 	return u, nil
 }
 
-type fakeTokens struct{}
+func (m *memRepo) UpdateRole(_ context.Context, id, role string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[id]
+	if !ok {
+		return model.ErrNotFound
+	}
+	u.Role = role
+	m.users[id] = u
+	return nil
+}
 
-func (fakeTokens) Issue(u model.User) (string, time.Time, error) {
+// fakeTokens guarda el rol del último token emitido, para ver qué rol lleva el JWT.
+type fakeTokens struct{ lastRole *string }
+
+func (f fakeTokens) Issue(u model.User) (string, time.Time, error) {
+	if f.lastRole != nil {
+		*f.lastRole = u.Role
+	}
 	return "token-de-" + u.ID, time.Now().Add(time.Hour), nil
 }
 
@@ -192,5 +208,38 @@ func TestMeDevuelveElUsuario(t *testing.T) {
 	}
 	if _, err := svc.Me(ctx, "no-existe"); !errors.Is(err, model.ErrNotFound) {
 		t.Errorf("err = %v, se esperaba ErrNotFound", err)
+	}
+}
+
+func TestElRolSeRecalculaEnCadaLogin(t *testing.T) {
+	svc, repo := newService("")
+	var rolDelToken string
+	svc.Tokens = fakeTokens{lastRole: &rolDelToken}
+
+	u, err := svc.Register(ctx, RegisterInput{Name: "Ana", Email: "ana@mail.com", Password: "secreta123"})
+	if err != nil || u.Role != model.RoleStudent {
+		t.Fatalf("registro: rol = %q, err = %v", u.Role, err)
+	}
+
+	// Se agrega el mail a ADMIN_EMAILS después de registrarse: vale en el próximo login.
+	svc.AdminEmails = ParseAdminEmails("ana@mail.com")
+	res, err := svc.Login(ctx, "ana@mail.com", "secreta123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.User.Role != model.RoleAdmin || rolDelToken != model.RoleAdmin || repo.users[u.ID].Role != model.RoleAdmin {
+		t.Fatalf("después de agregarlo: respuesta %q, token %q, base %q; se esperaba admin en los tres",
+			res.User.Role, rolDelToken, repo.users[u.ID].Role)
+	}
+
+	// Se saca de la lista: vuelve a ser estudiante.
+	svc.AdminEmails = ParseAdminEmails("")
+	res, err = svc.Login(ctx, "ana@mail.com", "secreta123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.User.Role != model.RoleStudent || rolDelToken != model.RoleStudent || repo.users[u.ID].Role != model.RoleStudent {
+		t.Fatalf("después de sacarlo: respuesta %q, token %q, base %q; se esperaba estudiante en los tres",
+			res.User.Role, rolDelToken, repo.users[u.ID].Role)
 	}
 }

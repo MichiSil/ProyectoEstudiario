@@ -59,6 +59,17 @@ func (p *Postgres) Create(ctx context.Context, u model.User) error {
 	})
 }
 
+// UpdateRole cambia el rol de un usuario (se recalcula en cada login, RF-03).
+func (p *Postgres) UpdateRole(ctx context.Context, id, role string) error {
+	return p.run(ctx, func(ctx context.Context) error {
+		tag, err := p.pool.Exec(ctx, `UPDATE users SET role = $2 WHERE id = $1`, id, role)
+		if err == nil && tag.RowsAffected() == 0 {
+			return model.ErrNotFound
+		}
+		return err
+	})
+}
+
 func (p *Postgres) GetByEmail(ctx context.Context, email string) (model.User, error) {
 	return p.getOne(ctx, `WHERE email = $1`, email)
 }

@@ -86,7 +86,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
       # GET /me sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
-      # Mails que reciben el rol admin al registrarse (RF-03).
+      # Mails con rol admin (RF-03); se aplica en cada login.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]

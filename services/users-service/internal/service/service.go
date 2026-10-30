@@ -28,6 +28,7 @@ type Repository interface {
 	Create(ctx context.Context, u model.User) error
 	GetByEmail(ctx context.Context, email string) (model.User, error)
 	GetByID(ctx context.Context, id string) (model.User, error)
+	UpdateRole(ctx context.Context, id, role string) error
 }
 
 // TokenIssuer firma el JWT de un usuario y devuelve cuándo vence.
@@ -39,8 +40,8 @@ type TokenIssuer interface {
 type Service struct {
 	Repo   Repository
 	Tokens TokenIssuer
-	// AdminEmails son los mails que reciben el rol admin al registrarse
-	// (RF-03: el rol no se elige, se asigna por configuración). En minúsculas.
+	// AdminEmails son los mails con rol admin (RF-03: el rol no se elige, se
+	// asigna por configuración). Se aplica al registrarse y en cada login. En minúsculas.
 	AdminEmails map[string]bool
 	// BcryptCost es el costo de bcrypt; 0 usa bcrypt.DefaultCost.
 	BcryptCost int
@@ -69,8 +70,8 @@ type RegisterInput struct {
 	Password string
 }
 
-// Register crea un usuario con rol estudiante, o admin si su mail está en
-// AdminEmails. La contraseña se guarda sólo como hash bcrypt (RN-02).
+// Register crea un usuario con el rol que corresponde a su mail (ver roleFor).
+// La contraseña se guarda sólo como hash bcrypt (RN-02).
 func (s *Service) Register(ctx context.Context, in RegisterInput) (model.User, error) {
 	name := strings.TrimSpace(in.Name)
 	email := normalizeEmail(in.Email)
@@ -99,10 +100,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (model.User, e
 	if err != nil {
 		return model.User{}, err
 	}
-	role := model.RoleStudent
-	if s.AdminEmails[email] {
-		role = model.RoleAdmin
-	}
+	role := s.roleFor(email)
 	u := model.User{
 		ID:           strings.ToLower(rand.Text()),
 		Name:         name,
@@ -148,6 +146,15 @@ func (s *Service) Login(ctx context.Context, email, password string) (LoginResul
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
 		return LoginResult{}, model.ErrInvalidCredentials
 	}
+	// El rol se recalcula en cada login: si se agrega o se saca un mail de
+	// ADMIN_EMAILS, vale desde el próximo inicio de sesión, sin tocar la base a
+	// mano. Se guarda para que GET /me muestre el mismo rol que el token.
+	if role := s.roleFor(u.Email); role != u.Role {
+		if err := s.Repo.UpdateRole(ctx, u.ID, role); err != nil {
+			return LoginResult{}, err
+		}
+		u.Role = role
+	}
 	token, exp, err := s.Tokens.Issue(u)
 	if err != nil {
 		return LoginResult{}, err
@@ -158,6 +165,14 @@ func (s *Service) Login(ctx context.Context, email, password string) (LoginResul
 // Me devuelve los datos del usuario identificado por el gateway.
 func (s *Service) Me(ctx context.Context, userID string) (model.User, error) {
 	return s.Repo.GetByID(ctx, userID)
+}
+
+// roleFor devuelve admin si el mail está en AdminEmails y estudiante si no.
+func (s *Service) roleFor(email string) string {
+	if s.AdminEmails[email] {
+		return model.RoleAdmin
+	}
+	return model.RoleStudent
 }
 
 func (s *Service) cost() int {

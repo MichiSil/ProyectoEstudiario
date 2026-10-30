@@ -103,3 +103,21 @@ func TestLaBaseNoAceptaRolesDesconocidos(t *testing.T) {
 		t.Fatal("la base aceptó un rol que no existe")
 	}
 }
+
+func TestCambiarElRol(t *testing.T) {
+	repo, ctx := newRepo(t), context.Background()
+	u := newUser()
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateRole(ctx, u.ID, model.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetByID(ctx, u.ID)
+	if err != nil || got.Role != model.RoleAdmin {
+		t.Fatalf("rol = %q, err = %v; se esperaba admin", got.Role, err)
+	}
+	if err := repo.UpdateRole(ctx, "no-existe", model.RoleAdmin); !errors.Is(err, model.ErrNotFound) {
+		t.Errorf("err = %v, se esperaba ErrNotFound", err)
+	}
+}
