@@ -56,8 +56,7 @@ export function HomeScreen() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-8 sm:px-8">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-accent">Estudiario</p>
+      <div className="flex justify-end">
         <ThemeToggle />
       </div>
       <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
