@@ -147,6 +147,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
 | MongoDB (base `forum`) | Sin puerto publicado | Sólo lo usan forum-service y `mongo-init`, por la red interna de Docker. forum-service entra con su usuario (`FORUM_DB_*`), que sólo lee y escribe la base `forum`; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
+| Solr (core `summaries`) | http://localhost:8983/solr | Índice de búsqueda de los resúmenes aprobados. El panel de administración sirve para ver el esquema y probar consultas |
 | MinIO (bucket `summaries`) | Consola web en http://localhost:9001 | PDF de los resúmenes. La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar el bucket `summaries`. La consola se abre con `MINIO_ROOT_*` |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
 
@@ -256,7 +257,18 @@ curl -s -X PUT -H "Authorization: Bearer $EST" -H "Content-Type: application/jso
   -d '{"score":4}' $G/api/forum/summaries/$ID/rating                                            # de 1 a 5
 ```
 
-Sólo se califican resúmenes aprobados (RN-28), nunca el propio (RN-29), y calificar de nuevo reemplaza el puntaje anterior (RN-30). Por ahora la búsqueda usa el índice de texto de MongoDB, detrás de la interfaz `SummarySearch`. Cuando se sume Solr, se la reemplaza sin tocar el resto ([ADR-006](docs/adr/ADR-006-busqueda.md)).
+Sólo se califican resúmenes aprobados (RN-28), nunca el propio (RN-29), y calificar de nuevo reemplaza el puntaje anterior (RN-30). La búsqueda (la del foro y la de `/v1`) usa **Solr** ([ADR-006](docs/adr/ADR-006-busqueda.md)):
+
+- **Qué busca:** texto en título, materia y descripción, sin importar tildes ni plurales ("analisis integral" encuentra "Análisis… Integrales"). Filtra por materia, etiquetas y calificación mínima, y ordena por relevancia, calificación o fecha.
+- **Cómo se mantiene al día:** el indexador corre dentro de forum-service y cada 5 s pasa a Solr los resúmenes que cambiaron en MongoDB. Un aprobado aparece y un eliminado desaparece en menos de 10 s (el SPEC pide 1 minuto). Cada 5 minutos, además, compara todo MongoDB con el índice y corrige diferencias, incluidas las calificaciones.
+- **Si Solr se cae:** la búsqueda responde `503 SEARCH_UNAVAILABLE` y el resto del foro sigue funcionando. Al volver, el índice se pone al día solo.
+- **Si se pierde el índice** (por ejemplo, con `docker compose down -v`) o cambia el esquema, se reconstruye desde MongoDB:
+
+```bash
+docker compose exec forum-service forum-service reindex
+```
+
+El esquema del índice está versionado en [`schema.json`](services/forum-service/internal/search/schema.json). forum-service lo aplica al arrancar con la Schema API de Solr, sin pasos manuales.
 
 ### Capacidad de documentos para el Grupo 4
 
@@ -303,6 +315,14 @@ docker run --rm --network estudiario_default -v "$PWD/services/forum-service:/sr
 ```
 
 Los tests borran al terminar los datos que crean.
+
+El test de integración de Solr vacía el core que usa, así que se corre contra un Solr descartable, no contra el del `docker compose`:
+
+```bash
+docker run -d --rm --name solr-test -p 18983:8983 solr:9.7.0 solr-precreate summaries_test
+FORUM_TEST_SOLR_URL=http://localhost:18983/solr/summaries_test go test ./internal/search/
+docker stop solr-test
+```
 
 El test de contrato valida cada respuesta de `/v1/*` y de `/health`, de éxito y de error, contra `docs/contracts/documents-v1.yaml` con [kin-openapi](https://github.com/getkin/kin-openapi). Si el servicio y el contrato no coinciden, el test falla.
 

@@ -252,3 +252,7 @@ Queda una ventana mínima en la que el mail se envió pero el proceso se cayó a
 ### Pendiente
 
 La comunicación asíncrona (sección 3: *outbox* en forum-service, RabbitMQ, consumidor idempotente en notification-service y *dead letter queues*) se implementa con el foro y las notificaciones, para la presentación final.
+
+### Actualización (2026-10-30)
+
+El indexador de búsqueda ya no consume `forum.search-indexer`: lee los cambios directamente de MongoDB por `updatedAt` cada 5 s ([ADR-006, actualización](ADR-006-busqueda.md#actualización-2026-10-30-implementación)). La cola `forum.search-indexer` y su DLQ no se crean. Los eventos `summary.*` del *outbox* se siguen publicando para notification-service y el consumo de beneficios.

@@ -2,6 +2,9 @@
 // moderación, calificaciones y búsqueda (SPEC 7), y expone la capacidad de
 // registro y consulta de documentos para otros grupos (SPEC 11.1, ADR-014).
 // Está organizado por capas: controller → service → repository (ADR-002).
+//
+// Con el argumento "reindex" no levanta el servidor: vacía el índice de Solr y
+// lo vuelve a armar desde MongoDB, y termina (ADR-006, 4).
 package main
 
 import (
@@ -22,6 +25,7 @@ import (
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/ratelimit"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/repository"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/search"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/storage"
 )
@@ -96,9 +100,30 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	// La búsqueda queda detrás de SummarySearch: hoy sobre MongoDB, después
-	// sobre Solr (ADR-006).
-	svc := &service.Service{Repo: repo, Search: repository.NewSearch(db), Files: files}
+	// Búsqueda sobre Solr (ADR-006), con el indexador corriendo aparte. Sin
+	// SOLR_URL (por ejemplo, al probar sin Docker) se usa la de MongoDB.
+	var summarySearch service.SummarySearch = repository.NewSearch(db)
+	if solrURL := os.Getenv("SOLR_URL"); solrURL != "" {
+		solr := search.NewSolr(solrURL)
+		indexer := &search.Indexer{Solr: solr, Source: repo, Logger: logger}
+		if len(os.Args) > 1 && os.Args[1] == "reindex" {
+			started := time.Now()
+			n, err := indexer.Rebuild(ctx)
+			if err != nil {
+				return err
+			}
+			logger.Info("índice reconstruido", "documents", n, "durationMs", time.Since(started).Milliseconds())
+			return nil
+		}
+		summarySearch = &search.SolrSearch{Solr: solr, Loader: repo}
+		go indexer.Run(ctx)
+		logger.Info("búsqueda sobre Solr", "url", solrURL)
+	} else if len(os.Args) > 1 && os.Args[1] == "reindex" {
+		return errors.New("reindex necesita SOLR_URL")
+	} else {
+		logger.Warn("sin SOLR_URL: la búsqueda usa MongoDB")
+	}
+	svc := &service.Service{Repo: repo, Search: summarySearch, Files: files}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", controller.Health(repo))

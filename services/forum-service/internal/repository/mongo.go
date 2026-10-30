@@ -56,6 +56,8 @@ func (m *Mongo) EnsureIndexes(ctx context.Context) error {
 			{Keys: bson.D{{Key: "author.consumer", Value: 1}, {Key: "createdAt", Value: -1}}},
 			// Eventos sin publicar, para el relay del outbox (ADR-005, 3.3).
 			{Keys: bson.D{{Key: "outbox.publishedAt", Value: 1}}},
+			// Cambios recientes, para el indexador de Solr (ADR-006).
+			{Keys: bson.D{{Key: "updatedAt", Value: 1}}},
 			// Búsqueda por texto en español, con más peso en el título.
 			{
 				Keys: bson.D{{Key: "title", Value: "text"}, {Key: "description", Value: "text"}, {Key: "category", Value: "text"}},
