@@ -65,6 +65,9 @@ func TestElVerifierAceptaElTokenDeUsersService(t *testing.T) {
 	if claims.Subject != login.User.ID || claims.Role != RoleStudent {
 		t.Errorf("claims = sub %q, role %q; se esperaba sub %q y rol estudiante", claims.Subject, claims.Role, login.User.ID)
 	}
+	if claims.Name != "Gateway" || claims.Email != email {
+		t.Errorf("claims = name %q, email %q; se esperaban los del usuario registrado", claims.Name, claims.Email)
+	}
 	if claims.ExpiresAt == nil || time.Until(claims.ExpiresAt.Time) < 7*time.Hour {
 		t.Errorf("exp = %v, se esperaba una vigencia de 8 horas", claims.ExpiresAt)
 	}

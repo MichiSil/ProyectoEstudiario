@@ -30,3 +30,19 @@ func TestStripIdentityDescartaLaIdentidadDelCliente(t *testing.T) {
 		t.Error("StripIdentity modificó el pedido original en lugar de una copia")
 	}
 }
+
+func TestStripIdentityDescartaNombreYMailDelCliente(t *testing.T) {
+	var name, email string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name, email = r.Header.Get(UserNameHeader), r.Header.Get(UserEmailHeader)
+	})
+	// Ruta pública (registro o login): igual se borra lo que mande el cliente.
+	req := httptest.NewRequest(http.MethodPost, "/api/users/login", nil)
+	req.Header.Set(UserNameHeader, "Otra%20Persona")
+	req.Header.Set(UserEmailHeader, "otra%40mail.com")
+	StripIdentity(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if name != "" || email != "" {
+		t.Errorf("llegaron X-User-Name=%q y X-User-Email=%q, se esperaba que el gateway los borrara", name, email)
+	}
+}
