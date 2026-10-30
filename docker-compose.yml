@@ -27,6 +27,7 @@ services:
       PORT: "8080"
       PLANNER_SERVICE_URL: http://planner-service:8082
       USERS_SERVICE_URL: http://users-service:8081
+      FORUM_SERVICE_URL: http://forum-service:8083
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       # Secreto para validar los JWT y secreto compartido con planner-service y users-service.
       JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env (ver .env.example)}
@@ -40,6 +41,8 @@ services:
       planner-service:
         condition: service_healthy
       users-service:
+        condition: service_healthy
+      forum-service:
         condition: service_healthy
       jaeger:
         condition: service_started
@@ -114,6 +117,8 @@ services:
       MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY}
       MINIO_BUCKET: summaries
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # La API del foro sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s

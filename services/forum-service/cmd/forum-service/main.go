@@ -1,11 +1,11 @@
-// Command forum-service administra los resúmenes del foro de Estudiario: publicación, moderación, calificaciones y búsqueda.
-//
-// Por ahora sólo expone GET /health. La funcionalidad se agrega a partir de la Entrega 2.
+// Command forum-service administra el foro de resúmenes: publicación,
+// moderación, calificaciones y búsqueda (SPEC 7), y expone la capacidad de
+// registro y consulta de documentos para otros grupos (SPEC 11.1, ADR-014).
+// Está organizado por capas: controller → service → repository (ADR-002).
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,66 +13,129 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/repository"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/storage"
 )
 
-const (
-	serviceName = "forum-service"
-	defaultPort = "8083"
-)
+const serviceName = "forum-service"
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", serviceName)
+	logger := observability.NewLogger(serviceName, env("INSTANCE", env("HOSTNAME", "local")))
+	slog.SetDefault(logger)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
+	if err := run(logger); err != nil {
+		logger.Error("el servicio terminó con error", "error", err.Error())
+		os.Exit(1)
 	}
+}
 
-	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
-	srv := &http.Server{
-		Addr:              ":" + port,
-		Handler:           newRouter(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
+func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go func() {
-		logger.Info("servidor iniciado", "port", port)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("el servidor se detuvo por un error", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-	logger.Info("apagando el servidor")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("no se pudo apagar el servidor de forma ordenada", "error", err)
-		os.Exit(1)
+	shutdownTracing, err := observability.SetupTracing(ctx, serviceName)
+	if err != nil {
+		return err
 	}
-	logger.Info("servidor detenido")
-}
+	defer shutdownTracing(context.Background()) //nolint:errcheck
 
-func newRouter() http.Handler {
+	// Secreto compartido con el api-gateway: sin él, la API del foro no acepta
+	// la identidad de X-User-Id.
+	internalToken := os.Getenv("INTERNAL_TOKEN")
+	if len(internalToken) < 32 {
+		return errors.New("INTERNAL_TOKEN falta o tiene menos de 32 caracteres")
+	}
+
+	mongoURI := os.Getenv("MONGO_URI")
+	if mongoURI == "" {
+		return errors.New("falta la variable MONGO_URI")
+	}
+	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect(context.Background()) //nolint:errcheck
+	db := client.Database("forum")
+	repo := repository.New(db)
+	if err := retry(ctx, logger, "MongoDB", repo.Ping); err != nil {
+		return err
+	}
+	if err := repo.EnsureIndexes(ctx); err != nil {
+		return err
+	}
+
+	files, err := storage.NewMinIO(env("MINIO_ENDPOINT", "localhost:9000"), os.Getenv("MINIO_ACCESS_KEY"),
+		os.Getenv("MINIO_SECRET_KEY"), env("MINIO_BUCKET", "summaries"), os.Getenv("MINIO_SECURE") == "true")
+	if err != nil {
+		return err
+	}
+	if err := retry(ctx, logger, "MinIO", files.Ping); err != nil {
+		return err
+	}
+
+	// La búsqueda queda detrás de SummarySearch: hoy sobre MongoDB, después
+	// sobre Solr (ADR-006).
+	svc := &service.Service{Repo: repo, Search: repository.NewSearch(db), Files: files}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", handleHealth)
-	return mux
+	mux.Handle("GET /health", controller.Health(repo))
+	forum := &controller.Forum{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
+	forum.Register(mux)
+
+	srv := &http.Server{
+		Addr:              ":" + env("PORT", "8083"),
+		Handler:           observability.Middleware(serviceName, logger, mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		// Subir un PDF de 10 MB puede tardar más que una lectura común (ADR-005: 20 s en el gateway).
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdown)
+	}()
+	logger.Info("forum-service escuchando", "addr", srv.Addr)
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
-type healthResponse struct {
-	Status  string `json:"status"`
-	Service string `json:"service"`
-}
-
-func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok", Service: serviceName})
+// retry espera a que una dependencia responda, con espera exponencial, como
+// planner-service y users-service con PostgreSQL.
+func retry(ctx context.Context, logger *slog.Logger, name string, ping func(context.Context) error) error {
+	wait := time.Second
+	for attempt := 1; ; attempt++ {
+		err := ping(ctx)
+		if err == nil {
+			return nil
+		}
+		if attempt == 6 {
+			return err
+		}
+		logger.Warn(name+" no disponible, reintentando", "attempt", attempt, "waitMs", wait.Milliseconds(), "error", err.Error())
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		wait *= 2
+	}
 }
