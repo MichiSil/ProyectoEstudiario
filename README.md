@@ -223,12 +223,12 @@ EST=$(login "Ana Pérez" ana@mail.com)
 ADMIN=$(login "Admin" admin@estudiario.local)
 ```
 
-**Subir un resumen** (multipart: `title`, `category` con la materia, `description`, `tags` separadas por comas, `authorName` opcional y el PDF en `file`). Queda **pendiente** (RN-19). Si el archivo no es PDF responde `415`, y si pesa más de 10 MB, `413` (RN-20):
+**Subir un resumen** (multipart: `title`, `category` con la materia, `description`, `tags` separadas por comas y el PDF en `file`). El **autor sale del usuario logueado**: el nombre y el mail del token se copian en el resumen, y la respuesta muestra el nombre pero nunca el mail. Si el token no trae el nombre (por ejemplo, uno de `devtoken`), se usa el campo opcional `authorName` y, si tampoco viene, "Estudiante de Estudiario". Queda **pendiente** (RN-19). Si el archivo no es PDF responde `415`, y si pesa más de 10 MB, `413` (RN-20):
 
 ```bash
 curl -s -H "Authorization: Bearer $EST" $G/api/forum/summaries \
   -F "title=Resumen de integrales dobles" -F "category=Análisis Matemático II" \
-  -F "tags=parcial,integrales" -F "authorName=Ana Pérez" \
+  -F "tags=parcial,integrales" \
   -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf"
 # guardá el "id" de la respuesta:
 ID=<id del resumen>
@@ -269,6 +269,8 @@ docker compose exec forum-service forum-service reindex
 ```
 
 El esquema del índice está versionado en [`schema.json`](services/forum-service/internal/search/schema.json). forum-service lo aplica al arrancar con la Schema API de Solr, sin pasos manuales.
+
+**Limpieza de PDF huérfanos.** forum-service borra solo, cada hora, los PDF del bucket que no tienen ningún resumen (por ejemplo, si falló la creación del documento después de subir el archivo), siempre que tengan más de 1 hora. Se configura con `FORUM_CLEANUP_INTERVAL` y `FORUM_CLEANUP_MIN_AGE` en el `.env` ([ADR-003](docs/adr/ADR-003-persistencia.md)); para probarlo se pueden bajar, por ejemplo a `30s` y `0s`. Cada vuelta deja en el log `limpieza de PDF huérfanos` con lo revisado y lo borrado.
 
 ### Capacidad de documentos para el Grupo 4
 
