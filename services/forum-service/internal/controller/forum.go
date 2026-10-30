@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
@@ -12,15 +13,19 @@ import (
 )
 
 // Encabezados que completa el api-gateway después de validar el JWT (ADR-001).
+// X-User-Name y X-User-Email vienen codificados con url.QueryEscape y sólo si
+// el token los trae.
 const (
 	UserIDHeader        = "X-User-Id"
 	UserRoleHeader      = "X-User-Role"
+	UserNameHeader      = "X-User-Name"
+	UserEmailHeader     = "X-User-Email"
 	InternalTokenHeader = "X-Internal-Token"
 	roleAdmin           = "admin"
 )
 
-// defaultStudentName es el autor visible de un resumen cuando el frontend no
-// manda el nombre (el JWT sólo trae el id y el rol del estudiante).
+// defaultStudentName es el autor visible de un resumen cuando ni el token ni el
+// formulario traen el nombre (por ejemplo, con un token de prueba de devtoken).
 const defaultStudentName = "Estudiante de Estudiario"
 
 // Forum es la API del foro para el frontend, detrás del api-gateway en
@@ -61,8 +66,23 @@ func (h *Forum) withViewer(next viewerHandler) http.HandlerFunc {
 			problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "falta la identidad del usuario (X-User-Id)", nil)
 			return
 		}
-		next(w, r, service.Viewer{UserID: id, Admin: r.Header.Get(UserRoleHeader) == roleAdmin})
+		next(w, r, service.Viewer{
+			UserID: id,
+			Admin:  r.Header.Get(UserRoleHeader) == roleAdmin,
+			Name:   headerValue(r, UserNameHeader),
+			Email:  headerValue(r, UserEmailHeader),
+		})
 	}
+}
+
+// headerValue decodifica un encabezado que el gateway mandó con url.QueryEscape.
+// Si no se puede decodificar, se ignora.
+func headerValue(r *http.Request, name string) string {
+	v, err := url.QueryUnescape(r.Header.Get(name))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 // withAdmin deja pasar sólo a los administradores; un estudiante recibe 403.
@@ -89,21 +109,26 @@ func forumPage(p model.Page) pageDTO {
 }
 
 // publish sube un resumen (RF-14): multipart con title, category (la materia),
-// description, tags y el PDF en file. Opcional: authorName, el nombre visible.
+// description, tags y el PDF en file. El autor sale del usuario logueado: el
+// nombre y el mail del token se copian en el resumen (ADR-003). Si el token no
+// trae el nombre, se usa el campo authorName y, si tampoco viene, uno genérico.
 func (h *Forum) publish(w http.ResponseWriter, r *http.Request, v service.Viewer) {
 	up, err := readUpload(w, r)
 	if err != nil {
 		fail(w, r, h.Logger, err)
 		return
 	}
-	name := strings.TrimSpace(up.Fields["authorName"])
+	name := v.Name
+	if name == "" {
+		name = strings.TrimSpace(up.Fields["authorName"])
+	}
 	if name == "" {
 		name = defaultStudentName
 	}
 	doc, err := h.Svc.Publish(r.Context(), service.NewDocument{
 		Title: up.Fields["title"], Description: up.Fields["description"],
 		Category: up.Fields["category"], Tags: up.Fields["tags"],
-		Author: model.Author{UserID: v.UserID, Name: name},
+		Author: model.Author{UserID: v.UserID, Name: name, Email: v.Email},
 		Source: model.SourceEstudiario,
 	}, up.File)
 	if err != nil {

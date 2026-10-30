@@ -26,6 +26,7 @@ func (s *Service) Register(ctx context.Context, consumer, idemKey string, in New
 	in.Source = model.SourceExternal
 	in.Author.Consumer = consumer
 	in.Author.UserID = ""
+	in.Author.Email = "" // su autor no tiene cuenta en Estudiario (RN-41)
 
 	rec := model.IdempotencyRecord{ID: consumer + ":" + idemKey, RequestHash: requestHash(in, f), CreatedAt: s.now()}
 	existing, reserved, err := s.Repo.ReserveIdempotency(ctx, rec)

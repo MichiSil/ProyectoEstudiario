@@ -75,11 +75,14 @@ func (s *Service) newID() string {
 }
 
 // Viewer es quien hace el pedido, para decidir qué puede ver.
-//   - Estudiante o administrador del foro: UserID (y Admin si es administrador).
+//   - Estudiante o administrador del foro: UserID (y Admin si es administrador),
+//     con su nombre y su mail si el token los trae.
 //   - Sistema externo: Consumer, el consumidor de la API key.
 type Viewer struct {
 	UserID   string
 	Admin    bool
+	Name     string
+	Email    string
 	Consumer string
 }
 
