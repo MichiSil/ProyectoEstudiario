@@ -85,6 +85,7 @@ func (r *memRepo) ListBookedSessions(_ context.Context, st string, _ time.Time) 
 	var out []domain.Session
 	for _, s := range r.sessions {
 		if s.StudentID == st {
+			s.Outdated = r.plans[s.PlanID].Status == domain.PlanOutdated
 			out = append(out, s)
 		}
 	}
@@ -124,6 +125,13 @@ func (r *memRepo) Confirm(_ context.Context, req app.ConfirmRequest, validate fu
 			return app.ConfirmResult{}, domain.ErrAlreadyConfirmed
 		}
 	}
+	if r.exams[plan.ExamID].Status == domain.ExamCancelled {
+		return app.ConfirmResult{}, domain.ErrExamCancelled
+	}
+	// RN-16: se liberan las sesiones no completadas del plan desactualizado.
+	r.removeSessions(func(s domain.Session) bool {
+		return s.ExamID == plan.ExamID && s.Status != domain.SessionCompleted && r.plans[s.PlanID].Status == domain.PlanOutdated
+	})
 	var booked []domain.Session
 	for _, s := range r.sessions {
 		if s.StudentID == req.StudentID {

@@ -69,6 +69,10 @@ type Exam struct {
 	StartsAt time.Time
 	Topics   []string
 	Status   ExamStatus
+	// PlanStatus es el estado del plan vigente del examen: confirmado o
+	// desactualizado (RN-16). Vacío si todavía no tiene un plan confirmado.
+	// Se completa al listar los exámenes; no se guarda en la fila del examen.
+	PlanStatus PlanStatus
 }
 
 // Slot es una franja semanal en la que el estudiante puede estudiar.
@@ -123,6 +127,9 @@ type Session struct {
 	Topic     string
 	Objective string
 	Status    SessionStatus
+	// Outdated indica que el examen cambió de fecha después de confirmar el
+	// plan (RN-16): la sesión sigue visible hasta que el estudiante replanifique.
+	Outdated bool
 }
 
 // OccupiesCalendar indica si la sesión ocupa su horario. Una sesión pospuesta

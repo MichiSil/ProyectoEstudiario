@@ -84,6 +84,21 @@ func (g Guarded) GetExam(ctx context.Context, studentID, id string) (e domain.Ex
 	return e, err
 }
 
+func (g Guarded) ListExams(ctx context.Context, studentID string) (out []domain.Exam, err error) {
+	err = g.run(ctx, func(ctx context.Context) error { out, err = g.Repo.ListExams(ctx, studentID); return err })
+	return out, err
+}
+
+func (g Guarded) UpdateExam(ctx context.Context, studentID, id string, apply func(domain.Exam) (domain.Exam, bool, error)) (e domain.Exam, err error) {
+	err = g.run(ctx, func(ctx context.Context) error { e, err = g.Repo.UpdateExam(ctx, studentID, id, apply); return err })
+	return e, err
+}
+
+func (g Guarded) CancelExam(ctx context.Context, studentID, id string) (e domain.Exam, err error) {
+	err = g.run(ctx, func(ctx context.Context) error { e, err = g.Repo.CancelExam(ctx, studentID, id); return err })
+	return e, err
+}
+
 func (g Guarded) SaveAvailability(ctx context.Context, a domain.Availability) error {
 	return g.run(ctx, func(ctx context.Context) error { return g.Repo.SaveAvailability(ctx, a) })
 }

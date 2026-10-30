@@ -12,6 +12,9 @@ var (
 	ErrAlreadyConfirmed  = errors.New("el examen ya tiene un plan confirmado vigente")
 	ErrConfirmInProgress = errors.New("hay una confirmación en curso con la misma clave de idempotencia")
 	ErrIdempotencyReused = errors.New("la clave de idempotencia ya se usó para otro plan")
+	// ErrExamCancelled indica que el examen está cancelado: no se puede editar
+	// ni planificar (RF-06, RN-17).
+	ErrExamCancelled = errors.New("el examen está cancelado")
 	// ErrUnavailable indica que una dependencia (por ejemplo PostgreSQL) no
 	// está disponible. No es un error del pedido: se puede reintentar más tarde.
 	ErrUnavailable = errors.New("servicio no disponible temporalmente")
