@@ -62,6 +62,7 @@ const CODE_MESSAGES: Record<string, string> = {
   INVALID_TIMEZONE: 'La zona horaria no es válida.',
   INVALID_SLOT: 'Alguna franja horaria no es válida.',
   INTERNAL_ERROR: 'Ocurrió un error inesperado en el servidor.',
+  VALIDATION_ERROR: 'Hay datos inválidos en el formulario.',
 }
 
 interface RequestOptions {
@@ -115,7 +116,9 @@ export async function request<T>(
     const message =
       code === 'VALIDATION_ERROR' && fieldErrors.length > 0
         ? fieldErrors.map((e) => capitalize(e.message)).join('. ') + '.'
-        : (CODE_MESSAGES[code] ?? problem.detail ?? problem.title ?? `Error ${res.status}`)
+        : (CODE_MESSAGES[code] ??
+          problem.detail ??
+          (res.status >= 500 ? 'El servidor no está respondiendo.' : (problem.title ?? `Error ${res.status}`)))
     throw new ApiError(res.status, code, message, violations, problem.correlationId ?? correlationId)
   }
   return data as T
@@ -131,6 +134,29 @@ function safeJson(text: string): unknown {
   } catch {
     return null
   }
+}
+
+/** Qué puede hacer el estudiante ante cada código, para que ningún error quede sin explicación. */
+const CODE_HINTS: Record<string, string> = {
+  NETWORK: 'Puede que el backend no esté levantado o que no tengas conexión. Probá de nuevo en unos segundos.',
+  NOT_FOUND: 'Puede que ese dato se haya borrado o que lo hayas cargado con otra cuenta. Recargá la página.',
+  SERVICE_UNAVAILABLE: 'La base de datos no respondió a tiempo. No se guardó nada: podés reintentar sin miedo.',
+  UPSTREAM_UNAVAILABLE: 'El api-gateway no pudo hablar con el servicio. Revisá que el backend esté levantado.',
+  UPSTREAM_TIMEOUT: 'El servicio tardó demasiado. Probá de nuevo en unos segundos.',
+  TIMEOUT: 'El servicio tardó demasiado. Probá de nuevo en unos segundos.',
+  INTERNAL_ERROR:
+    'El servidor falló sin decir por qué. Probá de nuevo; si se repite, pasale el correlationId a quien mantiene el backend para buscarlo en los logs.',
+  MALFORMED_REQUEST: 'Revisá los datos del formulario y volvé a intentar.',
+}
+
+export function errorHint(err: ApiError): string | undefined {
+  if (CODE_HINTS[err.code]) return CODE_HINTS[err.code]
+  if (err.code.startsWith('HTTP_')) {
+    return err.status >= 500
+      ? 'No pudimos comunicarnos con el servidor. Revisá que el backend esté levantado y probá de nuevo.'
+      : `El servidor rechazó el pedido (código ${err.status}).`
+  }
+  return undefined
 }
 
 export function errorMessage(err: unknown): string {
