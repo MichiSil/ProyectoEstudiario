@@ -86,7 +86,7 @@ Es un documento vivo: se actualiza en cada entrega a medida que el alcance se pr
 |---|---|
 | RF-04 | El estudiante puede crear, editar, listar y eliminar sus materias, indicando nombre, profesores y dificultad. |
 | RF-05 | El estudiante puede cargar exámenes en su calendario: materia, tipo (parcial, final, recuperatorio o entrega), fecha, hora opcional y temas. |
-| RF-06 | El estudiante puede cambiar la fecha de un examen o cancelarlo. |
+| RF-06 | El estudiante puede editar un examen (fecha, tipo, temas, modalidad o material) o cancelarlo, y puede pedir rehacer su plan de estudio confirmado aunque el examen no haya cambiado. |
 | RF-07 | El estudiante puede declarar su disponibilidad: franjas horarias semanales, capacidad diaria en minutos y duración preferida de cada sesión. |
 | RF-08 | El estudiante puede pedir una propuesta de plan para un examen. El agente de IA devuelve sesiones con fecha, horario, duración, tema, objetivo y una explicación de por qué se propusieron así. |
 | RF-09 | El estudiante puede confirmar una propuesta de plan. Las sesiones confirmadas quedan reservadas en su calendario. **(Acción principal.)** |
@@ -125,7 +125,7 @@ Un plan sólo se confirma si se cumplen **todas** estas reglas. Si alguna falla,
 
 | ID | Regla |
 |---|---|
-| RN-16 | Si un examen con plan confirmado cambia de fecha, el plan pasa a *desactualizado*. Sus sesiones pendientes siguen visibles, marcadas como desactualizadas, hasta que el estudiante replanifique. |
+| RN-16 | Si un examen con plan confirmado cambia de fecha, de temas, de modalidad o de material, o si el estudiante pide rehacer el plan, el plan pasa a *desactualizado*. Sus sesiones pendientes siguen visibles, marcadas como desactualizadas, hasta que el estudiante confirme un plan nuevo, que las reemplaza. Cambiar sólo el tipo de examen no afecta al plan. |
 | RN-17 | Si un examen se cancela, sus sesiones pendientes se liberan. Las sesiones completadas se conservan como historial. |
 | RN-18 | Al replanificar, sólo se reemplazan las sesiones pendientes. Las completadas no se modifican. |
 
@@ -244,7 +244,7 @@ Cada criterio indica entre paréntesis las reglas o requisitos que verifica. Los
 | CA-09 | **Dado** un estudiante con capacidad diaria de 120 minutos y 90 minutos ya reservados el jueves, **cuando** confirma un plan que agrega 60 minutos ese jueves, **entonces** la confirmación se rechaza por superar la capacidad diaria. *(RN-13)* **[crítico]** |
 | CA-10 | **Dado** una confirmación ya procesada, **cuando** llega otra vez la misma confirmación (reintento), **entonces** el sistema devuelve el mismo resultado y la cantidad de sesiones reservadas no cambia. *(RN-14)* **[crítico]** |
 | CA-11 | **Dado** dos confirmaciones del mismo plan enviadas al mismo tiempo desde dos dispositivos, **cuando** el sistema las procesa, **entonces** se reserva un único conjunto de sesiones. *(RN-14, RN-15)* **[crítico]** |
-| CA-12 | **Dado** un examen con plan confirmado, **cuando** el estudiante cambia la fecha del examen, **entonces** el plan pasa a *desactualizado* y sus sesiones pendientes se muestran marcadas como desactualizadas. *(RN-16)* |
+| CA-12 | **Dado** un examen con plan confirmado, **cuando** el estudiante cambia la fecha o los temas del examen, o pide rehacer el plan, **entonces** el plan pasa a *desactualizado*, sus sesiones pendientes se muestran marcadas como desactualizadas y, al confirmar un plan nuevo, lo reemplazan. *(RN-16)* |
 | CA-13 | **Dado** un examen con sesiones completadas y pendientes, **cuando** el estudiante lo cancela, **entonces** las pendientes se liberan y las completadas se conservan. *(RN-17)* |
 | CA-14 | *Retirado el 2026-10-29 junto con RF-13.* Los criterios de la capacidad publicada están en la sección 11. |
 
