@@ -224,9 +224,9 @@ services:
 
   mongo:
     image: mongo:7.0
-    # Sin puertos publicados: sólo lo usan forum-service y mongo-init, por la red interna de Docker.
+    # Sin puertos publicados: sólo lo usan forum-service, notification-service y mongo-init, por la red interna de Docker.
     environment:
-      # Administrador del contenedor: sólo lo usa mongo-init. forum-service tiene su propio usuario.
+      # Administrador del contenedor: sólo lo usa mongo-init. Cada servicio tiene su propio usuario.
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?falta MONGO_ROOT_USER en el .env (ver .env.example)}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?falta MONGO_ROOT_PASSWORD en el .env (ver .env.example)}
     volumes:
@@ -238,8 +238,8 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Crea el usuario de forum-service con permiso sólo sobre la base `forum`.
-  # Corre una vez en cada `up` y termina; el script es idempotente.
+  # Crea los usuarios de forum-service y notification-service, cada uno con
+  # permiso sólo sobre su base (`forum` y `notifications`). Corre una vez en cada `up` y termina; el script es idempotente.
   mongo-init:
     image: mongo:7.0
     depends_on:
@@ -250,6 +250,8 @@ services:
       MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
       FORUM_DB_USER: ${FORUM_DB_USER:?falta FORUM_DB_USER en el .env (ver .env.example)}
       FORUM_DB_PASSWORD: ${FORUM_DB_PASSWORD:?falta FORUM_DB_PASSWORD en el .env (ver .env.example)}
+      NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:?falta NOTIFICATION_DB_USER en el .env (copiá de nuevo .env.example a .env)}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?falta NOTIFICATION_DB_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
     volumes:
       - ./deploy/mongo:/scripts:ro
     entrypoint: ["sh", "-c", "mongosh --quiet --host mongo -u \"$$MONGO_ROOT_USER\" -p \"$$MONGO_ROOT_PASSWORD\" --authenticationDatabase admin /scripts/init-databases.js"]
@@ -314,6 +316,59 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------
+  # Mensajería y mail (ADR-005, 3)
+  # ---------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13.7-management-alpine
+    # RabbitMQ guarda los datos por nombre de nodo, que sale del hostname: fijo, para que el volumen sirva al recrear el contenedor.
+    hostname: rabbitmq
+    ports:
+      - "15672:15672" # interfaz de administración: http://localhost:15672
+    environment:
+      # Administrador del contenedor: sólo lo usan rabbitmq-init y la interfaz
+      # web. Cada servicio tiene su propio usuario.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:?falta RABBITMQ_ADMIN_USER en el .env (copiá de nuevo .env.example a .env)}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?falta RABBITMQ_ADMIN_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # Crea los usuarios de forum-service y notification-service y la topología
+  # del ADR-005: exchange forum.events, cola de notificaciones, cola de
+  # reintentos y DLQ. Corre una vez en cada `up` y termina; es idempotente.
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER}
+      RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}
+      FORUM_RABBITMQ_USER: ${FORUM_RABBITMQ_USER:?falta FORUM_RABBITMQ_USER en el .env (ver .env.example)}
+      FORUM_RABBITMQ_PASSWORD: ${FORUM_RABBITMQ_PASSWORD:?falta FORUM_RABBITMQ_PASSWORD en el .env (ver .env.example)}
+      NOTIFICATION_RABBITMQ_USER: ${NOTIFICATION_RABBITMQ_USER:?falta NOTIFICATION_RABBITMQ_USER en el .env (ver .env.example)}
+      NOTIFICATION_RABBITMQ_PASSWORD: ${NOTIFICATION_RABBITMQ_PASSWORD:?falta NOTIFICATION_RABBITMQ_PASSWORD en el .env (ver .env.example)}
+    volumes:
+      - ./deploy/rabbitmq:/scripts:ro
+    entrypoint: ["sh", "/scripts/init-broker.sh"]
+    restart: "no"
+
+  # Servidor SMTP de prueba: guarda los mails en lugar de mandarlos y los
+  # muestra en http://localhost:8025. notification-service le habla por SMTP
+  # (puerto 1025) por la red interna de Docker.
+  mailpit:
+    image: axllent/mailpit:v1.21.8
+    ports:
+      - "8025:8025" # interfaz web
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
   # Observabilidad
   # ---------------------------------------------------------------
   jaeger:
@@ -331,3 +386,4 @@ volumes:
   mongo-data:
   minio-data:
   solr-data:
+  rabbitmq-data:
