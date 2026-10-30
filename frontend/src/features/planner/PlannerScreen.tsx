@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarPlus, CheckCircle2, Settings, Sparkles } from 'lucide-react'
+import { CalendarPlus, CheckCircle2, Pencil, Settings, Sparkles } from 'lucide-react'
 import { plannerApi } from '@/api/planner'
 import { ApiError } from '@/api/client'
-import { EXAM_TYPE_LABEL, type Availability, type PlanProposal } from '@/api/types'
+import { EXAM_TYPE_LABEL, type Availability, type Exam, type PlanProposal } from '@/api/types'
+import { ExamDetailSheet } from '@/features/calendar/ExamDetailSheet'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -30,6 +31,7 @@ export function PlannerScreen() {
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState<unknown>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [detailExam, setDetailExam] = useState<Exam | null>(null)
   const idempotencyKeys = useRef(new Map<string, string>())
 
   const examsWithPlan = useMemo(() => new Set(sessions.map((s) => s.examId)), [sessions])
@@ -215,6 +217,11 @@ export function PlannerScreen() {
                       <p className="mt-0.5 text-xs text-warning">No tenés horarios disponibles antes de este examen.</p>
                     )}
                   </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => setDetailExam(exam)} aria-label="Editar o cancelar">
+                    <Pencil size={14} />
+                    Editar
+                  </Button>
                   <Button
                     size="sm"
                     variant="secondary"
@@ -230,6 +237,7 @@ export function PlannerScreen() {
                           ? 'Replanificar'
                           : 'Pedir propuesta'}
                   </Button>
+                  </div>
                 </Card>
               )
             })}
@@ -281,6 +289,7 @@ export function PlannerScreen() {
           </>
         )}
       </section>
+      <ExamDetailSheet exam={detailExam} onClose={() => setDetailExam(null)} />
     </div>
   )
 }

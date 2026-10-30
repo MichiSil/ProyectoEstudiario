@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CalendarPlus, Sparkles } from 'lucide-react'
+import { CalendarPlus, Pencil, Sparkles } from 'lucide-react'
 import { useSubjectContext } from '../context'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { Card } from '@/components/ui/Card'
@@ -8,15 +8,17 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ExamFormSheet } from '@/features/calendar/ExamFormSheet'
+import { ExamDetailSheet } from '@/features/calendar/ExamDetailSheet'
 import { formatDateLong, formatDaysUntil, localDate } from '@/lib/format'
 import { difficultyColorVar } from '@/lib/domain-ui'
-import { ANTICIPATION_DAYS, DIFFICULTY_LABEL, EXAM_TYPE_LABEL } from '@/api/types'
+import { ANTICIPATION_DAYS, DIFFICULTY_LABEL, EXAM_TYPE_LABEL, type Exam } from '@/api/types'
 
 export function SubjectOverviewTab() {
   const { subject } = useSubjectContext()
   const { exams, sessions } = usePlannerData()
   const navigate = useNavigate()
   const [examFormOpen, setExamFormOpen] = useState(false)
+  const [detailExam, setDetailExam] = useState<Exam | null>(null)
 
   const upcoming = exams
     .filter((e) => e.subjectId === subject.id && e.status === 'programado' && new Date(e.startsAt) >= new Date())
@@ -59,14 +61,25 @@ export function SubjectOverviewTab() {
                       {formatDateLong(date)} · {formatDaysUntil(date)}
                     </p>
                   </div>
-                  {examsWithPlan.has(exam.id) ? (
-                    <Badge tone="success">Plan confirmado</Badge>
-                  ) : (
-                    <Button size="sm" variant="secondary" onClick={() => navigate(`/plan?examen=${exam.id}`)}>
-                      <Sparkles size={14} />
-                      Pedir plan
+                  <div className="flex shrink-0 items-center gap-2">
+                    {exam.planStatus === 'desactualizado' ? (
+                      <Button size="sm" variant="secondary" onClick={() => navigate(`/plan?examen=${exam.id}`)}>
+                        <Sparkles size={14} />
+                        Replanificar
+                      </Button>
+                    ) : exam.planStatus === 'confirmado' || examsWithPlan.has(exam.id) ? (
+                      <Badge tone="success">Plan confirmado</Badge>
+                    ) : (
+                      <Button size="sm" variant="secondary" onClick={() => navigate(`/plan?examen=${exam.id}`)}>
+                        <Sparkles size={14} />
+                        Pedir plan
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => setDetailExam(exam)} aria-label="Editar o cancelar">
+                      <Pencil size={14} />
+                      Editar
                     </Button>
-                  )}
+                  </div>
                 </Card>
               )
             })}
@@ -75,6 +88,7 @@ export function SubjectOverviewTab() {
       </div>
 
       <ExamFormSheet open={examFormOpen} onClose={() => setExamFormOpen(false)} defaultSubjectId={subject.id} />
+      <ExamDetailSheet exam={detailExam} onClose={() => setDetailExam(null)} />
     </div>
   )
 }
