@@ -17,8 +17,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/apikey"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/observability"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/ratelimit"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/repository"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/storage"
@@ -60,6 +62,13 @@ func run(logger *slog.Logger) error {
 		return errors.New("INTERNAL_TOKEN falta o tiene menos de 32 caracteres")
 	}
 
+	// API keys de los sistemas que consumen la capacidad (ADR-014): sólo sus hashes.
+	keys, err := apikey.Parse(os.Getenv("FORUM_API_KEYS"))
+	if err != nil {
+		return err
+	}
+	logger.Info("API keys de la capacidad configuradas", "count", keys.Len())
+
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		return errors.New("falta la variable MONGO_URI")
@@ -95,6 +104,8 @@ func run(logger *slog.Logger) error {
 	mux.Handle("GET /health", controller.Health(repo))
 	forum := &controller.Forum{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
 	forum.Register(mux)
+	v1 := &controller.V1{Svc: svc, Keys: keys, Limiter: ratelimit.New(), Logger: logger}
+	v1.Register(mux)
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8083"),

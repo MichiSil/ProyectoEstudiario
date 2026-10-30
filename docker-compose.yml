@@ -119,6 +119,8 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       # La API del foro sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
+      # API keys de la capacidad /v1 (consumidor:sha256 de la clave), nunca las claves (ADR-014).
+      FORUM_API_KEYS: ${FORUM_API_KEYS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
       interval: 10s
