@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
@@ -105,6 +106,9 @@ func TestFlushConElBrokerCaidoNoMarcaYCorta(t *testing.T) {
 	if n != 1 || len(out.marked) != 1 || out.marked[0] != "e1" {
 		t.Errorf("publicados = %d, marcados = %v; sólo e1 debería quedar marcado", n, out.marked)
 	}
+	if got := testutil.ToFloat64(pendingEvents); got != 2 {
+		t.Errorf("forum_outbox_pending_events = %v, se esperaban 2 (e2 y e3)", got)
+	}
 	// e3 no se adelanta a e2: queda para la próxima vuelta.
 	for _, id := range pub.published {
 		if id == "e3" {
@@ -116,6 +120,9 @@ func TestFlushConElBrokerCaidoNoMarcaYCorta(t *testing.T) {
 	pub.failOn = ""
 	if n, err := newRelay(out, pub).Flush(context.Background()); err != nil || n != 2 {
 		t.Errorf("al volver el broker = %d, %v; se esperaban e2 y e3", n, err)
+	}
+	if got := testutil.ToFloat64(pendingEvents); got != 0 {
+		t.Errorf("forum_outbox_pending_events = %v, se esperaba 0", got)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/ai"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/httpapi"
+	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/metrics"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/postgres"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/rules"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/system"
@@ -82,7 +83,7 @@ func run(logger *slog.Logger) error {
 	// responde, la API devuelve 503 en lugar de 500 (ADR-010).
 	guarded := postgres.Guarded{Repo: repo, Timeout: postgres.DefaultTimeout}
 
-	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}}
+	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}, Metrics: metrics.Prometheus{}}
 	// Secreto compartido con el api-gateway: sin él, cualquiera podría llamar
 	// directo al puerto de planner-service con el X-User-Id de otro estudiante.
 	internalToken := os.Getenv("INTERNAL_TOKEN")
@@ -90,6 +91,8 @@ func run(logger *slog.Logger) error {
 		return errors.New("INTERNAL_TOKEN falta o tiene menos de 32 caracteres")
 	}
 	h := &httpapi.Handler{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
+	// GET /metrics en un puerto aparte, que no se publica (ADR-011).
+	go httpapi.ServeMetrics(ctx, env("METRICS_ADDR", httpapi.DefaultMetricsAddr), logger)
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8082"),

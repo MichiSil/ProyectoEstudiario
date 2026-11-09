@@ -2,11 +2,14 @@ package proxy
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync/atomic"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // instance es una instancia de prueba que responde su nombre y cuenta los pedidos.
@@ -141,5 +144,53 @@ func TestSinInstanciasSanas(t *testing.T) {
 	}
 	if rec := do(Forum(bal, testLogger), http.MethodGet); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("con las dos fuera de la rotación: status %d, se esperaba 503", rec.Code)
+	}
+}
+
+// upInstances devuelve el valor de gateway_upstream_instance_up de cada
+// instancia de upstream, como sale en /metrics.
+func upInstances(t *testing.T, upstream string) map[string]float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]float64{}
+	for _, f := range families {
+		if f.GetName() != "gateway_upstream_instance_up" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["upstream"] == upstream {
+				out[labels["upstream_instance"]] = m.GetGauge().GetValue()
+			}
+		}
+	}
+	return out
+}
+
+func TestMetricaDeInstanciasEnLaRotacion(t *testing.T) {
+	sana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(UpstreamInstanceHeader, "forum-metricas-1")
+	}))
+	defer sana.Close()
+	caida := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer caida.Close()
+
+	b := NewBalancer("forum-metricas", []*url.URL{mustURL(t, sana.URL), mustURL(t, caida.URL)}, testLogger)
+	for range FailsToRemove {
+		b.CheckAll(context.Background())
+	}
+	// La sana sale con el nombre de su X-Instance (y sin la serie con su host);
+	// la caída, con su host y en 0.
+	want := map[string]float64{"forum-metricas-1": 1, b.Instances[1].Name: 0}
+	if got := upInstances(t, "forum-metricas"); !maps.Equal(got, want) {
+		t.Errorf("gateway_upstream_instance_up = %v, se esperaba %v", got, want)
 	}
 }

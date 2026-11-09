@@ -17,6 +17,7 @@ type Service struct {
 	Generator PlanGenerator
 	Clock     Clock
 	IDs       IDGenerator
+	Metrics   Metrics // opcional
 }
 
 func (s *Service) CreateSubject(ctx context.Context, sub domain.Subject) (domain.Subject, error) {
@@ -321,7 +322,13 @@ func (s *Service) ProposePlan(ctx context.Context, studentID, examID string) (do
 		Drafts:      proposal.Drafts,
 		CreatedAt:   now,
 	}
-	return plan, s.Repo.SaveProposal(ctx, plan)
+	if err := s.Repo.SaveProposal(ctx, plan); err != nil {
+		return plan, err
+	}
+	if s.Metrics != nil {
+		s.Metrics.ProposalGenerated(plan.GeneratedBy)
+	}
+	return plan, nil
 }
 
 // ConfirmPlan confirma una propuesta y reserva sus sesiones (RF-09, acción
@@ -330,6 +337,22 @@ func (s *Service) ProposePlan(ctx context.Context, studentID, examID string) (do
 // RN-15 las garantiza el repositorio con la clave de idempotencia y la
 // restricción de un plan confirmado por examen.
 func (s *Service) ConfirmPlan(ctx context.Context, studentID, planID, idempotencyKey string) (ConfirmResult, error) {
+	res, err := s.confirmPlan(ctx, studentID, planID, idempotencyKey)
+	if s.Metrics != nil {
+		var verr *domain.ValidationError
+		switch {
+		case err == nil:
+			s.Metrics.PlanConfirmed(ConfirmOK)
+		case errors.As(err, &verr):
+			s.Metrics.PlanConfirmed(ConfirmRejected)
+		default:
+			s.Metrics.PlanConfirmed(ConfirmFailed)
+		}
+	}
+	return res, err
+}
+
+func (s *Service) confirmPlan(ctx context.Context, studentID, planID, idempotencyKey string) (ConfirmResult, error) {
 	if strings.TrimSpace(idempotencyKey) == "" {
 		return ConfirmResult{}, &domain.ValidationError{Violations: []domain.RuleViolation{{Rule: "RN-14", Message: "falta el encabezado Idempotency-Key", SessionIndex: -1}}}
 	}

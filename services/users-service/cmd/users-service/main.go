@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/broker"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/club"
@@ -99,6 +101,23 @@ func run(logger *slog.Logger) error {
 	clubSvc := &service.Club{Repo: repo, Provider: clubClient, Logger: logger}
 	logger.Info("Club de Beneficios configurado", "baseUrl", clubURL)
 	go clubSvc.RunSweeper(ctx)
+
+	// Métricas del Club (ADR-011, ADR-015): el estado del circuit breaker y los
+	// puntos pendientes de acreditar, que se leen de la base en cada scrape.
+	prometheus.MustRegister(clubClient.BreakerGauge(), prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "users_club_pending_points",
+		Help: "Puntos del Club de Beneficios guardados y todavía sin acreditar (RN-43).",
+	}, func() float64 {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		n, err := repo.PendingClubPoints(ctx)
+		if err != nil {
+			return math.NaN() // sin dato: el tablero lo muestra vacío, no en 0
+		}
+		return float64(n)
+	}))
+	// GET /metrics en un puerto aparte, que no se publica (ADR-011).
+	go observability.ServeMetrics(ctx, env("METRICS_ADDR", observability.DefaultMetricsAddr), logger)
 
 	// Eventos de forum-service por RabbitMQ (ADR-005): puntos por resumen
 	// aprobado y cuentas de los autores de la agencia de viajes.

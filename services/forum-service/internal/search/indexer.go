@@ -5,7 +5,22 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
+)
+
+// Métricas del indexador (ADR-006, ADR-011).
+var (
+	indexLag = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "forum_search_index_lag_seconds",
+		Help: "Retraso de la última sincronización con Solr: desde la aprobación más vieja de la tanda hasta que se mandó al índice (0 si no había cambios) (RN-26).",
+	})
+	indexLastSync = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "forum_search_index_last_sync_timestamp_seconds",
+		Help: "Momento de la última sincronización correcta con Solr. Si Solr no responde, deja de avanzar.",
+	})
 )
 
 // Source es lo que el indexador lee de MongoDB.
@@ -154,6 +169,8 @@ func (ix *Indexer) Sync(ctx context.Context, since time.Time) error {
 	if err := ix.Solr.Delete(ctx, deletes); err != nil {
 		return err
 	}
+	indexLag.Set(maxLag.Seconds())
+	indexLastSync.SetToCurrentTime()
 	if indexed+removed > 0 {
 		// lagMs: cuánto pasó desde la aprobación más vieja de esta tanda hasta
 		// que se mandó a Solr (sin los ≤ 5 s de commitWithin). Sirve para medir

@@ -111,3 +111,18 @@ type Clock interface{ Now() time.Time }
 
 // IDGenerator genera identificadores únicos.
 type IDGenerator interface{ NewID() string }
+
+// Resultados de una confirmación en las métricas.
+const (
+	ConfirmOK       = "confirmada" // se reservaron las sesiones (o se repitió con la misma Idempotency-Key)
+	ConfirmRejected = "rechazada"  // no cumple una regla (RN-10 a RN-14)
+	ConfirmFailed   = "error"      // otro error: plan inexistente, base caída, etc.
+)
+
+// Metrics registra las métricas de negocio del plan de estudio (ADR-011). La
+// implementa el adaptador de Prometheus; si el Service no tiene una, no se
+// mide nada.
+type Metrics interface {
+	ProposalGenerated(by domain.GeneratedBy)
+	PlanConfirmed(result string)
+}

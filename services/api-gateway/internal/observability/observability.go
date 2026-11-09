@@ -111,7 +111,9 @@ func Middleware(service string, logger *slog.Logger, next http.Handler) http.Han
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
-		next.ServeHTTP(rec, r.WithContext(ctx))
+		req := r.WithContext(ctx)
+		next.ServeHTTP(rec, req)
+		observeRequest(req, rec.status, time.Since(start))
 
 		if r.URL.Path == "/health" {
 			return

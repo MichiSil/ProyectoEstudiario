@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -340,5 +341,39 @@ func TestCreateSubject_SinProfesores(t *testing.T) {
 	}
 	if sub.Professors == nil {
 		t.Fatal("Professors debería ser una lista vacía, no nil")
+	}
+}
+
+type fakeMetrics struct {
+	proposals     []domain.GeneratedBy
+	confirmations []string
+}
+
+func (m *fakeMetrics) ProposalGenerated(by domain.GeneratedBy) { m.proposals = append(m.proposals, by) }
+func (m *fakeMetrics) PlanConfirmed(result string)             { m.confirmations = append(m.confirmations, result) }
+
+// ADR-011: cada propuesta se cuenta por quién la armó y cada confirmación por resultado.
+func TestMetricasDePropuestasYConfirmaciones(t *testing.T) {
+	svc, _, exam := setup(t)
+	m := &fakeMetrics{}
+	svc.Metrics = m
+	ctx := context.Background()
+
+	plan, err := svc.ProposePlan(ctx, "est-1", exam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = svc.ConfirmPlan(ctx, "est-1", plan.ID, "")               // sin Idempotency-Key: rechazada
+	_, _ = svc.ConfirmPlan(ctx, "est-1", "plan-que-no-existe", "c") // error
+	if _, err := svc.ConfirmPlan(ctx, "est-1", plan.ID, "clave-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(m.proposals) != 1 || m.proposals[0] != domain.GeneratedByRules {
+		t.Errorf("propuestas = %v, se esperaba una de reglas", m.proposals)
+	}
+	want := []string{app.ConfirmRejected, app.ConfirmFailed, app.ConfirmOK}
+	if !slices.Equal(m.confirmations, want) {
+		t.Errorf("confirmaciones = %v, se esperaba %v", m.confirmations, want)
 	}
 }
