@@ -1,0 +1,13 @@
+# Tableros de Grafana, provisionados desde deploy/grafana/dashboards (ADR-011).
+# Se recargan solos si cambia el archivo; los cambios hechos en la interfaz no
+# se guardan: el tablero se cambia en el repositorio.
+apiVersion: 1
+providers:
+  - name: estudiario
+    folder: Estudiario
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards
