@@ -142,12 +142,13 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **frontend** | http://localhost:5173 | Interfaz web de Estudiario. Reenvía `/api` al api-gateway |
 | **api-gateway** | http://localhost:8080 | Punto de entrada único del frontend |
 | planner-service | http://localhost:8082 | Plan de estudio |
-| users-service | http://localhost:8081 | Registro, inicio de sesión y emisión del JWT (se usa a través del gateway, en `/api/users`) |
+| users-service | http://localhost:8081 | Registro, inicio de sesión, emisión del JWT, Club de Beneficios del Grupo 1 y cuentas de los autores de la agencia (se usa a través del gateway, en `/api/users`) |
 | forum-service (dos instancias) | http://localhost:8083 (`forum-service-1`) | Foro de resúmenes (a través del gateway, en `/api/forum`, repartido entre las dos instancias) y capacidad de documentos para el Grupo 4 (directo, en `/v1`). `forum-service-2` no publica puerto |
 | notification-service | http://localhost:8084 | Mail al autor cuando se aprueba o rechaza su resumen. No tiene API: consume los eventos de RabbitMQ (sólo expone `GET /health`) |
 | **RabbitMQ** | Interfaz de administración en http://localhost:15672 | Eventos del foro (exchange `forum.events`) y colas de notification-service. La interfaz se abre con `RABBITMQ_ADMIN_*`; cada servicio entra con su propio usuario (`FORUM_RABBITMQ_*`, `NOTIFICATION_RABBITMQ_*`). El puerto AMQP (5672) no se publica |
 | **Mailpit** | http://localhost:8025 | Servidor SMTP de prueba: guarda los mails que manda notification-service en lugar de enviarlos y los muestra en esta página |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
+| **Mock del Club de Beneficios (Prism)** | http://localhost:4011 | Club de Beneficios del Grupo 1 sobre la copia de su contrato ([`docs/contracts/consumidos/`](docs/contracts/consumidos/)), para probar sin internet y para la jornada de fallas |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
 | MongoDB (bases `forum` y `notifications`) | Sin puerto publicado | Sólo lo usan forum-service, notification-service y `mongo-init`, por la red interna de Docker. Cada servicio entra con su usuario (`FORUM_DB_*`, `NOTIFICATION_DB_*`), que sólo lee y escribe su base; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
 | Solr (core `summaries`) | http://localhost:8983/solr | Índice de búsqueda de los resúmenes aprobados. El panel de administración sirve para ver el esquema y probar consultas |
@@ -445,6 +446,77 @@ curl -s "$F/v1/documents?category=Patagonia&tag=trekking&sort=rating" -H "$K" # 
 
 Repetir el registro con la misma `Idempotency-Key` y el mismo cuerpo devuelve el mismo documento con `Idempotent-Replayed: true`. Con otro cuerpo responde `422 IDEMPOTENCY_KEY_REUSED`. El cupo es de 60 pedidos por minuto por API key, de los cuales hasta 10 registros, y se informa en `RateLimit-Limit`, `RateLimit-Remaining` y `Retry-After`. Los documentos de sistemas externos se moderan igual que los resúmenes, pero no generan mail ni beneficios (RN-41): su evento lo indica con `notifyAuthor` y `awardBenefits` en `false`.
 
+### Club de Beneficios (Grupo 1)
+
+Estudiario consume el **Club de Beneficios de Metalfitness** del Grupo 1 ([ADR-015](docs/adr/ADR-015-club-de-beneficios.md)). Cada resumen aprobado le suma **50 puntos** al autor en el Club (RF-28). Lo hace **users-service**, que consume `summary.approved` de RabbitMQ: la aprobación no espera al Club y, si el Club está caído, los puntos quedan pendientes y se acreditan solos cuando vuelve (RN-43).
+
+**Configuración.** En el `.env`:
+
+| Variable | Qué es |
+|---|---|
+| `CLUB_API_KEY` | API key de Estudiario en el Club. La entregó el Grupo 1 por privado: **va sólo en tu `.env`**, nunca en el repositorio. Sin ella, el perfil muestra que el Club no está disponible y los puntos quedan pendientes. |
+| `CLUB_BASE_URL` | `https://metalfitness-club.vercel.app/partner-api` (producción). Para el mock local: `http://club-mock:4010`. |
+
+**API para el frontend** (por el gateway, con el JWT del estudiante):
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $EST" $G/api/users/me/club   # vincular: 202 (o 200 si ya estaba vinculada)
+curl -s -H "Authorization: Bearer $EST" $G/api/users/me/club           # estado, saldo y movimientos
+```
+
+Las dos responden lo mismo:
+
+```json
+{
+  "status": "vinculada",
+  "balance": 100,
+  "pendingPoints": 0,
+  "movements": [
+    { "id": "66b8c8f1-…", "points": 50, "reason": "Resumen aprobado en Estudiario", "occurredAt": "2026-11-09T22:31:55Z" }
+  ],
+  "warning": null
+}
+```
+
+| Campo | Valores |
+|---|---|
+| `status` | `sin_vincular`, `pendiente` (el Club le mandó un mail a la persona para confirmar) o `vinculada` |
+| `balance` | Saldo total en el Club, o `null` si no está vinculada o el Club no respondió |
+| `pendingPoints` | Puntos ganados en Estudiario que todavía no se acreditaron (sin vincular, o el Club caído) |
+| `movements` | Los últimos 10 movimientos que hizo Estudiario, los más nuevos primero |
+| `warning` | `null`, o `CLUB_UNAVAILABLE` si el Club no respondió: el perfil se muestra igual, sin el saldo (*"No pudimos consultar tus puntos ahora. Tus puntos no se pierden."*) |
+
+Si el Club rechaza los datos al vincular, `POST` responde `422 CLUB_REJECTED`.
+
+**Probar la caída del Club.** Con el sistema levantado:
+
+```bash
+CLUB_BASE_URL=http://club-caido.invalid docker compose up -d users-service   # el Club "se cae"
+# aprobar un resumen: responde 200 igual; el perfil muestra CLUB_UNAVAILABLE y los puntos pendientes
+docker compose up -d users-service                                           # el Club vuelve
+# en menos de 1 minuto el barrido acredita los puntos pendientes
+```
+
+**Tests:**
+
+```bash
+cd services/users-service
+go test ./...                                          # unitarios: adaptador, puntos, consumidor y cuentas
+CLUB_CONTRACT_LIVE=1 go test -run Contrato -v ./internal/club/   # test de contrato, también contra el contrato publicado
+USERS_TEST_DATABASE_URL=postgres://users_svc:users-local@localhost:5432/users go test ./internal/repository/   # integración con PostgreSQL
+```
+
+### Cuentas de los autores de la agencia
+
+Cuando el Grupo 4 registra una guía con el mail de quien la escribió (`authorEmail`), forum-service publica `document.external-registered` y users-service le crea una cuenta a esa persona, si no tenía una, y le manda por mail una contraseña generada (RF-30). En local, el mail se ve en Mailpit (http://localhost:8025). La contraseña sólo viaja en ese mail: se guarda únicamente su hash (RN-45).
+
+Para cambiar la contraseña:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" $G/api/users/me/password \
+  -d '{"currentPassword":"la-del-mail","newPassword":"una-nueva-123"}'   # 204; con la actual mal, 422 INVALID_CURRENT_PASSWORD
+```
+
 ### Tests de forum-service
 
 ```bash
@@ -573,7 +645,7 @@ El sistema se despliega en una máquina virtual de Azure con el mismo `docker co
 | Dirección | Grupo | Capacidad | Dónde |
 |---|---|---|---|
 | Exportamos | Grupo 4, Agencia de viajes | **Registro y consulta de documentos del foro**, que usan para guías de viaje compartidas | forum-service · [contrato](docs/contracts/) · [ADR-014](docs/adr/ADR-014-contrato-documentos.md) |
-| Consumimos | Grupo 1, Gimnasio | **Programa de beneficios**: premia al estudiante cuando se aprueba un resumen suyo | forum-service · [ADR-009](docs/adr/ADR-009-consumo-del-proveedor.md) |
+| Consumimos | Grupo 1, Gimnasio | **Club de Beneficios**: el estudiante gana 50 puntos cuando se aprueba un resumen suyo, y ve su saldo en el perfil | users-service · [contrato consumido](docs/contracts/consumidos/) · [ADR-015](docs/adr/ADR-015-club-de-beneficios.md) |
 
 El contrato que exportamos y su **mock** (Prism, puerto `4010`) ya están disponibles para que el Grupo 4 se integre. La capacidad que habíamos publicado antes (generar un plan de estudio) quedó retirada sin llegar a implementarse ([ADR-008](docs/adr/ADR-008-contrato-propio.md), reemplazado por el ADR-014).
 

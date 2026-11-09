@@ -1,6 +1,6 @@
 # ADR-009: Consumo del proveedor
 
-- **Estado:** Propuesta (pendiente de asignación del proveedor)
+- **Estado:** Reemplazada por el [ADR-015](ADR-015-club-de-beneficios.md) (2026-11-09): la cátedra asignó el Club de Beneficios del Grupo 1. Esta decisión se conserva como historial: el ADR-015 aplica estos criterios a ese proveedor y ajusta lo que cambió.
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D9
 - **Reemplaza a:** —

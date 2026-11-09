@@ -19,9 +19,9 @@ Todo el sistema se levanta localmente con `docker compose up --build` (ver el [R
 |---|---|---|
 | **frontend** | Interfaz web: centraliza toda la interacción del estudiante y del administrador. Sólo habla con el api-gateway. | React + TypeScript (Vite) |
 | **api-gateway** | Punto de entrada único: valida el JWT, enruta cada request al servicio correspondiente, aplica límites de tráfico y propaga el identificador de correlación. No tiene lógica de negocio. | Go |
-| **users-service** | Registro, inicio de sesión, emisión del JWT y roles (`estudiante` / `admin`). | Go + PostgreSQL |
+| **users-service** | Registro, inicio de sesión, emisión del JWT y roles (`estudiante` / `admin`). Vincula la cuenta del estudiante con el **Club de Beneficios del Grupo 1** y le acredita puntos cuando se aprueba un resumen suyo ([ADR-015](adr/ADR-015-club-de-beneficios.md)). Crea las cuentas de los autores de documentos de la agencia de viajes. | Go + PostgreSQL |
 | **planner-service** | Materias del estudiante y su dificultad, calendario de exámenes y entregas, disponibilidad horaria, generación del plan de estudio con el agente de IA, **confirmación del plan** (acción principal) y seguimiento de sesiones. | Go + PostgreSQL |
-| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. Expone la **capacidad publicada para el Grupo 4: registro y consulta de documentos** ([ADR-014](adr/ADR-014-contrato-documentos.md)) y consume el **programa de beneficios del Grupo 1** al aprobar un resumen. Corre en **dos instancias** detrás del balanceo de carga. | Go + MongoDB + MinIO + Apache Solr + Memcached |
+| **forum-service** | Publicación de resúmenes, **moderación** (aprobar / rechazar / eliminar), calificaciones, búsqueda indexada de resúmenes aprobados y caché del listado. Guarda el PDF de cada resumen. Publica los eventos de moderación. Expone la **capacidad publicada para el Grupo 4: registro y consulta de documentos** ([ADR-014](adr/ADR-014-contrato-documentos.md)) Corre en **dos instancias** detrás del balanceo de carga. | Go + MongoDB + MinIO + Apache Solr + Memcached |
 | **notification-service** | Consume los eventos de moderación y le envía el mail al autor exactamente una vez. Trata los mensajes que no se pueden procesar. | Go + MongoDB |
 
 Los criterios para separar los servicios están en el [ADR-001](adr/ADR-001-limites-de-servicios.md).
@@ -32,7 +32,7 @@ Cada entidad tiene **un único servicio dueño**, que es el único que la escrib
 
 | Servicio | Datos que administra | Almacenamiento |
 |---|---|---|
-| users-service | Usuarios, hash de contraseñas, roles | PostgreSQL (base `users`) |
+| users-service | Usuarios, hash de contraseñas, roles, vinculación con el Club y puntos pendientes de acreditar | PostgreSQL (base `users`) |
 | planner-service | Materias, dificultad, exámenes y eventos del calendario, disponibilidad semanal, planes de estudio, sesiones, claves de idempotencia de las confirmaciones | PostgreSQL (base `planner`) |
 | forum-service | Resúmenes y su estado de moderación, calificaciones, eventos pendientes de publicar (*outbox*) | MongoDB (base `forum`) |
 | forum-service (archivos) | Archivo PDF de cada resumen | MinIO (bucket `summaries`) |
@@ -52,7 +52,7 @@ El detalle de por qué se eligió cada almacenamiento está en el [ADR-003](adr/
 | frontend → api-gateway | Toda interacción del usuario |
 | api-gateway → users / planner / forum | Enrutamiento de cada request |
 | planner-service → proveedor de IA | Generar el plan de estudio |
-| forum-service → programa de beneficios del Grupo 1 | Registrar la participación del autor cuando se aprueba su resumen ([ADR-009](adr/ADR-009-consumo-del-proveedor.md)) |
+| users-service → Club de Beneficios del Grupo 1 | Vincular la cuenta y acreditar los puntos del autor cuando se aprueba su resumen ([ADR-015](adr/ADR-015-club-de-beneficios.md)) |
 | sistema del Grupo 4 → forum-service | Consumir nuestra capacidad: registrar y consultar documentos ([ADR-014](adr/ADR-014-contrato-documentos.md)) |
 
 - **No hay llamadas síncronas entre servicios propios**, así se evitan cadenas que sumen latencia y propaguen fallas.
@@ -165,7 +165,7 @@ flowchart TB
     users -- "Lee/escribe [SQL]" --> usersDb
     planner -- "Lee/escribe [SQL]" --> plannerDb
     planner -- "Propuesta del plan [HTTPS]" --> ia
-    forum -- "Premia la participación [HTTPS]" --> grupoProveedor
+    users -- "Vincula y acredita puntos [HTTPS, API key]" --> grupoProveedor
     grupoConsumidor -- "Registra y consulta documentos [HTTPS, API key]" --> forum
 
     forum -- "Lee/escribe" --> forumDb
@@ -176,6 +176,7 @@ flowchart TB
     rabbit -- "Indexador: consume summary.approved / deleted [AMQP]" --> forum
 
     rabbit -- "Consume summary.approved / rejected [AMQP]" --> notification
+    rabbit -- "Consume summary.approved y document.external-registered [AMQP]" --> users
     notification -- "Registra eventos procesados" --> notifDb
     notification -- "Envía mail [SMTP]" --> mail
 
@@ -193,7 +194,7 @@ flowchart TB
 
 - Las líneas que salen del **api-gateway** son síncronas. La única comunicación entre servicios propios es **asíncrona**, a través de RabbitMQ.
 - El **sistema del Grupo 4** entra directo a forum-service (el servicio dueño de los documentos), con su API key, sin pasar por el api-gateway. El frontend propio no participa de esa comunicación.
-- **forum-service** es también el que llama al **programa de beneficios del Grupo 1**, porque es el dueño de la aprobación de los resúmenes, que es lo que se premia.
+- **users-service** es el que llama al **Club de Beneficios del Grupo 1**: los puntos son del usuario y la vinculación con el Club es un dato de su cuenta. Se entera de la aprobación por el evento `summary.approved`, así la moderación no espera al Club ([ADR-015](adr/ADR-015-club-de-beneficios.md)).
 - **forum-service** aparece una sola vez, pero corre en **dos instancias**: el api-gateway reparte los pedidos entre ellas (ver *Balanceo de carga* en la sección 4).
 - La flecha de RabbitMQ hacia forum-service es el **indexador**, un componente interno del foro que consume sus propios eventos para mantener actualizado el índice de Solr. No es una comunicación con otro servicio.
 - **Solr** y **Memcached** son almacenes derivados: si se pierden, se reconstruyen desde MongoDB.

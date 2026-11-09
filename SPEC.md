@@ -323,25 +323,30 @@ El Grupo 4 la usa para **guías de viaje compartidas**. El contrato es genérico
 | RF-25 | Un sistema externo autorizado puede registrar un documento en el foro, con título, categoría, descripción, etiquetas, autor y un archivo PDF. El documento queda pendiente de moderación. |
 | RF-26 | Un sistema externo autorizado puede buscar entre los documentos aprobados, con los mismos filtros, órdenes y paginación que RF-19 y RF-20, ver el detalle de cada uno y descargar su PDF. |
 | RF-27 | Un sistema externo autorizado puede ver el estado de los documentos que registró (pendiente, aprobado o rechazado) y, si fue rechazado, el motivo. |
+| RF-30 | Si un sistema externo registra un documento con el mail de su autor y ese mail no tiene cuenta en Estudiario, el sistema le crea una cuenta y le manda por mail una contraseña generada, para que pueda entrar. El usuario puede cambiar su contraseña. *(Pedido de la cátedra, 2026-11-09.)* |
 
 | ID | Regla |
 |---|---|
 | RN-38 | Lo que registra un sistema externo pasa por la misma moderación que un resumen (RN-19, RN-21 a RN-23) y su archivo cumple RN-20. |
 | RN-39 | Un documento aprobado lo ve cualquier sistema autorizado y aparece en la búsqueda del foro. Uno pendiente o rechazado sólo lo ve el sistema que lo registró. Uno eliminado no lo ve nadie. |
 | RN-40 | Un mismo registro no crea dos documentos: si llega repetido con la misma clave de idempotencia, se devuelve el documento ya registrado. |
-| RN-41 | Los documentos registrados por sistemas externos no generan mail ni beneficios, porque su autor no tiene cuenta en Estudiario. |
+| RN-45 | La contraseña generada para el autor de un documento externo sólo viaja en ese mail: se guarda únicamente su hash y nunca pasa por la mensajería ni por los logs. Si el aviso del registro llega repetido, no se manda otro mail. |
+| RN-41 | Los documentos registrados por sistemas externos no generan el mail de moderación ni beneficios. *(Actualizada el 2026-11-09: su autor puede recibir una cuenta, RF-30.)* |
 
 ### 11.2 Capacidad consumida: programa de beneficios del Grupo 1
 
 | ID | Requisito |
 |---|---|
-| RF-28 | Cuando el administrador aprueba un resumen de un estudiante, el sistema registra esa participación en el programa de beneficios del Grupo 1, para que el estudiante reciba el premio que corresponda. |
+| RF-28 | Cuando el administrador aprueba un resumen de un estudiante, el sistema registra esa participación en el programa de beneficios del Grupo 1 (Club de Beneficios de Metalfitness): el estudiante gana **50 puntos**. |
+| RF-29 | El estudiante puede vincular su cuenta de Estudiario con el Club de Beneficios desde su perfil y ver ahí el estado de la vinculación, su saldo de puntos, los últimos puntos que ganó en Estudiario y los que todavía no se acreditaron. |
 
 | ID | Regla |
 |---|---|
 | RN-42 | Cada resumen aprobado se registra en el programa de beneficios una sola vez, aunque el aviso de la aprobación se procese más de una vez. |
 | RN-43 | La moderación no depende del programa de beneficios. Si el Grupo 1 no responde, la aprobación se registra igual y la participación se registra cuando vuelva, sin intervención manual. |
 | RN-44 | Eliminar un resumen ya aprobado no revierte un premio ya otorgado. |
+| RN-46 | Los puntos ganados antes de vincular la cuenta no se pierden: quedan pendientes y se acreditan cuando la vinculación se completa. |
+| RN-47 | Si el Club no responde, el perfil se muestra igual, sin el saldo y con un aviso; el resto del sistema no se ve afectado. |
 
 ### 11.3 Criterios de aceptación
 
@@ -353,3 +358,6 @@ El Grupo 4 la usa para **guías de viaje compartidas**. El contrato es genérico
 | CA-34 | **Dado** un registro ya procesado, **cuando** llega otra vez con la misma clave de idempotencia, **entonces** se devuelve el mismo documento y no se crea otro. *(RN-40)* **[crítico]** |
 | CA-35 | **Dado** un resumen pendiente de un estudiante, **cuando** el administrador lo aprueba, **entonces** se registra una única participación en el programa de beneficios del Grupo 1. *(RF-28, RN-42)* **[crítico]** |
 | CA-36 | **Dado** que el programa de beneficios del Grupo 1 está caído, **cuando** el administrador aprueba un resumen, **entonces** la aprobación se registra igual y, cuando el programa vuelve, la participación se registra una sola vez. *(RN-43)* **[crítico]** |
+| CA-37 | **Dado** un estudiante sin vincular con un resumen aprobado, **cuando** vincula su cuenta del Club y la vinculación se completa, **entonces** se le acreditan los 50 puntos pendientes y los ve en su perfil. *(RF-29, RN-46)* |
+| CA-38 | **Dado** que el Club no responde, **cuando** el estudiante abre su perfil, **entonces** ve el estado de la vinculación y sus puntos pendientes con el aviso de que el Club no está disponible, y la pantalla funciona. *(RN-47)* |
+| CA-39 | **Dado** que la agencia registra una guía con el mail de una persona sin cuenta, **cuando** se procesa el registro, **entonces** esa persona recibe un único mail con una contraseña con la que puede iniciar sesión. *(RF-30, RN-45)* |
