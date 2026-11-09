@@ -49,8 +49,8 @@ func (p *Postgres) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
 func (p *Postgres) Create(ctx context.Context, u model.User) error {
 	return p.run(ctx, func(ctx context.Context) error {
 		_, err := p.pool.Exec(ctx,
-			`INSERT INTO users (id, name, email, password_hash, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-			u.ID, u.Name, u.Email, u.PasswordHash, u.Role, u.CreatedAt)
+			`INSERT INTO users (id, name, email, password_hash, role, source, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			u.ID, u.Name, u.Email, u.PasswordHash, u.Role, sourceOrDefault(u.Source), u.CreatedAt)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation sobre email (RN-01)
 			return model.ErrEmailInUse
@@ -70,6 +70,24 @@ func (p *Postgres) UpdateRole(ctx context.Context, id, role string) error {
 	})
 }
 
+// UpdatePassword reemplaza el hash de la contraseña.
+func (p *Postgres) UpdatePassword(ctx context.Context, id, hash string) error {
+	return p.run(ctx, func(ctx context.Context) error {
+		tag, err := p.pool.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, id, hash)
+		if err == nil && tag.RowsAffected() == 0 {
+			return model.ErrNotFound
+		}
+		return err
+	})
+}
+
+func sourceOrDefault(s string) string {
+	if s == "" {
+		return model.SourceEstudiario
+	}
+	return s
+}
+
 func (p *Postgres) GetByEmail(ctx context.Context, email string) (model.User, error) {
 	return p.getOne(ctx, `WHERE email = $1`, email)
 }
@@ -81,8 +99,8 @@ func (p *Postgres) GetByID(ctx context.Context, id string) (model.User, error) {
 func (p *Postgres) getOne(ctx context.Context, where string, arg string) (u model.User, err error) {
 	err = p.run(ctx, func(ctx context.Context) error {
 		err := p.pool.QueryRow(ctx,
-			`SELECT id, name, email, password_hash, role, created_at FROM users `+where, arg).
-			Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+			`SELECT id, name, email, password_hash, role, source, created_at FROM users `+where, arg).
+			Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.Source, &u.CreatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.ErrNotFound
 		}

@@ -20,8 +20,14 @@ type User struct {
 	Email        string
 	PasswordHash string
 	Role         string
-	CreatedAt    time.Time
+	// Source es "estudiario" si se registró en la app, o el sistema que creó
+	// la cuenta (por ejemplo agencia_de_viajes, ADR-014).
+	Source    string
+	CreatedAt time.Time
 }
+
+// SourceEstudiario es el origen de las cuentas creadas desde la app.
+const SourceEstudiario = "estudiario"
 
 var (
 	// ErrEmailInUse: ya hay un usuario con ese mail (RN-01).

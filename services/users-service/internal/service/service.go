@@ -29,6 +29,7 @@ type Repository interface {
 	GetByEmail(ctx context.Context, email string) (model.User, error)
 	GetByID(ctx context.Context, id string) (model.User, error)
 	UpdateRole(ctx context.Context, id, role string) error
+	UpdatePassword(ctx context.Context, id, hash string) error
 }
 
 // TokenIssuer firma el JWT de un usuario y devuelve cuándo vence.

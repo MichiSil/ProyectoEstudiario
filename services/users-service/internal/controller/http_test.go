@@ -79,6 +79,18 @@ func (m *memRepo) UpdateRole(_ context.Context, id, role string) error {
 	return model.ErrNotFound
 }
 
+func (m *memRepo) UpdatePassword(_ context.Context, id, hash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.users {
+		if m.users[i].ID == id {
+			m.users[i].PasswordHash = hash
+			return nil
+		}
+	}
+	return model.ErrNotFound
+}
+
 func (m *memRepo) Ping(context.Context) error { return m.err }
 
 type fakeTokens struct{}
