@@ -71,6 +71,9 @@ const CODE_MESSAGES: Record<string, string> = {
   INVALID_SLOT: 'Alguna franja horaria no es válida.',
   INTERNAL_ERROR: 'Ocurrió un error inesperado en el servidor.',
   VALIDATION_ERROR: 'Hay datos inválidos en el formulario.',
+  INVALID_CURRENT_PASSWORD: 'La contraseña actual no es correcta.',
+  CLUB_UNAVAILABLE: 'El Club de Beneficios no está disponible ahora. Tus puntos no se pierden.',
+  CLUB_REJECTED: 'El Club de Beneficios no aceptó tus datos. Revisá que tu mail sea válido.',
 }
 
 interface RequestOptions {
