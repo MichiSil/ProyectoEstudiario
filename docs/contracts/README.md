@@ -39,7 +39,7 @@ La 1.1.0 suma cambios compatibles pedidos por la cátedra: el `source` dice qué
 |---|---|---|
 | Mock | `http://localhost:4010` | Desarrollar y probar la integración desde hoy, sin depender de nuestra implementación (ver [sección 11](#11-mock-para-desarrollar-y-probar)) |
 | Local | `http://localhost:8083` | forum-service levantado con `docker compose` desde este repositorio |
-| Nube | *Se publica acá antes de la presentación final* | Implementación real, accesible desde internet y operativa hasta el fin de la evaluación |
+| Nube | `https://estudiario-ucc.chilecentral.cloudapp.azure.com` | Implementación real, accesible desde internet y operativa hasta el fin de la evaluación. La API key de la nube es distinta de la de prueba local y se entrega por privado |
 
 La capacidad la expone **forum-service directamente**. No pasa por el api-gateway de Estudiario, que es sólo para nuestro frontend.
 

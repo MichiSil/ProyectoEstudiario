@@ -692,7 +692,16 @@ Para entrar hay que registrarse o iniciar sesión: el frontend llama a `/api/use
 
 ### Entorno desplegado
 
-El sistema se despliega en una máquina virtual de Azure con el mismo `docker compose` y Caddy adelante con HTTPS: el paso a paso está en [deploy/azure/README.md](deploy/azure/README.md). La URL pública (la app y la capacidad en `/v1`) la vamos a publicar acá cuando esté levantada.
+El sistema se despliega en una máquina virtual de Azure con el mismo `docker compose` y Caddy adelante con HTTPS: el paso a paso está en [deploy/azure/README.md](deploy/azure/README.md).
+
+| Qué | URL |
+|---|---|
+| **La app** | https://estudiario-ucc.chilecentral.cloudapp.azure.com |
+| Capacidad para el Grupo 4 (con API key) | https://estudiario-ucc.chilecentral.cloudapp.azure.com/v1 |
+| PDF públicos de la agencia (sin login) | https://estudiario-ucc.chilecentral.cloudapp.azure.com/v1/public/documents/{id}/file |
+| Estado de forum-service | https://estudiario-ucc.chilecentral.cloudapp.azure.com/health |
+
+Grafana, Prometheus, Jaeger y los paneles de las bases no se publican: se ven por un túnel SSH ([cómo](deploy/azure/README.md#operación)). En la nube los mails no salen a internet: los recibe Mailpit, igual que en local ([limitaciones](deploy/azure/README.md#limitaciones-conocidas)).
 
 **Integración con otros grupos** (asignada por la cátedra):
 
