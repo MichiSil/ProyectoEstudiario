@@ -148,6 +148,8 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **RabbitMQ** | Interfaz de administración en http://localhost:15672 | Eventos del foro (exchange `forum.events`) y colas de notification-service. La interfaz se abre con `RABBITMQ_ADMIN_*`; cada servicio entra con su propio usuario (`FORUM_RABBITMQ_*`, `NOTIFICATION_RABBITMQ_*`). El puerto AMQP (5672) no se publica |
 | **Mailpit** | http://localhost:8025 | Servidor SMTP de prueba: guarda los mails que manda notification-service en lugar de enviarlos y los muestra en esta página |
 | **Jaeger** | http://localhost:16686 | Interfaz web para ver las trazas. Recibe trazas OTLP en los puertos 4317 (gRPC) y 4318 (HTTP) |
+| **Grafana** | http://localhost:3000 | Tablero *Estudiario: estado general* y alertas. Usuario y contraseña: `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` del `.env` |
+| **Prometheus** | http://localhost:9090 | Métricas de los cinco servicios y estado de las alertas (*Alerts*) |
 | **Mock del Club de Beneficios (Prism)** | http://localhost:4011 | Club de Beneficios del Grupo 1 sobre la copia de su contrato ([`docs/contracts/consumidos/`](docs/contracts/consumidos/)), para probar sin internet y para la jornada de fallas |
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
 | MongoDB (bases `forum` y `notifications`) | Sin puerto publicado | Sólo lo usan forum-service, notification-service y `mongo-init`, por la red interna de Docker. Cada servicio entra con su usuario (`FORUM_DB_*`, `NOTIFICATION_DB_*`), que sólo lee y escribe su base; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
@@ -596,6 +598,41 @@ docker compose logs api-gateway planner-service | grep prueba-1
 ```
 
 **Ver las trazas:** abrí Jaeger en http://localhost:16686, elegí el servicio `api-gateway` y tocá *Find Traces*. Cada traza muestra el pedido completo: el span del gateway y, adentro, el de planner-service, con la duración de cada uno. Para encontrar un pedido puntual, buscá por el tag `correlation.id=prueba-1`.
+
+### Métricas, tablero y alertas
+
+Cada servicio expone sus métricas de Prometheus en `GET /metrics`, en el **puerto 9100 de la red interna de Docker**: no se publica, no pasa por el api-gateway y en la nube no se puede llegar desde afuera. Prometheus las lee cada 5 s, las dos instancias de forum-service por separado, y Grafana arma el tablero. Qué se mide y por qué está en el [ADR-011](docs/adr/ADR-011-observabilidad.md#actualización-2026-11-09).
+
+**Grafana:** abrí http://localhost:3000 y entrá con `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` del `.env` (en local, `admin` / `grafana-local`). La página de inicio es el tablero **Estudiario: estado general**: tráfico, errores y latencia p95 por servicio; pedidos por instancia del foro e instancias en la rotación; aciertos de la caché; outbox e índice de Solr; mensajes y DLQ; Club de Beneficios; propuestas y confirmaciones del plan, y las alertas disparadas. El datasource y el tablero se cargan solos desde [`deploy/grafana`](deploy/grafana): para cambiar el tablero se edita `deploy/grafana/dashboards/estudiario.json` (los cambios en la interfaz no se guardan).
+
+**Prometheus:** http://localhost:9090. En *Status > Targets* se ve si cada servicio entrega sus métricas y en *Alerts*, el estado de cada alerta. Las alertas están en [`deploy/prometheus/alerts.yml`](deploy/prometheus/alerts.yml) y también se ven en Grafana (*Alerting > Alert rules*):
+
+| Alerta | Cuándo salta |
+|---|---|
+| `ErroresAltos` | Más del 5 % de respuestas `5xx` de un servicio durante 5 minutos (SLO: 99 % sin `5xx`) |
+| `InstanciaDelForoFueraDeRotacion` | El api-gateway tiene una instancia de forum-service fuera de la rotación hace más de 1 minuto |
+| `ServicioSinResponder` | Prometheus no puede leer las métricas de un servicio hace más de 1 minuto |
+| `ConfirmarLento` | El p95 de confirmar un plan supera los 500 ms durante 10 minutos |
+| `MensajesEnLaDLQ` | notification-service mandó algún mensaje a `notifications.dlq` en los últimos 10 minutos |
+| `ClubDeBeneficiosNoDisponible` | El circuit breaker del Club está abierto hace más de 1 minuto |
+
+**Probar la caída de una instancia del foro:** con tráfico (por ejemplo, abriendo el foro en el frontend), apagá la segunda instancia:
+
+```bash
+docker compose stop forum-service-2
+```
+
+En unos 10 s el tablero la muestra *fuera de la rotación* y todo el tráfico pasa a `forum-service-1`; al minuto se disparan `InstanciaDelForoFueraDeRotacion` y `ServicioSinResponder`. Para volver:
+
+```bash
+docker compose start forum-service-2
+```
+
+Para ver las métricas crudas de un servicio sin Prometheus, desde la red de Docker:
+
+```bash
+docker compose exec prometheus wget -qO- http://forum-service:9100/metrics | grep ^forum_
+```
 
 ### Agente de IA
 
