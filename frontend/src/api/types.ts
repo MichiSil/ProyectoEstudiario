@@ -174,10 +174,12 @@ export interface Summary {
   tags: string[]
   status: SummaryStatus
   rejectionReason: string | null
-  source: 'estudiario' | 'externo'
+  /** estudiario, o el consumidor de la capacidad que lo registró. 'externo' es el valor viejo (ADR-014). */
+  source: 'estudiario' | 'agencia_de_viajes' | 'externo'
   author: { name: string; externalId?: string }
   rating: { average: number | null; count: number }
-  file: { contentType: string; sizeBytes: number; downloadPath: string }
+  /** publicUrl: ruta para ver el PDF sin login, sólo en los documentos externos (ADR-014). */
+  file: { contentType: string; sizeBytes: number; downloadPath: string; publicUrl: string | null }
   createdAt: string
   publishedAt: string | null
 }
