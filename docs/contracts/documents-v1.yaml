@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: Estudiario – Registro y consulta de documentos
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Capacidad publicada por **Estudiario** para que el sistema de otro grupo **registre
     documentos** en el foro y **consulte los documentos publicados** (RF-13 del
@@ -26,6 +26,16 @@ info:
     4. El consumidor ve el estado de **los documentos que registró** (pendiente, aprobado o
        rechazado, con el motivo) en `GET /v1/submissions` o en el detalle.
 
+    Además, desde la versión 1.1.0:
+
+    - El `source` de un documento registrado es el **nombre del consumidor** de la API key
+      (`agencia_de_viajes` para el Grupo 4).
+    - El PDF de un documento registrado por un consumidor es **público**: se puede ver sin
+      API key ni login en `GET /v1/public/documents/{documentId}/file` (la ruta viene en
+      `file.publicUrl`), salvo que se rechace o se elimine.
+    - Si el registro trae `authorEmail`, Estudiario le crea una **cuenta** a esa persona y
+      le manda por mail una contraseña generada.
+
     ## Adaptación a guías de viaje
 
     El contrato no tiene campos propios de ningún dominio. Para guías de viaje:
@@ -36,6 +46,7 @@ info:
     | `tags` | Datos para filtrar: tipo de viaje, temporada, idioma (por ejemplo `trekking,invierno`). |
     | `authorName` | Nombre visible de quien comparte la guía. |
     | `authorExternalId` | Id del usuario en el sistema consumidor, para relacionar el documento con su cuenta. Estudiario no lo interpreta. |
+    | `authorEmail` | Mail de quien comparte la guía, para que pueda entrar a Estudiario. Nunca se devuelve en las respuestas. |
 
     ## Convenciones
 
@@ -75,8 +86,13 @@ paths:
         moderación y **no aparece en la búsqueda** hasta que un administrador lo apruebe.
 
         El cuerpo es `multipart/form-data`: un campo por dato del documento (`title`,
-        `description`, `category`, `tags`, `authorName`, `authorExternalId`) y el archivo en
-        `file` (PDF de hasta 10 MB, RN-20).
+        `description`, `category`, `tags`, `authorName`, `authorExternalId`, `authorEmail`) y
+        el archivo en `file` (PDF de hasta 10 MB, RN-20).
+
+        El PDF queda **público** desde el registro: `file.publicUrl` trae la ruta para verlo
+        sin autenticación. Si viene `authorEmail`, Estudiario le crea una cuenta al autor y le
+        manda por mail una contraseña generada (un reintento con la misma `Idempotency-Key`
+        no la vuelve a crear).
 
         `Idempotency-Key` es obligatoria: un reintento con la misma clave y el mismo cuerpo
         devuelve el mismo documento, sin registrarlo dos veces.
@@ -291,6 +307,53 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
+  /v1/public/documents/{documentId}/file:
+    get:
+      tags: [Documentos]
+      operationId: viewPublicDocumentFile
+      summary: Ver el PDF de un documento sin autenticación
+      description: |
+        Devuelve el PDF de un documento **registrado por un consumidor**, sin API key ni login,
+        para que cualquiera lo pueda ver (por ejemplo, desde un link en el sistema del
+        consumidor). Es la ruta de `file.publicUrl`.
+
+        Responde `404` si el documento no existe, fue **rechazado** o **eliminado**, o lo subió
+        un estudiante en el foro (`source: estudiario`, que nunca es público). Un documento
+        pendiente sí se puede ver: el archivo es público desde que se registra.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: El archivo PDF, para mostrarlo en el navegador.
+          headers:
+            Content-Disposition:
+              description: Se muestra en el navegador, con el nombre sugerido del archivo.
+              schema:
+                type: string
+                example: inline; filename="guia-glaciares.pdf"
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: El documento no existe, fue rechazado o eliminado, o no es de un consumidor.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                code: NOT_FOUND
+                detail: el documento no existe
+                correlationId: viajes-7f3a2c
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /v1/submissions:
     get:
       tags: [Documentos]
@@ -469,6 +532,15 @@ components:
           maxLength: 100
           description: Id del autor en el sistema consumidor. Estudiario lo guarda tal cual y no lo interpreta.
           example: viajero-1842
+        authorEmail:
+          type: string
+          format: email
+          maxLength: 254
+          description: |
+            Mail del autor (opcional, desde 1.1.0). Si viene, Estudiario le crea una cuenta y le
+            manda por mail una contraseña generada para que pueda entrar. Nunca se devuelve en
+            las respuestas.
+          example: lucia.fernandez@mail.com
         file:
           type: string
           format: binary
@@ -506,8 +578,14 @@ components:
           description: Motivo del rechazo (RN-22). Sólo cuando `status` es `rechazado`.
         source:
           type: string
-          enum: [estudiario, externo]
-          description: '`estudiario` si lo subió un estudiante en el foro; `externo` si lo registró un sistema consumidor.'
+          enum: [estudiario, agencia_de_viajes, externo]
+          description: |
+            Quién subió el documento: `estudiario` si lo subió un estudiante en el foro, o el
+            nombre del consumidor que lo registró (`agencia_de_viajes` para el Grupo 4). Pueden
+            sumarse valores con nuevos consumidores (lector tolerante).
+
+            `externo` es **obsoleto**: es el valor de los documentos registrados antes de la
+            versión 1.1.0, que lo conservan. Ningún documento nuevo lo usa.
         author:
           type: object
           required: [name]
@@ -561,6 +639,14 @@ components:
           type: string
           description: Ruta para descargar el PDF (`GET`), relativa a la URL base.
           example: /v1/documents/d7f3k2m9qx4p8r1s/file
+        publicUrl:
+          type: string
+          nullable: true
+          description: |
+            Ruta para ver el PDF **sin autenticación** (`GET`), relativa a la URL base. Sólo en
+            los documentos registrados por un consumidor que no fueron rechazados; `null` en los
+            demás (los del foro y los registrados antes de la versión 1.1.0). Desde 1.1.0.
+          example: /v1/public/documents/d7f3k2m9qx4p8r1s/file
 
     DocumentPage:
       type: object
@@ -792,7 +878,7 @@ components:
         tags: [trekking, invierno]
         status: pendiente
         rejectionReason: null
-        source: externo
+        source: agencia_de_viajes
         author:
           name: Lucía Fernández
           externalId: viajero-1842
@@ -803,6 +889,7 @@ components:
           contentType: application/pdf
           sizeBytes: 2481152
           downloadPath: /v1/documents/d7f3k2m9qx4p8r1s/file
+          publicUrl: /v1/public/documents/d7f3k2m9qx4p8r1s/file
         createdAt: '2026-11-02T18:30:00-03:00'
         publishedAt: null
     DocumentApproved:
@@ -815,7 +902,7 @@ components:
         tags: [trekking, invierno]
         status: aprobado
         rejectionReason: null
-        source: externo
+        source: agencia_de_viajes
         author:
           name: Lucía Fernández
           externalId: viajero-1842
@@ -826,6 +913,7 @@ components:
           contentType: application/pdf
           sizeBytes: 2481152
           downloadPath: /v1/documents/d7f3k2m9qx4p8r1s/file
+          publicUrl: /v1/public/documents/d7f3k2m9qx4p8r1s/file
         createdAt: '2026-11-02T18:30:00-03:00'
         publishedAt: '2026-11-02T19:05:00-03:00'
     DocumentRejected:
@@ -838,7 +926,7 @@ components:
         tags: [ciudad]
         status: rechazado
         rejectionReason: El archivo no se puede leer; subí una versión con mejor resolución.
-        source: externo
+        source: agencia_de_viajes
         author:
           name: Martín Gómez
           externalId: viajero-2210
@@ -849,6 +937,7 @@ components:
           contentType: application/pdf
           sizeBytes: 912384
           downloadPath: /v1/documents/h2n8v5c1wz6t3y9a/file
+          publicUrl: null
         createdAt: '2026-11-01T10:12:00-03:00'
         publishedAt: null
     SearchResults:
@@ -862,7 +951,7 @@ components:
             tags: [trekking, invierno]
             status: aprobado
             rejectionReason: null
-            source: externo
+            source: agencia_de_viajes
             author:
               name: Lucía Fernández
             rating:
@@ -872,6 +961,7 @@ components:
               contentType: application/pdf
               sizeBytes: 2481152
               downloadPath: /v1/documents/d7f3k2m9qx4p8r1s/file
+              publicUrl: /v1/public/documents/d7f3k2m9qx4p8r1s/file
             createdAt: '2026-11-02T18:30:00-03:00'
             publishedAt: '2026-11-02T19:05:00-03:00'
         page: 1
@@ -888,7 +978,7 @@ components:
             tags: [trekking, invierno]
             status: pendiente
             rejectionReason: null
-            source: externo
+            source: agencia_de_viajes
             author:
               name: Lucía Fernández
               externalId: viajero-1842
@@ -899,6 +989,7 @@ components:
               contentType: application/pdf
               sizeBytes: 2481152
               downloadPath: /v1/documents/d7f3k2m9qx4p8r1s/file
+              publicUrl: /v1/public/documents/d7f3k2m9qx4p8r1s/file
             createdAt: '2026-11-02T18:30:00-03:00'
             publishedAt: null
         page: 1
