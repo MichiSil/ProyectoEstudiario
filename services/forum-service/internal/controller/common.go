@@ -61,6 +61,9 @@ type fileDTO struct {
 	ContentType  string `json:"contentType"`
 	SizeBytes    int64  `json:"sizeBytes"`
 	DownloadPath string `json:"downloadPath"`
+	// PublicURL es la ruta para descargarlo sin autenticación, o null si el
+	// archivo no es público (ADR-014).
+	PublicURL *string `json:"publicUrl"`
 }
 
 type documentDTO struct {
@@ -122,8 +125,16 @@ func toDocumentDTO(s model.Summary, downloadPath string, showExternalID bool) do
 		ext := s.Author.ExternalID
 		d.Author.ExternalID = &ext
 	}
+	if s.PublicFile() {
+		public := publicFilePath(s.ID)
+		d.File.PublicURL = &public
+	}
 	return d
 }
+
+// publicFilePath es la ruta pública del PDF, relativa a la URL base de la
+// capacidad (forum-service, o Caddy en la nube).
+func publicFilePath(id string) string { return "/v1/public/documents/" + id + "/file" }
 
 // ---------- Formulario multipart ----------
 
@@ -134,7 +145,7 @@ const maxBodySize = service.MaxFileSize + 1<<20
 // formFields son los campos de texto que se leen del formulario.
 var formFields = map[string]int{
 	"title": 600, "description": 8000, "category": 500, "tags": 1200,
-	"authorName": 400, "authorExternalId": 400,
+	"authorName": 400, "authorExternalId": 400, "authorEmail": 1100,
 }
 
 type upload struct {
@@ -350,12 +361,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// sendFile responde el PDF, sin cargarlo entero en memoria.
+// sendFile responde el PDF como descarga, sin cargarlo entero en memoria.
 func sendFile(w http.ResponseWriter, doc model.Summary, body io.ReadCloser) {
+	sendPDF(w, doc, body, "attachment")
+}
+
+// sendPDF responde el PDF; disposition es "attachment" (descarga) o "inline"
+// (el navegador lo muestra).
+func sendPDF(w http.ResponseWriter, doc model.Summary, body io.ReadCloser, disposition string) {
 	defer body.Close()
 	w.Header().Set("Content-Type", service.PDFContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(doc.File.SizeBytes, 10))
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": doc.File.FileName}))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": doc.File.FileName}))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, body)
 }

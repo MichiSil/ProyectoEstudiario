@@ -1,8 +1,14 @@
 #!/bin/sh
-# Crea en MinIO el bucket `summaries` y el usuario de forum-service, con
-# permiso sólo sobre ese bucket, para que el servicio no use el administrador
-# del contenedor (ADR-001, ADR-003). Mismo criterio que
+# Crea en MinIO los buckets de forum-service y su usuario, con permiso sólo
+# sobre esos buckets, para que el servicio no use el administrador del
+# contenedor (ADR-001, ADR-003). Mismo criterio que
 # deploy/postgres/init-databases.sh.
+#
+# - summaries: los PDF de los estudiantes (privados).
+# - public-documents: los PDF de los documentos de un source externo, que
+#   forum-service entrega sin autenticación (ADR-014). El bucket no es público
+#   en MinIO: MinIO no se publica a internet y los archivos salen sólo a
+#   través de forum-service.
 #
 # Es idempotente: lo corre el contenedor minio-init en cada
 # `docker compose up`.
@@ -14,6 +20,7 @@ set -eu
 : "${FORUM_MINIO_SECRET_KEY:?falta FORUM_MINIO_SECRET_KEY}"
 
 BUCKET=summaries
+PUBLIC_BUCKET=public-documents
 POLICY=forum-summaries
 
 if [ "$FORUM_MINIO_ACCESS_KEY" = "$MINIO_ROOT_USER" ]; then
@@ -39,8 +46,10 @@ for intento in $(seq 1 30); do
 done
 
 mc mb --ignore-existing "local/$BUCKET"
+mc mb --ignore-existing "local/$PUBLIC_BUCKET"
 
-# Sólo leer, escribir y borrar objetos del bucket, y listarlo.
+# Sólo leer, escribir y borrar objetos de los dos buckets, y listarlos.
+# `policy create` reemplaza la política si ya existía.
 cat > /tmp/policy.json <<EOF
 {
   "Version": "2012-10-17",
@@ -48,12 +57,12 @@ cat > /tmp/policy.json <<EOF
     {
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": ["arn:aws:s3:::$BUCKET/*"]
+      "Resource": ["arn:aws:s3:::$BUCKET/*", "arn:aws:s3:::$PUBLIC_BUCKET/*"]
     },
     {
       "Effect": "Allow",
       "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-      "Resource": ["arn:aws:s3:::$BUCKET"]
+      "Resource": ["arn:aws:s3:::$BUCKET", "arn:aws:s3:::$PUBLIC_BUCKET"]
     }
   ]
 }
@@ -65,4 +74,4 @@ mc admin user add local "$FORUM_MINIO_ACCESS_KEY" "$FORUM_MINIO_SECRET_KEY" >/de
 # Si la política ya estaba asociada, mc devuelve error: se ignora.
 mc admin policy attach local "$POLICY" --user "$FORUM_MINIO_ACCESS_KEY" >/dev/null 2>&1 || true
 
-echo "bucket $BUCKET listo (usuario $FORUM_MINIO_ACCESS_KEY, sólo sobre $BUCKET)"
+echo "buckets $BUCKET y $PUBLIC_BUCKET listos (usuario $FORUM_MINIO_ACCESS_KEY, sólo sobre esos buckets)"

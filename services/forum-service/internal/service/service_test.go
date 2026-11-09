@@ -20,7 +20,7 @@ var (
 	admin   = service.Viewer{UserID: "admin-1", Admin: true}
 	ana     = service.Viewer{UserID: "ana"}
 	beto    = service.Viewer{UserID: "beto"}
-	grupo4  = service.Viewer{Consumer: "grupo4"}
+	agencia = service.Viewer{Consumer: "agencia_de_viajes"}
 	grupo7  = service.Viewer{Consumer: "grupo7"}
 	pdf     = service.File{Name: "resumen.pdf", ContentType: "application/pdf", Data: []byte("%PDF-1.4 contenido")}
 	uuidV4  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -205,7 +205,7 @@ func TestDosModeracionesSimultaneasSoloUnaTieneEfecto(t *testing.T) {
 func TestFormatoDelEventoYMarcaDeExternos(t *testing.T) {
 	svc, store, _ := newService()
 	est := publish(t, svc, student)
-	ext, _, err := svc.Register(ctx, "grupo4", "clave-0001", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía", ExternalID: "v-1"}}, pdf)
+	ext, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía", ExternalID: "v-1"}}, pdf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestFormatoDelEventoYMarcaDeExternos(t *testing.T) {
 	}
 	x, _ := store.Get(ctx, ext.ID)
 	ev = x.Outbox[0]
-	if ev.EventType != model.EventRejected || ev.Data["notifyAuthor"] != false || ev.Data["source"] != "externo" || ev.Data["reason"] != "no se lee" {
+	if ev.EventType != model.EventRejected || ev.Data["notifyAuthor"] != false || ev.Data["source"] != "agencia_de_viajes" || ev.Data["reason"] != "no se lee" {
 		t.Errorf("datos del rechazo de un externo = %+v; un externo no genera mail (RN-41)", ev.Data)
 	}
 }
@@ -274,12 +274,12 @@ func TestCalificaciones(t *testing.T) {
 
 func TestVisibilidadPorAPIKey(t *testing.T) {
 	svc, _, _ := newService()
-	doc, _, err := svc.Register(ctx, "grupo4", "clave-0001", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía"}}, pdf)
+	doc, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía"}}, pdf)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.Get(ctx, grupo4, doc.ID); err != nil {
+	if _, err := svc.Get(ctx, agencia, doc.ID); err != nil {
 		t.Errorf("la API key que lo registró no ve su pendiente: %v", err)
 	}
 	if _, err := svc.Get(ctx, grupo7, doc.ID); !errors.Is(err, model.ErrNotFound) {
@@ -304,7 +304,7 @@ func TestVisibilidadPorAPIKey(t *testing.T) {
 	}
 
 	_ = svc.Delete(ctx, admin, doc.ID)
-	if _, err := svc.Get(ctx, grupo4, doc.ID); !errors.Is(err, model.ErrNotFound) {
+	if _, err := svc.Get(ctx, agencia, doc.ID); !errors.Is(err, model.ErrNotFound) {
 		t.Errorf("un eliminado se sigue viendo: err = %v", err)
 	}
 }
@@ -315,21 +315,21 @@ func TestIdempotenciaDelRegistro(t *testing.T) {
 	svc, store, _ := newService()
 	in := service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía"}}
 
-	first, replayed, err := svc.Register(ctx, "grupo4", "clave-0001", in, pdf)
+	first, replayed, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", in, pdf)
 	if err != nil || replayed {
 		t.Fatalf("primer registro: replayed = %v, err = %v", replayed, err)
 	}
-	again, replayed, err := svc.Register(ctx, "grupo4", "clave-0001", in, pdf)
+	again, replayed, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", in, pdf)
 	if err != nil || !replayed || again.ID != first.ID {
 		t.Fatalf("reintento: id = %q, replayed = %v, err = %v; se esperaba el mismo documento (CA-34)", again.ID, replayed, err)
 	}
-	if p, _ := store.ListByConsumer(ctx, "grupo4", "", 1, 10); p.Total != 1 {
+	if p, _ := store.ListByConsumer(ctx, "agencia_de_viajes", "", 1, 10); p.Total != 1 {
 		t.Errorf("hay %d documentos, se esperaba 1 (RN-40)", p.Total)
 	}
 
 	other := in
 	other.Title = "Otra guía"
-	if _, _, err := svc.Register(ctx, "grupo4", "clave-0001", other, pdf); !errors.Is(err, model.ErrIdempotencyReused) {
+	if _, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", other, pdf); !errors.Is(err, model.ErrIdempotencyReused) {
 		t.Errorf("misma clave, otro cuerpo: err = %v, se esperaba ErrIdempotencyReused", err)
 	}
 	if _, replayed, err := svc.Register(ctx, "grupo7", "clave-0001", in, pdf); err != nil || replayed {
@@ -346,7 +346,7 @@ func TestIdempotenciaConUnRegistroEnCurso(t *testing.T) {
 	// El primer pedido reserva la clave y queda subiendo el PDF.
 	done := make(chan model.Summary)
 	go func() {
-		doc, _, err := svc.Register(ctx, "grupo4", "clave-0001", in, pdf)
+		doc, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", in, pdf)
 		if err != nil {
 			t.Error(err)
 		}
@@ -355,13 +355,13 @@ func TestIdempotenciaConUnRegistroEnCurso(t *testing.T) {
 	<-blocking.started
 
 	// Un reintento mientras tanto recibe "en curso" (409) y no registra otro.
-	if _, _, err := svc.Register(ctx, "grupo4", "clave-0001", in, pdf); !errors.Is(err, model.ErrRequestInProgress) {
+	if _, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", in, pdf); !errors.Is(err, model.ErrRequestInProgress) {
 		t.Fatalf("en curso: err = %v, se esperaba ErrRequestInProgress", err)
 	}
 
 	close(blocking.release)
 	first := <-done
-	again, replayed, err := svc.Register(ctx, "grupo4", "clave-0001", in, pdf)
+	again, replayed, err := svc.Register(ctx, "agencia_de_viajes", "clave-0001", in, pdf)
 	if err != nil || !replayed || again.ID != first.ID {
 		t.Fatalf("después de terminar: id = %q, replayed = %v, err = %v; se esperaba el mismo documento", again.ID, replayed, err)
 	}
@@ -396,11 +396,163 @@ func TestElEventoLlevaNombreYMailDelAutor(t *testing.T) {
 		t.Errorf("author del evento = %v, se esperaban id, nombre y mail (ADR-005, 3.2)", author)
 	}
 
-	ext, _, _ := svc.Register(ctx, "grupo4", "clave-0009", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía", Email: "no-deberia@mail.com"}}, pdf)
+	// Aunque se registre con authorEmail, el rechazo no le manda mail (RN-41).
+	ext, _, _ := svc.Register(ctx, "agencia_de_viajes", "clave-0009", service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía", Email: "lucia@mail.com"}}, pdf)
 	_ = svc.Reject(ctx, admin, ext.ID, "no se lee")
 	got, _ = store.Get(ctx, ext.ID)
-	author, _ = got.Outbox[0].Data["author"].(map[string]any)
+	rejected := got.Outbox[len(got.Outbox)-1]
+	if rejected.EventType != model.EventRejected {
+		t.Fatalf("último evento = %s, se esperaba %s", rejected.EventType, model.EventRejected)
+	}
+	author, _ = rejected.Data["author"].(map[string]any)
 	if _, ok := author["email"]; ok {
 		t.Errorf("el evento de un documento externo lleva mail: %v (RN-41)", author)
+	}
+}
+
+// ---------- Correcciones de la cátedra a la capacidad (ADR-014, 2026-11-09) ----------
+
+func register(t *testing.T, svc *service.Service, consumer, key string, author model.Author) model.Summary {
+	t.Helper()
+	doc, _, err := svc.Register(ctx, consumer, key, service.NewDocument{Title: "Guía de glaciares", Category: "Patagonia", Author: author}, pdf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func newServiceWithPublic() (*service.Service, *memory.Store, *memory.Files, *memory.Files) {
+	svc, store, files := newService()
+	public := memory.NewFiles()
+	svc.PublicFiles = public
+	return svc, store, files, public
+}
+
+func TestElSourceEsElConsumidorDeLaAPIKey(t *testing.T) {
+	svc, _, _ := newService()
+	doc := register(t, svc, "agencia_de_viajes", "clave-0001", model.Author{Name: "Lucía"})
+	if doc.Source != "agencia_de_viajes" {
+		t.Errorf("source = %q, se esperaba el consumidor agencia_de_viajes", doc.Source)
+	}
+	if est := publish(t, svc, student); est.Source != model.SourceEstudiario {
+		t.Errorf("source de un estudiante = %q", est.Source)
+	}
+}
+
+func TestLosPDFExternosVanAlBucketPublico(t *testing.T) {
+	svc, _, files, public := newServiceWithPublic()
+	ext := register(t, svc, "agencia_de_viajes", "clave-0001", model.Author{Name: "Lucía"})
+	est := publish(t, svc, student)
+	if !ext.File.Public || !public.Has(ext.File.Key) || files.Has(ext.File.Key) {
+		t.Errorf("el PDF externo no quedó sólo en el bucket público (public = %v)", ext.File.Public)
+	}
+	if est.File.Public || public.Has(est.File.Key) || !files.Has(est.File.Key) {
+		t.Errorf("el PDF de un estudiante no quedó sólo en el bucket privado (public = %v)", est.File.Public)
+	}
+	// La descarga con API key también lo lee del bucket público.
+	if _, r, err := svc.Download(ctx, service.Viewer{Consumer: "agencia_de_viajes"}, ext.ID); err != nil {
+		t.Fatalf("descarga con API key: %v", err)
+	} else {
+		_ = r.Close()
+	}
+}
+
+func TestDescargaPublica(t *testing.T) {
+	svc, store, _, _ := newServiceWithPublic()
+	open := func(id string) error {
+		_, r, err := svc.PublicDownload(ctx, id)
+		if err == nil {
+			b, _ := io.ReadAll(r)
+			_ = r.Close()
+			if string(b) != string(pdf.Data) {
+				t.Errorf("contenido = %q", b)
+			}
+		}
+		return err
+	}
+
+	pendiente := register(t, svc, "agencia_de_viajes", "clave-0001", model.Author{Name: "Lucía"})
+	if err := open(pendiente.ID); err != nil {
+		t.Errorf("externo pendiente: %v, se esperaba el PDF (público desde que se sube)", err)
+	}
+	aprobado := register(t, svc, "agencia_de_viajes", "clave-0002", model.Author{Name: "Lucía"})
+	_ = svc.Approve(ctx, admin, aprobado.ID)
+	if err := open(aprobado.ID); err != nil {
+		t.Errorf("externo aprobado: %v, se esperaba el PDF", err)
+	}
+
+	rechazado := register(t, svc, "agencia_de_viajes", "clave-0003", model.Author{Name: "Lucía"})
+	_ = svc.Reject(ctx, admin, rechazado.ID, "no se lee")
+	eliminado := register(t, svc, "agencia_de_viajes", "clave-0004", model.Author{Name: "Lucía"})
+	_ = svc.Delete(ctx, admin, eliminado.ID)
+	est := publish(t, svc, student)
+	_ = svc.Approve(ctx, admin, est.ID)
+	// Un documento viejo, con source "externo" y el PDF en el bucket privado.
+	viejo := register(t, svc, "agencia_de_viajes", "clave-0005", model.Author{Name: "Lucía"})
+	v, _ := store.Get(ctx, viejo.ID)
+	v.Source, v.File.Public = model.SourceExternal, false
+	_ = store.Create(ctx, v)
+
+	for name, id := range map[string]string{
+		"externo rechazado": rechazado.ID, "externo eliminado": eliminado.ID,
+		"estudiario aprobado": est.ID, "externo viejo en el bucket privado": viejo.ID, "inexistente": "noexiste1234",
+	} {
+		if err := open(id); !errors.Is(err, model.ErrNotFound) {
+			t.Errorf("%s: err = %v, se esperaba ErrNotFound", name, err)
+		}
+	}
+}
+
+func TestEventoParaCrearLaCuentaDelAutor(t *testing.T) {
+	svc, store, _, _ := newServiceWithPublic()
+	sinMail := register(t, svc, "agencia_de_viajes", "clave-0001", model.Author{Name: "Lucía"})
+	if got, _ := store.Get(ctx, sinMail.ID); len(got.Outbox) != 0 {
+		t.Errorf("sin authorEmail se guardaron eventos: %+v", got.Outbox)
+	}
+
+	in := service.NewDocument{Title: "Guía de glaciares", Category: "Patagonia", Author: model.Author{Name: "Lucía Fernández", Email: "lucia@mail.com", ExternalID: "viajero-1842"}}
+	doc, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-0002", in, pdf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.Get(ctx, doc.ID)
+	if len(got.Outbox) != 1 {
+		t.Fatalf("eventos = %d, se esperaba 1", len(got.Outbox))
+	}
+	ev := got.Outbox[0]
+	author, _ := ev.Data["author"].(map[string]any)
+	if ev.EventType != model.EventExternalRegistered || !uuidV4.MatchString(ev.EventID) || ev.PublishedAt != nil ||
+		ev.Data["documentId"] != doc.ID || ev.Data["title"] != "Guía de glaciares" || ev.Data["source"] != "agencia_de_viajes" ||
+		author["name"] != "Lucía Fernández" || author["email"] != "lucia@mail.com" || author["externalId"] != "viajero-1842" {
+		t.Errorf("evento = %+v", ev)
+	}
+
+	// El reintento con la misma Idempotency-Key no vuelve a publicarlo.
+	if _, replayed, err := svc.Register(ctx, "agencia_de_viajes", "clave-0002", in, pdf); err != nil || !replayed {
+		t.Fatalf("reintento: replayed = %v, err = %v", replayed, err)
+	}
+	if got, _ := store.Get(ctx, doc.ID); len(got.Outbox) != 1 {
+		t.Errorf("después del reintento hay %d eventos", len(got.Outbox))
+	}
+	if p, _ := store.ListByConsumer(ctx, "agencia_de_viajes", "", 1, 10); p.Total != 2 {
+		t.Errorf("documentos registrados = %d, se esperaban 2", p.Total)
+	}
+
+	// Un estudiante tiene mail (del token) y no genera este evento.
+	in = student
+	in.Author.Email = "ana@mail.com"
+	if got, _ := store.Get(ctx, publish(t, svc, in).ID); len(got.Outbox) != 0 {
+		t.Errorf("un resumen de estudiante generó eventos al publicarse: %+v", got.Outbox)
+	}
+}
+
+func TestAuthorEmailInvalido(t *testing.T) {
+	svc, _, _ := newService()
+	for i, email := range []string{"no-es-mail", "Lucía <lucia@mail.com>", strings.Repeat("a", 250) + "@mail.com"} {
+		_, _, err := svc.Register(ctx, "agencia_de_viajes", "clave-000"+string(rune('1'+i)), service.NewDocument{Title: "Guía", Category: "Patagonia", Author: model.Author{Name: "Lucía", Email: email}}, pdf)
+		var verr *model.ValidationError
+		if !errors.As(err, &verr) || verr.Fields[0].Field != "authorEmail" {
+			t.Errorf("authorEmail %.30q: err = %v, se esperaba un error de validación en authorEmail", email, err)
+		}
 	}
 }

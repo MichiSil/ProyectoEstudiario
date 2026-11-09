@@ -124,12 +124,13 @@ services:
       PORT: "8083"
       # Nombre de la instancia en los logs, las trazas y X-Served-By (ADR-012).
       INSTANCE: forum-service-1
-      # Base `forum` en MongoDB y bucket `summaries` en MinIO, con usuarios propios (ADR-003).
+      # Base `forum` en MongoDB y buckets `summaries` y `public-documents` en MinIO, con usuarios propios (ADR-003, ADR-014).
       MONGO_URI: mongodb://${FORUM_DB_USER}:${FORUM_DB_PASSWORD}@mongo:27017/forum?authSource=forum
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY}
       MINIO_BUCKET: summaries
+      MINIO_PUBLIC_BUCKET: public-documents
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       # La API del foro sólo acepta X-User-Id de pedidos que traen este secreto (los del api-gateway).
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}

@@ -105,6 +105,16 @@ func run(logger *slog.Logger) error {
 	if err := retry(ctx, logger, "MinIO", files.Ping); err != nil {
 		return err
 	}
+	// Bucket público: los PDF de los documentos de un source externo, que se
+	// entregan sin autenticación en /v1/public/documents/{id}/file (ADR-014).
+	publicFiles, err := storage.NewMinIO(env("MINIO_ENDPOINT", "localhost:9000"), os.Getenv("MINIO_ACCESS_KEY"),
+		os.Getenv("MINIO_SECRET_KEY"), env("MINIO_PUBLIC_BUCKET", "public-documents"), os.Getenv("MINIO_SECURE") == "true")
+	if err != nil {
+		return err
+	}
+	if err := retry(ctx, logger, "MinIO (bucket público)", publicFiles.Ping); err != nil {
+		return err
+	}
 
 	// Caché de lectura del foro (ADR-007): Memcached en docker compose; la nula
 	// (none) para medir sin caché; la local para desarrollar sin contenedores.
@@ -149,9 +159,9 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Warn("sin SOLR_URL: la búsqueda usa MongoDB")
 	}
-	svc := &service.Service{Repo: cachedRepo, Search: &cached.Search{Next: summarySearch, Repo: cachedRepo}, Files: files}
+	svc := &service.Service{Repo: cachedRepo, Search: &cached.Search{Next: summarySearch, Repo: cachedRepo}, Files: files, PublicFiles: publicFiles}
 
-	// Limpieza periódica de PDF huérfanos en MinIO (ADR-003).
+	// Limpieza periódica de PDF huérfanos en los dos buckets de MinIO (ADR-003).
 	cleanInterval, err := durationEnv("FORUM_CLEANUP_INTERVAL", cleanup.DefaultInterval)
 	if err != nil {
 		return err
@@ -160,7 +170,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	go (&cleanup.Cleaner{Files: files, Docs: repo, Logger: logger, Interval: cleanInterval, MinAge: cleanMinAge}).Run(ctx)
+	go (&cleanup.Cleaner{Buckets: []cleanup.Files{files, publicFiles}, Docs: repo, Logger: logger, Interval: cleanInterval, MinAge: cleanMinAge}).Run(ctx)
 	logger.Info("limpieza de PDF huérfanos programada", "intervalMs", cleanInterval.Milliseconds(), "minAgeMs", cleanMinAge.Milliseconds())
 
 	// Relay del outbox a RabbitMQ (ADR-005, 3.3). Corre aparte: si el broker

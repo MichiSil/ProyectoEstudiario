@@ -1,4 +1,5 @@
-// Package cleanup borra los PDF huérfanos del bucket summaries (ADR-003).
+// Package cleanup borra los PDF huérfanos de los buckets de forum-service:
+// summaries y public-documents (ADR-003, ADR-014).
 //
 // Publicar un resumen escribe en dos almacenamientos sin una transacción
 // común: primero el PDF en MinIO y después el documento en MongoDB. Si la
@@ -25,8 +26,9 @@ const (
 	batch        = 200
 )
 
-// Files es lo que la limpieza necesita de MinIO.
+// Files es lo que la limpieza necesita de un bucket de MinIO.
 type Files interface {
+	Bucket() string
 	List(ctx context.Context, prefix string, fn func(key string, modified time.Time) error) error
 	Delete(ctx context.Context, key string) error
 }
@@ -37,12 +39,14 @@ type Documents interface {
 	ExistingFileKeys(ctx context.Context, keys []string) (map[string]bool, error)
 }
 
-// Cleaner borra los PDF que no tienen ningún documento con ese file.key.
+// Cleaner borra los PDF que no tienen ningún documento con ese file.key, en
+// cada uno de los buckets. Las claves son únicas entre los dos buckets (el id
+// del documento), así que alcanza con buscar la clave sin mirar el bucket.
 //
 // Con dos instancias de forum-service corriendo a la vez no pasa nada: las dos
 // pueden querer borrar el mismo archivo, y borrarlo dos veces da lo mismo.
 type Cleaner struct {
-	Files    Files
+	Buckets  []Files
 	Docs     Documents
 	Logger   *slog.Logger
 	Interval time.Duration
@@ -81,8 +85,9 @@ func (c *Cleaner) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce hace una vuelta: recorre los PDF con más de MinAge de antigüedad y
-// borra los que no tienen documento. Devuelve cuántos revisó y cuántos borró.
+// RunOnce hace una vuelta: en cada bucket, recorre los PDF con más de MinAge
+// de antigüedad y borra los que no tienen documento. Devuelve cuántos revisó y
+// cuántos borró en total.
 func (c *Cleaner) RunOnce(ctx context.Context) (reviewed, deleted int, err error) {
 	ctx, cancel := context.WithTimeout(ctx, roundTimeout)
 	defer cancel()
@@ -92,7 +97,21 @@ func (c *Cleaner) RunOnce(ctx context.Context) (reviewed, deleted int, err error
 		minAge = DefaultMinAge
 	}
 	started := c.now()
-	cutoff := started.Add(-minAge)
+	for _, files := range c.Buckets {
+		r, d, err := c.cleanBucket(ctx, files, started.Add(-minAge))
+		reviewed, deleted = reviewed+r, deleted+d
+		if err != nil {
+			return reviewed, deleted, err
+		}
+		c.Logger.Info("limpieza de PDF huérfanos", "bucket", files.Bucket(), "reviewed", r, "deleted", d,
+			"minAgeMs", minAge.Milliseconds(), "durationMs", time.Since(started).Milliseconds())
+	}
+	return reviewed, deleted, nil
+}
+
+// cleanBucket limpia un bucket: los PDF modificados antes de cutoff que no
+// tienen documento.
+func (c *Cleaner) cleanBucket(ctx context.Context, files Files, cutoff time.Time) (reviewed, deleted int, err error) {
 
 	var pending []string
 	flush := func() error {
@@ -107,17 +126,17 @@ func (c *Cleaner) RunOnce(ctx context.Context) (reviewed, deleted int, err error
 			if existing[key] {
 				continue
 			}
-			if err := c.Files.Delete(ctx, key); err != nil {
+			if err := files.Delete(ctx, key); err != nil {
 				return err
 			}
 			deleted++
-			c.Logger.Info("PDF huérfano borrado", "key", key)
+			c.Logger.Info("PDF huérfano borrado", "bucket", files.Bucket(), "key", key)
 		}
 		pending = pending[:0]
 		return nil
 	}
 
-	err = c.Files.List(ctx, c.Prefix, func(key string, modified time.Time) error {
+	err = files.List(ctx, c.Prefix, func(key string, modified time.Time) error {
 		if modified.After(cutoff) {
 			return nil // puede estar subiéndose ahora: se revisa en otra vuelta
 		}
@@ -131,10 +150,5 @@ func (c *Cleaner) RunOnce(ctx context.Context) (reviewed, deleted int, err error
 	if err == nil {
 		err = flush()
 	}
-	if err != nil {
-		return reviewed, deleted, err
-	}
-	c.Logger.Info("limpieza de PDF huérfanos", "reviewed", reviewed, "deleted", deleted,
-		"minAgeMs", minAge.Milliseconds(), "durationMs", time.Since(started).Milliseconds())
-	return reviewed, deleted, nil
+	return reviewed, deleted, err
 }

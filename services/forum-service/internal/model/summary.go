@@ -22,12 +22,17 @@ const (
 	StatusDeleted Status = "eliminado"
 )
 
-// Source dice quién registró el documento.
+// Source dice quién registró el documento: "estudiario" si lo subió un
+// estudiante en el foro, o el nombre del consumidor de la API key que lo
+// registró por /v1 (por ejemplo "agencia_de_viajes", ADR-014).
 type Source string
 
 const (
 	SourceEstudiario Source = "estudiario" // lo subió un estudiante en el foro
-	SourceExternal   Source = "externo"    // lo registró un sistema consumidor (ADR-014)
+	// SourceExternal es el valor que tenían los documentos registrados por /v1
+	// antes de que el source fuera el consumidor (ADR-014, actualización del
+	// 2026-11-09). Ya no se guarda, pero los documentos viejos lo conservan.
+	SourceExternal Source = "externo"
 )
 
 // Author identifica a quien subió el documento.
@@ -56,6 +61,10 @@ type FileRef struct {
 	ContentType string `bson:"contentType"`
 	SizeBytes   int64  `bson:"sizeBytes"`
 	FileName    string `bson:"fileName"`
+	// Public indica que el PDF está en el bucket público (public-documents) y
+	// no en summaries. Lo tienen los documentos de un source externo
+	// registrados desde la actualización del ADR-014; los anteriores no.
+	Public bool `bson:"public,omitempty"`
 }
 
 // OutboxEvent es un evento de dominio guardado en el mismo documento que el
@@ -77,6 +86,9 @@ const (
 	EventApproved = "summary.approved"
 	EventRejected = "summary.rejected"
 	EventDeleted  = "summary.deleted"
+	// EventExternalRegistered avisa que un consumidor registró un documento con
+	// el mail de su autor, para que users-service le cree una cuenta (ADR-014).
+	EventExternalRegistered = "document.external-registered"
 )
 
 // Summary es un resumen del foro o un documento externo.
@@ -108,6 +120,14 @@ type Summary struct {
 
 // Visible indica si el documento existe para alguien (no fue eliminado).
 func (s Summary) Visible() bool { return s.Status != StatusDeleted }
+
+// PublicFile indica si su PDF se entrega sin autenticación, por
+// /v1/public/documents/{id}/file: es de un source externo, está en el bucket
+// público y no fue rechazado ni eliminado (ADR-014).
+func (s Summary) PublicFile() bool {
+	return s.File.Public && s.Source != SourceEstudiario &&
+		(s.Status == StatusPending || s.Status == StatusApproved)
+}
 
 var (
 	ErrNotFound = errors.New("el resumen no existe")

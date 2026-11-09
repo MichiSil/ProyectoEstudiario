@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"net/mail"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -44,7 +45,7 @@ type SummarySearch interface {
 	Search(ctx context.Context, q model.SearchQuery) (model.Page, error)
 }
 
-// FileStore guarda los PDF (MinIO, ADR-003).
+// FileStore guarda los PDF en un bucket de MinIO (ADR-003).
 type FileStore interface {
 	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
@@ -55,9 +56,23 @@ type FileStore interface {
 type Service struct {
 	Repo   Repository
 	Search SummarySearch
-	Files  FileStore
-	Now    func() time.Time
-	NewID  func() string
+	// Files es el bucket privado (summaries): los PDF de los estudiantes, que
+	// se entregan sólo a quien puede ver el documento.
+	Files FileStore
+	// PublicFiles es el bucket público (public-documents): los PDF de los
+	// documentos de un source externo, que se entregan sin autenticación
+	// (ADR-014). Si es nil, todos van a Files.
+	PublicFiles FileStore
+	Now         func() time.Time
+	NewID       func() string
+}
+
+// store devuelve el bucket donde está (o va) un archivo.
+func (s *Service) store(f model.FileRef) FileStore {
+	if f.Public && s.PublicFiles != nil {
+		return s.PublicFiles
+	}
+	return s.Files
 }
 
 func (s *Service) now() time.Time {
@@ -143,16 +158,24 @@ func CheckPDF(f File) error {
 // (ADR-003): nunca queda un documento sin archivo. Si falla la creación, se
 // intenta borrar el archivo; si eso también falla, queda huérfano y lo borra
 // la limpieza periódica.
+//
+// Si un consumidor lo registra con el mail del autor, el documento se crea con
+// el evento document.external-registered en su outbox, en la misma escritura,
+// para que users-service le cree una cuenta (ADR-014).
 func (s *Service) Publish(ctx context.Context, in NewDocument, f File) (model.Summary, error) {
 	doc, err := s.prepare(in, f)
 	if err != nil {
 		return model.Summary{}, err
 	}
-	if err := s.Files.Put(ctx, doc.File.Key, bytes.NewReader(f.Data), int64(len(f.Data)), PDFContentType); err != nil {
+	if doc.Source != model.SourceEstudiario && doc.Author.Email != "" {
+		doc.Outbox = append(doc.Outbox, s.event(ctx, model.EventExternalRegistered, doc.CreatedAt, externalRegisteredData(doc)))
+	}
+	files := s.store(doc.File)
+	if err := files.Put(ctx, doc.File.Key, bytes.NewReader(f.Data), int64(len(f.Data)), PDFContentType); err != nil {
 		return model.Summary{}, err
 	}
 	if err := s.Repo.Create(ctx, doc); err != nil {
-		_ = s.Files.Delete(context.WithoutCancel(ctx), doc.File.Key)
+		_ = files.Delete(context.WithoutCancel(ctx), doc.File.Key)
 		return model.Summary{}, err
 	}
 	return doc, nil
@@ -177,6 +200,11 @@ func (s *Service) prepare(in NewDocument, f File) (model.Summary, error) {
 	check("description", description, 0, 2000, "tiene como máximo 2000 caracteres")
 	check("authorName", authorName, 2, 100, "tiene que tener entre 2 y 100 caracteres")
 	check("authorExternalId", in.Author.ExternalID, 0, 100, "tiene como máximo 100 caracteres")
+	// authorEmail sólo lo manda un consumidor (el de un estudiante sale del token).
+	external := in.Source != model.SourceEstudiario
+	if external && in.Author.Email != "" && !validEmail(in.Author.Email) {
+		fields = append(fields, model.FieldError{Field: "authorEmail", Message: "tiene que ser un mail válido de hasta 254 caracteres"})
+	}
 	tags, tagKeys, tagErr := parseTags(in.Tags)
 	if tagErr != "" {
 		fields = append(fields, model.FieldError{Field: "tags", Message: tagErr})
@@ -200,10 +228,22 @@ func (s *Service) prepare(in NewDocument, f File) (model.Summary, error) {
 		File: model.FileRef{
 			Key: id + ".pdf", ContentType: PDFContentType,
 			SizeBytes: int64(len(f.Data)), FileName: fileName(f.Name, title),
+			// Los PDF de un source externo van al bucket público (ADR-014).
+			Public: external && s.PublicFiles != nil,
 		},
 		CreatedAt: now, UpdatedAt: now,
 		Outbox: []model.OutboxEvent{},
 	}, nil
+}
+
+// validEmail acepta una dirección simple (usuario@dominio), sin nombre ni
+// comentarios, de hasta 254 caracteres.
+func validEmail(email string) bool {
+	if len(email) > 254 {
+		return false
+	}
+	addr, err := mail.ParseAddress(email)
+	return err == nil && addr.Name == "" && addr.Address == email
 }
 
 // parseTags separa las etiquetas por comas: sin espacios a los costados, sin
@@ -276,7 +316,25 @@ func (s *Service) Download(ctx context.Context, v Viewer, id string) (model.Summ
 	if err != nil {
 		return model.Summary{}, nil, err
 	}
-	r, err := s.Files.Get(ctx, doc.File.Key)
+	r, err := s.store(doc.File).Get(ctx, doc.File.Key)
+	if err != nil {
+		return model.Summary{}, nil, err
+	}
+	return doc, r, nil
+}
+
+// PublicDownload abre, sin autenticación, el PDF de un documento de un source
+// externo que no fue rechazado ni eliminado (ADR-014). Cualquier otro caso
+// devuelve ErrNotFound, sin revelar si el documento existe.
+func (s *Service) PublicDownload(ctx context.Context, id string) (model.Summary, io.ReadCloser, error) {
+	doc, err := s.Repo.Get(ctx, id)
+	if err != nil {
+		return model.Summary{}, nil, err
+	}
+	if !doc.PublicFile() {
+		return model.Summary{}, nil, model.ErrNotFound
+	}
+	r, err := s.store(doc.File).Get(ctx, doc.File.Key)
 	if err != nil {
 		return model.Summary{}, nil, err
 	}
