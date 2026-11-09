@@ -148,6 +148,27 @@ export interface User {
   createdAt: string
 }
 
+/** Club de Beneficios del Grupo 1 (RF-29, ADR-015): GET y POST /api/users/me/club. */
+export type ClubLinkStatus = 'sin_vincular' | 'pendiente' | 'vinculada'
+
+export interface ClubMovement {
+  id: string
+  points: number
+  reason: string
+  occurredAt: string
+}
+
+export interface ClubStatus {
+  status: ClubLinkStatus
+  /** Saldo total en el Club; null si no está vinculada o el Club no respondió */
+  balance: number | null
+  /** Puntos ganados en Estudiario que todavía no se acreditaron */
+  pendingPoints: number
+  movements: ClubMovement[]
+  /** CLUB_UNAVAILABLE si el Club no respondió: se muestra el resto igual */
+  warning: 'CLUB_UNAVAILABLE' | null
+}
+
 export interface LoginResult {
   /** JWT HS256 que valida el api-gateway */
   token: string

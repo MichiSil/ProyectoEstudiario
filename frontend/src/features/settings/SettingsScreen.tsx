@@ -7,17 +7,21 @@ import { Button } from '@/components/ui/Button'
 import { useSession } from '@/app/providers/SessionProvider'
 import { useTheme } from '@/app/providers/ThemeProvider'
 import { AvailabilitySection } from './AvailabilitySection'
+import { ClubSection } from './ClubSection'
+import { PasswordSection } from './PasswordSection'
 
 export function SettingsScreen() {
   const { user } = useSession()
   return (
     <div className="mx-auto max-w-2xl px-4 py-6">
-      <PageHeader title="Configuración" subtitle="Tu perfil, disponibilidad y preferencias." />
+      <PageHeader title="Configuración" subtitle="Tu perfil, tus puntos, tu disponibilidad y tus preferencias." />
 
       <div className="mt-5 flex flex-col gap-4">
         <ProfileSection />
         {user?.role === 'admin' && <AdminSection />}
+        <ClubSection />
         <AvailabilitySection />
+        <PasswordSection />
         <AppearanceSection />
       </div>
     </div>
