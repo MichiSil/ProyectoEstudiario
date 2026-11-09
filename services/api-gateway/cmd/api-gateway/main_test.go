@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/auth"
+	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/ratelimit"
 )
 
 const testSecret = "secreto-de-prueba-con-mas-de-32-caracteres"
@@ -20,7 +21,8 @@ func testRouter(t *testing.T, planner http.Handler) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), planner, http.NotFoundHandler(), http.NotFoundHandler())
+	limits := limiters{user: ratelimit.New(ratelimit.DefaultUser), public: ratelimit.New(ratelimit.DefaultPublic)}
+	return newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), limits, planner, http.NotFoundHandler(), http.NotFoundHandler())
 }
 
 func TestHealthRespondeOK(t *testing.T) {
@@ -94,7 +96,7 @@ func TestRegistroYLoginSonPublicosYNoAceptanIdentidadDelCliente(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users, http.NotFoundHandler())
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), limiters{user: ratelimit.New(ratelimit.DefaultUser), public: ratelimit.New(ratelimit.DefaultPublic)}, http.NotFoundHandler(), users, http.NotFoundHandler())
 
 	for _, path := range []string{"/api/users/register", "/api/users/login"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
@@ -119,7 +121,7 @@ func TestMeExigeJWTYUsaLaIdentidadDelToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), http.NotFoundHandler(), users, http.NotFoundHandler())
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), limiters{user: ratelimit.New(ratelimit.DefaultUser), public: ratelimit.New(ratelimit.DefaultPublic)}, http.NotFoundHandler(), users, http.NotFoundHandler())
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/users/me", nil))
@@ -138,5 +140,38 @@ func TestMeExigeJWTYUsaLaIdentidadDelToken(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || userID != "usuario-1" {
 		t.Fatalf("con token: status = %d, X-User-Id recibido = %q; se esperaba 200 y usuario-1", rec.Code, userID)
+	}
+}
+
+// Control de tráfico: después de la ráfaga, el login desde una misma IP
+// responde 429 y el pedido no llega a users-service; otra IP sigue pasando.
+func TestLoginTieneCupoPorIP(t *testing.T) {
+	v, err := auth.NewVerifier(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	users := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ })
+	limits := limiters{user: ratelimit.New(ratelimit.DefaultUser), public: ratelimit.New(ratelimit.Rate{PerMinute: 20, Burst: 3})}
+	router := newRouter(v, slog.New(slog.NewJSONHandler(io.Discard, nil)), limits, http.NotFoundHandler(), users, http.NotFoundHandler())
+
+	login := func(ip string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/users/login", nil)
+		req.Header.Set("X-Forwarded-For", ip)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for range 3 {
+		login("190.2.3.4")
+	}
+	if code := login("190.2.3.4"); code != http.StatusTooManyRequests {
+		t.Fatalf("cuarto login desde la misma IP: %d, quería 429", code)
+	}
+	if code := login("200.1.1.1"); code != http.StatusOK {
+		t.Fatalf("login desde otra IP: %d", code)
+	}
+	if calls != 4 {
+		t.Fatalf("users-service recibió %d pedidos, quería 4", calls)
 	}
 }

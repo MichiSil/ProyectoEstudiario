@@ -1,6 +1,6 @@
 # ADR-002: Arquitectura interna de los servicios
 
-- **Estado:** Propuesta
+- **Estado:** Aceptada (validada contra el código el 2026-11-09; ver la sección *Validación*)
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D2
 - **Reemplaza a:** —
@@ -33,6 +33,7 @@ services/planner-service/
     ├── app/                  casos de uso (proponer, confirmar…) y puertos (interfaces)
     └── adapters/
         ├── httpapi/          entrada: API HTTP que usa el frontend a través del gateway
+        ├── mcpserver/        entrada: servidor MCP para el agente de IA (SPEC 10.1)
         ├── postgres/         salida: implementa PlanRepository con PostgreSQL
         ├── rules/            salida: implementa PlanGenerator con el motor de reglas
         ├── ai/               salida: implementa PlanGenerator con el agente de IA, con fallback
@@ -43,7 +44,7 @@ services/planner-service/
 flowchart LR
     subgraph entrada["Adaptadores de entrada"]
         HTTP[httpapi<br/>frontend vía gateway]
-        EXT[capacidad publicada<br/>ADR-008]
+        MCP[mcpserver<br/>agente de IA por MCP]
     end
     subgraph centro["Núcleo"]
         APP[app<br/>casos de uso + puertos]
@@ -56,7 +57,7 @@ flowchart LR
         SYS[system<br/>Clock, IDGenerator]
     end
     HTTP --> APP
-    EXT -.-> APP
+    MCP --> APP
     APP --> DOM
     PG -. implementa .-> APP
     RULES -. implementa .-> APP
@@ -130,7 +131,31 @@ notification-service no expone una API de negocio: su entrada es un **consumidor
 - Al convivir dos estilos, quien pasa de un servicio al otro tiene que cambiar de forma de organizar el código.
 - En forum-service, si alguna regla llegara a necesitar otra fuente de datos o un servicio externo, la capa de service quedaría acoplada a ese repositorio concreto.
 
-**A validar en la presentación final**
+**A validar en la presentación final** *(validado: ver la sección siguiente)*
 
 - Que la regla de dependencias de planner-service se siga cumpliendo (`domain` sin dependencias, adaptadores sólo hacia el centro).
 - Que forum-service y notification-service, cuando se implementen, sigan esta estructura.
+
+## Validación (2026-11-09)
+
+Se revisó el código de cada servicio contra esta decisión.
+
+**planner-service (hexagonal)**
+
+- **La regla de dependencias se cumple.** `go list` muestra que `internal/domain` sólo importa la biblioteca estándar (`errors`, `fmt`, `sort`, `strings`, `time`), y que `internal/app` sólo importa `domain` y la biblioteca estándar. pgx, OpenTelemetry, el cliente de la IA y `gobreaker` aparecen únicamente en `internal/adapters/`.
+- **Una entrada nueva sin tocar el núcleo.** La capacidad publicada que figuraba como segundo adaptador de entrada se retiró ([ADR-014](ADR-014-contrato-documentos.md)). En su lugar apareció otra entrada: el **servidor MCP** (`adapters/mcpserver`, desafío adicional de la SPEC 10.1), que expone los mismos casos de uso a un agente de IA. Se sumó sin cambiar `app` ni `domain`, y sus herramientas aplican las mismas reglas que la API REST. Es la prueba de que el estilo cumple lo que prometía.
+- **Dos generadores detrás de `PlanGenerator`** (IA con *fallback* y motor de reglas), elegidos en el arranque. Las reglas de confirmación y del motor se prueban con tests unitarios sobre puertos falsos, y la persistencia con tests de integración contra PostgreSQL.
+
+**forum-service (por capas)**
+
+- `controller` → `service` → `repository`, con la caché como **envoltorio del repositorio** (`internal/cached`, *cache-aside*): `service` sólo importa `model` y `correlation`, y no sabe si una lectura vino de Memcached. Así se pudo medir la caché con y sin ella (`CACHE_PROVIDER`, [ADR-007](ADR-007-cache.md)).
+- La capacidad para el Grupo 4 es **otro controller** (`controller/v1.go`) sobre el mismo `service`. Comparte las reglas de moderación y búsqueda con el foro de los estudiantes.
+
+**notification-service y users-service**
+
+- notification-service sigue la estructura de consumidor descrita arriba: `broker` (RabbitMQ: *ack*, reintento y DLQ), `consumer` (decide qué hacer con cada evento, sin saber de RabbitMQ), `repository` (MongoDB) y `mail` (SMTP).
+- users-service sigue por capas y sumó dos entradas por eventos con el mismo esquema que notification-service (`broker` y `consumer`): los puntos del Club de Beneficios y las cuentas de los autores de la agencia. El Club se usa a través de un **adaptador propio** (`internal/club`), igual que un repositorio: el `service` no conoce su contrato ([ADR-015](ADR-015-club-de-beneficios.md)).
+
+**Lo que no cambió de las limitaciones**
+
+- En forum-service, el `service` depende de interfaces de repositorio que cubren MongoDB, MinIO y Solr. Si una regla nueva necesitara otro sistema externo, se agregaría como otra dependencia del `service`, como ya pasó con el almacenamiento público de archivos.

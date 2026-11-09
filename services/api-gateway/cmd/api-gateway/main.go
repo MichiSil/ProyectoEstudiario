@@ -21,6 +21,7 @@ import (
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/auth"
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/proxy"
+	"github.com/MichiSil/ProyectoEstudiario/services/api-gateway/internal/ratelimit"
 )
 
 const (
@@ -123,7 +124,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	router := newRouter(verifier, logger, planner, users, forum)
+	// Control de tráfico: cupo por usuario en las rutas con JWT y por IP en
+	// registrarse e iniciar sesión. Configurable para las pruebas de carga.
+	limits := limiters{
+		user:   ratelimit.New(ratelimit.FromEnv(os.Getenv("RATE_LIMIT_USER_PER_MIN"), ratelimit.DefaultUser)),
+		public: ratelimit.New(ratelimit.FromEnv(os.Getenv("RATE_LIMIT_PUBLIC_PER_MIN"), ratelimit.DefaultPublic)),
+	}
+	router := newRouter(verifier, logger, limits, planner, users, forum)
 
 	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
 	srv := &http.Server{
@@ -159,18 +166,28 @@ func main() {
 	logger.Info("servidor detenido")
 }
 
+// limiters son los dos cupos del control de tráfico.
+type limiters struct{ user, public *ratelimit.Limiter }
+
 // newRouter arma las rutas. Registrarse e iniciar sesión son públicos (todavía
-// no hay token); el resto de /api/users/* y todo /api/planner/* exigen un JWT
-// válido, igual que /api/forum/*. En las rutas públicas igual se descarta la
-// identidad que mande el cliente.
-func newRouter(verifier *auth.Verifier, logger *slog.Logger, planner, users, forum http.Handler) http.Handler {
+// no hay token) y tienen un cupo por IP; el resto de /api/users/* y todo
+// /api/planner/* exigen un JWT válido, igual que /api/forum/*, y tienen un
+// cupo por usuario, que se aplica después de validar el token. En las rutas
+// públicas igual se descarta la identidad que mande el cliente.
+func newRouter(verifier *auth.Verifier, logger *slog.Logger, limits limiters, planner, users, forum http.Handler) http.Handler {
+	public := func(next http.Handler) http.Handler {
+		return auth.StripIdentity(limits.public.Middleware("publico", ratelimit.ByClientIP, logger, next))
+	}
+	private := func(next http.Handler) http.Handler {
+		return auth.Require(verifier, logger, limits.user.Middleware("usuario", ratelimit.ByHeader(auth.UserIDHeader), logger, next))
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.Handle("POST "+proxy.UsersPrefix+"/register", auth.StripIdentity(users))
-	mux.Handle("POST "+proxy.UsersPrefix+"/login", auth.StripIdentity(users))
-	mux.Handle(proxy.UsersPrefix+"/", auth.Require(verifier, logger, users))
-	mux.Handle(proxy.PlannerPrefix+"/", auth.Require(verifier, logger, planner))
-	mux.Handle(proxy.ForumPrefix+"/", auth.Require(verifier, logger, forum))
+	mux.Handle("POST "+proxy.UsersPrefix+"/register", public(users))
+	mux.Handle("POST "+proxy.UsersPrefix+"/login", public(users))
+	mux.Handle(proxy.UsersPrefix+"/", private(users))
+	mux.Handle(proxy.PlannerPrefix+"/", private(planner))
+	mux.Handle(proxy.ForumPrefix+"/", private(forum))
 	return mux
 }
 
