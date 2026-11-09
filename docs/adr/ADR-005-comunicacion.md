@@ -272,3 +272,26 @@ Ejemplo de `data.author` en un `summary.approved` guardado en el *outbox*:
 - **Documentos de sistemas externos:** el autor no tiene cuenta en Estudiario, así que su `author` no lleva `id` ni `email`, y el evento tiene `notifyAuthor: false` y, si es una aprobación, `awardBenefits: false` (RN-41). Los consumidores deciden con esos dos campos, sin deducirlo de `source`.
 - **Un resumen publicado con un token sin `name` ni `email`** (por ejemplo, de `devtoken`) genera un evento sin `email`. notification-service tiene que tratar ese caso como un evento que no puede notificar.
 - El mail del autor viaja sólo en los eventos internos: no aparece en ninguna respuesta de la API del foro ni de la capacidad `/v1`.
+
+## Actualización (2026-11-09): control de tráfico en el api-gateway
+
+El enunciado pide para la presentación final un **punto de entrada único con autenticación, direccionamiento y control de tráfico**. El gateway ya autenticaba y direccionaba, pero no limitaba el tráfico: un cliente podía mandar pedidos sin límite, y el login no tenía freno contra quien prueba contraseñas.
+
+**Decisión.** El api-gateway limita los pedidos con un balde de fichas (*token bucket*) en memoria, antes de reenviarlos (`internal/ratelimit`):
+
+| Rutas | Clave | Cupo por defecto | Por qué |
+|---|---|---|---|
+| Con JWT (`/api/users/*`, `/api/planner/*`, `/api/forum/*`) | El usuario del token (`X-User-Id`, que completa el gateway después de validarlo, así el cliente no lo elige) | **120 por minuto**, ráfagas de 60 | Una pantalla hace de 3 a 10 pedidos al abrirse: el uso normal no se acerca. Frena a un cliente que acapara el sistema. |
+| Públicas (`POST /api/users/register` y `/login`) | La IP del cliente (primera de `X-Forwarded-For`, que en la nube pone Caddy) | **20 por minuto**, ráfagas de 10 | Frena los intentos de adivinar contraseñas y las altas masivas. |
+
+- Al superar el cupo, el gateway responde **`429 RATE_LIMITED`** (*Problem Details*) con `Retry-After`, sin llegar al servicio. Todas las respuestas informan `RateLimit-Limit` y `RateLimit-Remaining`.
+- Los cupos se configuran con `RATE_LIMIT_USER_PER_MIN` y `RATE_LIMIT_PUBLIC_PER_MIN`. Para una prueba de carga con muchos usuarios desde una sola máquina hay que subirlos.
+- La capacidad del Grupo 4 (`/v1`) no pasa por el gateway: tiene su propio cupo por API key en forum-service ([ADR-014](ADR-014-contrato-documentos.md)).
+
+**Consecuencias.**
+
+- El estado vive en memoria del gateway: si se reinicia, los cupos vuelven a empezar. Con una sola instancia del gateway es suficiente. Con varias, habría que compartirlo, por ejemplo en Memcached.
+- Sin Caddy adelante (en local), un cliente podría elegir su propia `X-Forwarded-For` y saltear el cupo por IP. En la nube, Caddy pone la IP real.
+
+**Validación** (sistema levantado): 12 logins seguidos desde la misma IP dan 10 respuestas `401` (contraseña incorrecta) y después `429` con `Retry-After: 3`. Un usuario logueado que manda 70 pedidos seguidos recibe 61 `200` y 9 `429`. Los tests del gateway comprueban que el pedido rechazado no llega al servicio y que otra IP u otro usuario no se ven afectados.
+

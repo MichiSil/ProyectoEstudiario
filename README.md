@@ -213,6 +213,8 @@ cd ../..
 
 > Si ya tenías un `.env` de antes, volvé a copiar `.env.example` a `.env` (y, si tenías una `AI_API_KEY`, volvé a ponerla). Cambiaron las variables de PostgreSQL (`POSTGRES_ADMIN_*` y `PLANNER_DB_*`) y se sumaron `JWT_SECRET`, `INTERNAL_TOKEN`, `USERS_DB_*` y `ADMIN_EMAILS`: sin ellas, `docker compose` no levanta. No hace falta borrar la base: `db-init` adapta la que ya tenías.
 
+**Control de tráfico.** El api-gateway limita los pedidos a **120 por minuto por usuario** en las rutas con token y a **20 por minuto por IP** al registrarse e iniciar sesión. Al superarlos responde `429 RATE_LIMITED` con `Retry-After` ([ADR-005](docs/adr/ADR-005-comunicacion.md#actualización-2026-11-09-control-de-tráfico-en-el-api-gateway)). Para una prueba de carga, subí `RATE_LIMIT_USER_PER_MIN` y `RATE_LIMIT_PUBLIC_PER_MIN` en el `.env`.
+
 ### Editar y cancelar exámenes
 
 El estudiante puede listar sus exámenes, editarlos y cancelarlos (RF-06), con el JWT de la sección anterior:
