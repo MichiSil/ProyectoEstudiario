@@ -1,0 +1,909 @@
+openapi: 3.1.0
+
+info:
+  title: Club de Beneficios — API de fidelización para partners
+  version: 2.0.0
+  summary: Registrar usuarios externos, acreditar puntos y consultar saldo y movimientos.
+  description: |
+    API pública del **Club de Beneficios** del Sistema de Gestión de Gimnasio (TPI Arquitectura de Software, UCC).
+
+    Permite que un sistema externo (**partner**) registre o vincule a sus usuarios y les acredite
+    puntos por acciones de su propio negocio; también puede consultar el saldo y sus movimientos.
+
+    ## Conceptos
+
+    - **Partner:** sistema autorizado. Se autentica con una API key propia (header `X-API-Key`).
+    - **Cuenta:** cada cuenta de puntos se identifica por el par **(partner, externalUserId)**. El
+      `externalUserId` es el identificador del usuario **en el sistema del partner**. Un partner solo
+      ve y opera las cuentas vinculadas a él; para cualquier otra recibe `404 ACCOUNT_NOT_FOUND`.
+    - **Movimiento:** registro inmutable de una acreditación. Nunca se edita ni se borra.
+    - **Saldo:** suma de los movimientos de la cuenta. Nunca es negativo.
+
+    ## Idempotencia
+
+    Toda operación de escritura (`external-register`, `credits`) **exige** el header `Idempotency-Key`.
+
+    - Misma key + mismo body → se devuelve **la respuesta original** (mismo status y body) con el
+      header `Idempotent-Replayed: true`, sin volver a aplicar el efecto.
+    - Misma key + body distinto → `409 IDEMPOTENCY_CONFLICT`.
+    - Misma key mientras la primera solicitud se está procesando → `409 IDEMPOTENCY_IN_PROGRESS` (reintentable).
+    - Las keys son únicas **por partner** y se conservan **30 días**. Las respuestas de error también se
+      guardan: reintentar una operación rechazada con la misma key devuelve el mismo rechazo.
+    - En `credits`, `eventId` es obligatorio para integraciones nuevas.
+      Las integraciones existentes conservan compatibilidad si su política permite omitirlo.
+      El evento es estable aunque cambie la key y no caduca con sus respuestas HTTP.
+    - Permisos y políticas vigentes se verifican antes del replay. Un rechazo de autorización,
+      cuota o política no reserva la key; corregir la configuración no vuelve a ejecutar un crédito confirmado.
+
+    ## Errores
+
+    Todos los errores usan **RFC 7807** (`application/problem+json`) con un campo `code` estable.
+    La guía para consumidores (`docs/contracts/README.md`) indica cuáles se reintentan.
+  contact:
+    name: Equipo TPI Gimnasio — Arquitectura de Software (UCC)
+  license:
+    name: Uso académico
+
+servers:
+  - url: https://metalfitness-club.vercel.app/partner-api
+    description: Producción.
+  - url: http://localhost:4010
+    description: Mock local (Prism). Responde con los ejemplos de este contrato.
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Accounts
+    description: Registro, acreditaciones y saldo de una cuenta.
+  - name: Movements
+    description: Historial de movimientos de una cuenta.
+
+paths:
+  /v2/external-register:
+    post:
+      operationId: registerExternalUser
+      tags: [Accounts]
+      summary: Solicitar alta o vinculación externa con puntos opcionales
+      description: La plataforma se identifica por la credencial. Respuesta asíncrona sin revelar si existía el correo. Cuentas existentes sin vinculación previa requieren confirmación por correo. Requiere permiso de registro y, si points es positivo, permiso de puntos. El mismo eventId no vuelve a acreditar aunque cambie la key.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExternalRegistration'
+            examples:
+              participation:
+                value:
+                  name: Persona de ejemplo
+                  email: persona@example.test
+                  externalUserId: estudiario-001
+                  eventId: participacion-001
+                  points: 150
+                  reason: Participación confirmada
+                  reference: participacion-001
+      responses:
+        '202':
+          description: Solicitud persistida; consultar su estado hasta completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationReceipt'
+              examples:
+                accepted:
+                  value:
+                    registrationId: 38ef723a-0a63-44a8-a828-9d7c491c61fb
+                    eventId: participacion-001
+                    externalUserId: estudiario-001
+                    status: accepted
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v2/external-registrations/{eventId}:
+    get:
+      operationId: getExternalRegistration
+      tags: [Accounts]
+      summary: Consultar el estado de un registro de la integración autenticada
+      description: accepted indica procesamiento o verificación pendientes; completed indica que la cuenta fue vinculada y se procesaron sus puntos. No expone datos personales ni si el correo ya existía.
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Identificador del evento enviado al registrar.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      responses:
+        '200':
+          description: Estado actual del registro.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationReceipt'
+              examples:
+                completed:
+                  value:
+                    registrationId: 38ef723a-0a63-44a8-a828-9d7c491c61fb
+                    eventId: participacion-001
+                    externalUserId: estudiario-001
+                    status: completed
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v2/accounts/{externalUserId}/credits:
+    post:
+      operationId: creditPoints
+      tags: [Accounts]
+      summary: Acreditar puntos
+      description: |
+        Suma `points` a la cuenta. Usalo cuando el usuario hace algo que el partner quiere premiar
+        (una compra, un turno cumplido). `reference` es el identificador de ese hecho en el sistema
+        del partner y queda registrado en el movimiento.
+      parameters:
+        - $ref: '#/components/parameters/ExternalUserId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PointsOperationRequest'
+            examples:
+              compra:
+                summary: Puntos por una compra
+                value:
+                  eventId: ORDER-A-7781
+                  points: 150
+                  reason: Compra en tienda online
+                  reference: ORDER-A-7781
+              turno:
+                summary: Puntos por un turno cumplido
+                value:
+                  eventId: TURNO-2026-10-07-0931
+                  points: 50
+                  reason: Turno de kinesiología cumplido
+                  reference: TURNO-2026-10-07-0931
+      responses:
+        '201':
+          description: Puntos acreditados (o respuesta original si es una repetición con la misma Idempotency-Key).
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+              examples:
+                acreditado:
+                  summary: Acreditación aplicada
+                  value:
+                    movementId: 7d0c4a8e-2f4b-4c51-9e0e-3c2b8f1a9d10
+                    externalUserId: cli-10045
+                    type: CREDIT
+                    points: 150
+                    reason: Compra en tienda online
+                    reference: ORDER-A-7781
+                    occurredAt: '2026-10-07T18:42:10Z'
+                    balance: 1270
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /v2/accounts/{externalUserId}/balance:
+    get:
+      operationId: getBalance
+      tags: [Accounts]
+      summary: Consultar saldo
+      description: Devuelve el saldo actual de la cuenta (total, incluye puntos de todos los orígenes).
+      parameters:
+        - $ref: '#/components/parameters/ExternalUserId'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Saldo actual.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Balance'
+              examples:
+                saldo:
+                  summary: Saldo de una cuenta
+                  value:
+                    externalUserId: cli-10045
+                    balance: 1270
+                    updatedAt: '2026-10-07T18:42:10Z'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /v2/accounts/{externalUserId}/movements:
+    get:
+      operationId: listMovements
+      tags: [Movements]
+      summary: Listar movimientos
+      description: |
+        Acreditaciones de la cuenta **originadas por el partner que consulta**, ordenadas por fecha
+        descendente y paginadas.
+        Los movimientos generados por el gimnasio (por ejemplo, puntos por asistencia) no se incluyen,
+        aunque sí suman al saldo.
+      parameters:
+        - $ref: '#/components/parameters/ExternalUserId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Página de movimientos.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/XCorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovementPage'
+              examples:
+                pagina:
+                  summary: Primera página
+                  value:
+                    items:
+                      - id: 7d0c4a8e-2f4b-4c51-9e0e-3c2b8f1a9d10
+                        type: CREDIT
+                        points: 150
+                        reason: Compra en tienda online
+                        reference: ORDER-A-7781
+                        status: CONFIRMED
+                        occurredAt: '2026-10-07T18:42:10Z'
+                    page: 1
+                    size: 20
+                    totalItems: 1
+                    totalPages: 1
+                vacia:
+                  summary: Cuenta sin movimientos del partner
+                  value:
+                    items: []
+                    page: 1
+                    size: 20
+                    totalItems: 0
+                    totalPages: 0
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Una API key por partner, entregada por el administrador del gimnasio. Se muestra una sola vez;
+        guardala como secreto. Si se compromete, pedí su revocación y una nueva.
+
+  parameters:
+    ExternalUserId:
+      name: externalUserId
+      in: path
+      required: true
+      description: Identificador del usuario en el sistema del partner. Junto con el partner identifica la cuenta.
+      schema:
+        $ref: '#/components/schemas/ExternalUserId'
+      example: cli-10045
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Clave única por operación lógica, generada por el partner (se recomienda un UUID v4).
+        Reusala solo para reintentar **la misma** operación. Retención: 30 días.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]{8,128}$'
+      example: 9f1b6c2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Identificador para correlacionar la solicitud en los logs de ambos sistemas. Si no se envía, se genera uno y se devuelve en la respuesta.
+      schema:
+        type: string
+        format: uuid
+      example: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Número de página, empezando en 1.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100000
+        default: 1
+      example: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Cantidad de elementos por página.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 20
+      example: 20
+
+  headers:
+    IdempotentReplayed:
+      description: '`true` si la respuesta es la original de una solicitud anterior con la misma Idempotency-Key.'
+      schema:
+        type: boolean
+      example: false
+    XCorrelationId:
+      description: Identificador de correlación de la solicitud.
+      schema:
+        type: string
+        format: uuid
+      example: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    RetryAfter:
+      description: Segundos que hay que esperar antes de reintentar.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 3600
+      example: 2
+
+  schemas:
+    ExternalUserId:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z0-9._:@-]{1,64}$'
+      description: Identificador del usuario en el sistema del partner.
+      examples: [cli-10045]
+
+    PointsOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [points, reason, reference]
+      properties:
+        eventId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Identificador único del evento por integración. Evita duplicados aunque cambie Idempotency-Key; reutilizarlo con otro contenido responde 409. Obligatorio para integraciones nuevas; las anteriores pueden tener una política que permita omitirlo.
+        points:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 1000000
+          description: Cantidad de puntos (entero positivo).
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: Motivo legible; aparece en el historial del usuario.
+        reference:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Identificador del hecho de origen en el sistema del partner (compra, turno, etc.).
+
+    ExternalRegistration:
+      type: object
+      additionalProperties: false
+      required: [name, email, eventId]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        externalUserId:
+          $ref: '#/components/schemas/ExternalUserId'
+        eventId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        points:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+          default: 0
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 200
+        reference:
+          type: string
+          minLength: 1
+          maxLength: 100
+    RegistrationReceipt:
+      type: object
+      additionalProperties: false
+      required: [registrationId, eventId, externalUserId, status]
+      properties:
+        registrationId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          maxLength: 128
+        externalUserId:
+          $ref: '#/components/schemas/ExternalUserId'
+        status:
+          type: string
+          enum: [accepted, completed]
+
+    OperationResult:
+      type: object
+      additionalProperties: false
+      required: [movementId, externalUserId, type, points, reason, reference, occurredAt, balance]
+      properties:
+        movementId:
+          type: string
+          format: uuid
+        externalUserId:
+          $ref: '#/components/schemas/ExternalUserId'
+        type:
+          type: string
+          enum: [CREDIT]
+        points:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 1000000
+          description: Puntos acreditados.
+        reason:
+          type: string
+          maxLength: 200
+        reference:
+          type: string
+          maxLength: 100
+        occurredAt:
+          type: string
+          format: date-time
+        balance:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Saldo de la cuenta después de aplicar la operación.
+
+    Balance:
+      type: object
+      additionalProperties: false
+      required: [externalUserId, balance, updatedAt]
+      properties:
+        externalUserId:
+          $ref: '#/components/schemas/ExternalUserId'
+        balance:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+          description: Fecha del último movimiento aplicado; si no hay movimientos, fecha de creación de la cuenta.
+
+    Movement:
+      type: object
+      additionalProperties: false
+      required: [id, type, points, reason, status, occurredAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [CREDIT]
+          description: Acreditación del partner.
+        points:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 1000000
+          description: Puntos acreditados.
+        reason:
+          type: string
+          maxLength: 200
+        reference:
+          type: string
+          maxLength: 100
+        status:
+          type: string
+          enum: [CONFIRMED]
+        occurredAt:
+          type: string
+          format: date-time
+
+    MovementPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalItems, totalPages]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Movement'
+        page:
+          type: integer
+          format: int32
+          minimum: 1
+        size:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+        totalItems:
+          type: integer
+          format: int64
+          minimum: 0
+        totalPages:
+          type: integer
+          format: int32
+          minimum: 0
+
+    Problem:
+      type: object
+      description: Error en formato RFC 7807.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI que identifica el tipo de problema.
+        title:
+          type: string
+          maxLength: 200
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          maxLength: 1000
+        instance:
+          type: string
+          maxLength: 500
+          description: Ruta de la solicitud que falló.
+        code:
+          type: string
+          enum:
+            - INVALID_REQUEST
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - ACCOUNT_NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - IDEMPOTENCY_IN_PROGRESS
+            - RATE_LIMITED
+            - INTERNAL
+            - UNAVAILABLE
+            - TIMEOUT
+          description: Código estable para manejar el error por programa.
+        correlationId:
+          type: string
+          format: uuid
+        errors:
+          type: array
+          maxItems: 50
+          description: Detalle por campo (solo en INVALID_REQUEST).
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, message]
+            properties:
+              field:
+                type: string
+                maxLength: 100
+              message:
+                type: string
+                maxLength: 300
+
+  responses:
+    InvalidRequest:
+      description: Solicitud inválida (formato, tipos, rangos o header faltante). No reintentar sin corregirla.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            invalidRequest:
+              summary: Puntos fuera de rango y falta Idempotency-Key
+              value:
+                type: https://gimnasio.example.com/problems/invalid-request
+                title: Solicitud inválida
+                status: 400
+                detail: La solicitud tiene 2 errores de validación.
+                instance: /v2/accounts/cli-10045/credits
+                code: INVALID_REQUEST
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+                errors:
+                  - field: points
+                    message: debe ser un entero entre 1 y 1000000
+                  - field: Idempotency-Key
+                    message: header obligatorio
+    Unauthorized:
+      description: API key ausente o inválida. No reintentar sin corregir la credencial.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            unauthorized:
+              summary: API key inválida
+              value:
+                type: https://gimnasio.example.com/problems/unauthorized
+                title: No autenticado
+                status: 401
+                detail: La API key no es válida o fue revocada.
+                instance: /v2/accounts/cli-10045/balance
+                code: UNAUTHORIZED
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    Forbidden:
+      description: El partner está suspendido o no tiene permiso para esta operación. No reintentar.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            forbidden:
+              summary: Partner suspendido
+              value:
+                type: https://gimnasio.example.com/problems/forbidden
+                title: Acceso denegado
+                status: 403
+                detail: El partner está suspendido. Contactá al administrador del gimnasio.
+                instance: /v2/accounts/cli-10045/credits
+                code: FORBIDDEN
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    AccountNotFound:
+      description: No existe una cuenta vinculada a este partner con ese externalUserId. No reintentar.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            accountNotFound:
+              summary: Cuenta no vinculada
+              value:
+                type: https://gimnasio.example.com/problems/account-not-found
+                title: Cuenta no encontrada
+                status: 404
+                detail: No hay una cuenta vinculada al usuario externo cli-99999.
+                instance: /v2/accounts/cli-99999/balance
+                code: ACCOUNT_NOT_FOUND
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    IdempotencyConflict:
+      description: |
+        Conflicto de idempotencia. `IDEMPOTENCY_CONFLICT`: la key ya se usó con otro body (no reintentar;
+        generá una key nueva si es otra operación). `IDEMPOTENCY_IN_PROGRESS`: la operación original
+        todavía se está procesando (reintentar con la misma key).
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            idempotencyConflict:
+              summary: Key reutilizada con otro body
+              value:
+                type: https://gimnasio.example.com/problems/idempotency-conflict
+                title: Conflicto de idempotencia
+                status: 409
+                detail: La Idempotency-Key 9f1b6c2e-3a4d-4e5f-8a9b-0c1d2e3f4a5b ya se usó con un body distinto.
+                instance: /v2/accounts/cli-10045/credits
+                code: IDEMPOTENCY_CONFLICT
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+            idempotencyInProgress:
+              summary: Operación original en curso
+              value:
+                type: https://gimnasio.example.com/problems/idempotency-in-progress
+                title: Operación en curso
+                status: 409
+                detail: Hay una solicitud con la misma Idempotency-Key en proceso. Reintentá en unos segundos.
+                instance: /v2/accounts/cli-10045/credits
+                code: IDEMPOTENCY_IN_PROGRESS
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    RateLimited:
+      description: Se superó el límite de solicitudes. Reintentar después de `Retry-After` segundos.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            rateLimited:
+              summary: Límite por API key superado
+              value:
+                type: https://gimnasio.example.com/problems/rate-limited
+                title: Demasiadas solicitudes
+                status: 429
+                detail: Se alcanzó la cuota configurada para esta integración. Respetá Retry-After.
+                instance: /v2/accounts/cli-10045/credits
+                code: RATE_LIMITED
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    Internal:
+      description: Error inesperado. Reintentar con backoff y la misma Idempotency-Key.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            internal:
+              summary: Error interno
+              value:
+                type: https://gimnasio.example.com/problems/internal
+                title: Error interno
+                status: 500
+                detail: Ocurrió un error inesperado. Informá el correlationId si persiste.
+                instance: /v2/accounts/cli-10045/credits
+                code: INTERNAL
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+    Unavailable:
+      description: Servicio no disponible temporalmente. Reintentar después de `Retry-After` con la misma Idempotency-Key.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            unavailable:
+              summary: Mantenimiento o dependencia caída
+              value:
+                type: https://gimnasio.example.com/problems/unavailable
+                title: Servicio no disponible
+                status: 503
+                detail: El Club de Beneficios no está disponible temporalmente.
+                instance: /v2/accounts/cli-10045/credits
+                code: UNAVAILABLE
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+
+    BadGateway:
+      description: Servicio no disponible. Reintentar con backoff y la misma Idempotency-Key.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            gatewayError:
+              summary: Falla en el gateway
+              value:
+                type: https://gimnasio.example.com/problems/unavailable
+                title: Servicio no disponible
+                status: 502
+                detail: El gateway no pudo alcanzar el Club de Beneficios.
+                instance: /partner-api/v2/accounts/cli-10045/credits
+                code: UNAVAILABLE
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d
+
+    GatewayTimeout:
+      description: Tiempo de espera agotado. Reintentar con backoff y la misma Idempotency-Key.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/XCorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            gatewayError:
+              summary: Falla en el gateway
+              value:
+                type: https://gimnasio.example.com/problems/timeout
+                title: Tiempo de espera agotado
+                status: 504
+                detail: El gateway agotó la espera. La operación puede haberse confirmado; reintentá con la misma Idempotency-Key.
+                instance: /partner-api/v2/accounts/cli-10045/credits
+                code: TIMEOUT
+                correlationId: 3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d

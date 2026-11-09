@@ -103,6 +103,17 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?falta INTERNAL_TOKEN en el .env (ver .env.example)}
       # Mails con rol admin (RF-03); se aplica en cada login.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # Consume summary.approved (puntos del Club) y document.external-registered
+      # (cuentas de los autores de la agencia) con su propio usuario (ADR-005).
+      RABBITMQ_URL: amqp://${USERS_RABBITMQ_USER}:${USERS_RABBITMQ_PASSWORD}@rabbitmq:5672/
+      # Club de Beneficios del Grupo 1 (ADR-009). La API key va sólo en el .env.
+      # Para la jornada de fallas o sin internet: CLUB_BASE_URL=http://club-mock:4010
+      CLUB_BASE_URL: ${CLUB_BASE_URL:-https://metalfitness-club.vercel.app/partner-api}
+      CLUB_API_KEY: ${CLUB_API_KEY:-}
+      # Mail con la contraseña de los autores de la agencia (en local, Mailpit).
+      SMTP_ADDR: mailpit:1025
+      MAIL_FROM: ${MAIL_FROM:-Estudiario <no-reply@estudiario.local>}
+      APP_URL: ${APP_URL:-http://localhost:5173}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
       interval: 10s
@@ -111,6 +122,12 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+      # Crea el usuario y las colas de users-service. Si después RabbitMQ se cae,
+      # el login y el perfil siguen andando y el consumo se reconecta solo.
+      rabbitmq-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
       jaeger:
         condition: service_started
 
@@ -230,6 +247,18 @@ services:
       - "4010:4010"
     volumes:
       - ./docs/contracts:/contracts:ro
+    restart: unless-stopped
+
+  # Mock del Club de Beneficios del Grupo 1, sobre la copia de su contrato que
+  # implementamos (docs/contracts/consumidos/). Sirve para los tests y para la
+  # jornada de fallas: CLUB_BASE_URL=http://club-mock:4010 en el .env.
+  club-mock:
+    image: stoplight/prism:5
+    command: mock -h 0.0.0.0 -p 4010 --multiprocess=false /contracts/club-beneficios-v2.yaml
+    ports:
+      - "4011:4010"
+    volumes:
+      - ./docs/contracts/consumidos:/contracts:ro
     restart: unless-stopped
 
   # ---------------------------------------------------------------
@@ -409,6 +438,8 @@ services:
       FORUM_RABBITMQ_PASSWORD: ${FORUM_RABBITMQ_PASSWORD:?falta FORUM_RABBITMQ_PASSWORD en el .env (ver .env.example)}
       NOTIFICATION_RABBITMQ_USER: ${NOTIFICATION_RABBITMQ_USER:?falta NOTIFICATION_RABBITMQ_USER en el .env (ver .env.example)}
       NOTIFICATION_RABBITMQ_PASSWORD: ${NOTIFICATION_RABBITMQ_PASSWORD:?falta NOTIFICATION_RABBITMQ_PASSWORD en el .env (ver .env.example)}
+      USERS_RABBITMQ_USER: ${USERS_RABBITMQ_USER:?falta USERS_RABBITMQ_USER en el .env (ver .env.example)}
+      USERS_RABBITMQ_PASSWORD: ${USERS_RABBITMQ_PASSWORD:?falta USERS_RABBITMQ_PASSWORD en el .env (ver .env.example)}
     volumes:
       - ./deploy/rabbitmq:/scripts:ro
     entrypoint: ["sh", "/scripts/init-broker.sh"]

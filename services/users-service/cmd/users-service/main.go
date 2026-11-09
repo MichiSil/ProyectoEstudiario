@@ -1,6 +1,8 @@
 // Command users-service administra el registro, el inicio de sesión, la emisión
-// del JWT y los roles de Estudiario (SPEC, sección 5; ADR-001). Está organizado
-// por capas: controller → service → repository (ADR-002).
+// del JWT y los roles de Estudiario (SPEC, sección 5; ADR-001), la vinculación
+// con el Club de Beneficios del Grupo 1 (RF-28, ADR-009) y las cuentas de los
+// autores de la agencia de viajes (ADR-014). Está organizado por capas:
+// controller → service → repository (ADR-002).
 package main
 
 import (
@@ -15,7 +17,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/broker"
+	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/club"
+	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/consumer"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/controller"
+	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/mail"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/repository"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/service"
@@ -80,7 +86,44 @@ func run(logger *slog.Logger) error {
 	admins := service.ParseAdminEmails(os.Getenv("ADMIN_EMAILS"))
 	logger.Info("mails con rol admin configurados", "count", len(admins))
 	svc := &service.Service{Repo: repo, Tokens: signer, AdminEmails: admins}
-	h := &controller.Handler{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}
+
+	// Club de Beneficios del Grupo 1 (RF-28, ADR-009). La API key va sólo en el
+	// .env: sin ella, el perfil muestra el aviso CLUB_UNAVAILABLE y los puntos
+	// quedan pendientes hasta que se configure.
+	clubURL := env("CLUB_BASE_URL", "https://metalfitness-club.vercel.app/partner-api")
+	if os.Getenv("CLUB_API_KEY") == "" {
+		logger.Warn("falta CLUB_API_KEY: no se puede llamar al Club de Beneficios")
+	}
+	clubClient := club.New(clubURL, os.Getenv("CLUB_API_KEY"), logger)
+	clubClient.CorrelationID = observability.CorrelationID
+	clubSvc := &service.Club{Repo: repo, Provider: clubClient, Logger: logger}
+	logger.Info("Club de Beneficios configurado", "baseUrl", clubURL)
+	go clubSvc.RunSweeper(ctx)
+
+	// Eventos de forum-service por RabbitMQ (ADR-005): puntos por resumen
+	// aprobado y cuentas de los autores de la agencia de viajes.
+	accounts := &service.Accounts{
+		Repo:   repo,
+		Mailer: &mail.SMTP{Addr: env("SMTP_ADDR", "mailpit:1025"), From: env("MAIL_FROM", "Estudiario <no-reply@estudiario.local>")},
+		Logger: logger,
+		AppURL: env("APP_URL", "http://localhost:5173"),
+	}
+	if rabbitURL := os.Getenv("RABBITMQ_URL"); rabbitURL != "" {
+		go (&broker.Consumer{
+			URL: rabbitURL, Logger: logger,
+			Handler: &consumer.Benefits{Club: clubSvc, Logger: logger},
+			Queue:   broker.BenefitsQueue, RetryQueue: broker.BenefitsRetryQueue, DLQ: broker.BenefitsDLQ,
+		}).Run(ctx)
+		go (&broker.Consumer{
+			URL: rabbitURL, Logger: logger,
+			Handler: &consumer.ExternalAuthors{Accounts: accounts, Logger: logger},
+			Queue:   broker.ExternalAuthorsQueue, RetryQueue: broker.ExternalAuthorsRetryQueue, DLQ: broker.ExternalAuthorsDLQ,
+		}).Run(ctx)
+	} else {
+		logger.Warn("falta RABBITMQ_URL: no se consumen los eventos del foro")
+	}
+
+	h := &controller.Handler{Svc: svc, Club: clubSvc, DB: repo, Logger: logger, InternalToken: internalToken}
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8081"),

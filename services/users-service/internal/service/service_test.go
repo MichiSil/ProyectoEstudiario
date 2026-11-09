@@ -65,6 +65,18 @@ func (m *memRepo) UpdateRole(_ context.Context, id, role string) error {
 	return nil
 }
 
+func (m *memRepo) UpdatePassword(_ context.Context, id, hash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[id]
+	if !ok {
+		return model.ErrNotFound
+	}
+	u.PasswordHash = hash
+	m.users[id] = u
+	return nil
+}
+
 // fakeTokens guarda el rol del último token emitido, para ver qué rol lleva el JWT.
 type fakeTokens struct{ lastRole *string }
 

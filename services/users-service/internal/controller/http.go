@@ -1,7 +1,7 @@
 // Package controller es la capa HTTP de users-service: lee el pedido, llama al
 // service y arma la respuesta. No tiene reglas de negocio (ADR-002).
 //
-// POST /register y POST /login son públicos. GET /me usa la identidad que pone
+// POST /register y POST /login son públicos. Las rutas /me usan la identidad que pone
 // el api-gateway en X-User-Id después de validar el JWT, y sólo la acepta si el
 // pedido trae X-Internal-Token con el secreto que comparte con el gateway: el
 // puerto de users-service queda publicado y, sin esto, cualquiera podría leer
@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/club"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/model"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/observability"
 	"github.com/MichiSil/ProyectoEstudiario/services/users-service/internal/service"
@@ -36,6 +37,7 @@ type Pinger interface {
 
 type Handler struct {
 	Svc           *service.Service
+	Club          *service.Club
 	DB            Pinger
 	Logger        *slog.Logger
 	InternalToken string
@@ -47,6 +49,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /register", h.register)
 	mux.HandleFunc("POST /login", h.login)
 	mux.HandleFunc("GET /me", h.me)
+	mux.HandleFunc("POST /me/password", h.changePassword)
+	mux.HandleFunc("GET /me/club", h.clubStatus)
+	mux.HandleFunc("POST /me/club", h.clubLink)
 	return mux
 }
 
@@ -132,13 +137,8 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
-	if !h.fromGateway(r) {
-		h.problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "el pedido no pasó por el api-gateway", nil)
-		return
-	}
-	id := strings.TrimSpace(r.Header.Get(UserIDHeader))
-	if id == "" {
-		h.problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "falta la identidad del usuario (X-User-Id)", nil)
+	id, ok := h.identity(w, r)
+	if !ok {
 		return
 	}
 	u, err := h.Svc.Me(r.Context(), id)
@@ -147,6 +147,107 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toDTO(u))
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.identity(w, r)
+	if !ok {
+		return
+	}
+	var in changePasswordRequest
+	if !h.decode(w, r, &in) {
+		return
+	}
+	if err := h.Svc.ChangePassword(r.Context(), id, in.CurrentPassword, in.NewPassword); err != nil {
+		if errors.Is(err, model.ErrInvalidCredentials) {
+			h.problem(w, r, http.StatusUnprocessableEntity, "INVALID_CURRENT_PASSWORD", "la contraseña actual no es correcta", nil)
+			return
+		}
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clubDTO es el estado del Club de Beneficios que ve el usuario en su perfil.
+type clubDTO struct {
+	Status        string        `json:"status"`
+	Balance       *int          `json:"balance"`
+	PendingPoints int           `json:"pendingPoints"`
+	Movements     []movementDTO `json:"movements"`
+	Warning       *string       `json:"warning"`
+}
+
+type movementDTO struct {
+	ID         string    `json:"id"`
+	Points     int       `json:"points"`
+	Reason     string    `json:"reason"`
+	OccurredAt time.Time `json:"occurredAt"`
+}
+
+func toClubDTO(st service.ClubStatus) clubDTO {
+	out := clubDTO{Status: st.Status, Balance: st.Balance, PendingPoints: st.PendingPoints, Movements: []movementDTO{}}
+	for _, m := range st.Movements {
+		out.Movements = append(out.Movements, movementDTO{ID: m.ID, Points: m.Points, Reason: m.Reason, OccurredAt: m.OccurredAt.UTC()})
+	}
+	if st.Warning != "" {
+		out.Warning = &st.Warning
+	}
+	return out
+}
+
+// clubStatus devuelve el estado de la vinculación, el saldo y los últimos
+// movimientos. Si el Club no responde, igual 200 con warning CLUB_UNAVAILABLE
+// (ADR-009, 5): el perfil se muestra y sólo falta el saldo.
+func (h *Handler) clubStatus(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.identity(w, r)
+	if !ok {
+		return
+	}
+	st, err := h.Club.Status(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toClubDTO(st))
+}
+
+// clubLink pide vincular la cuenta del Club. Responde 202: la vinculación
+// termina cuando la persona confirma el mail que le manda el Club.
+func (h *Handler) clubLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.identity(w, r)
+	if !ok {
+		return
+	}
+	st, err := h.Club.Link(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	code := http.StatusAccepted
+	if st.Status == model.ClubLinkActive {
+		code = http.StatusOK
+	}
+	writeJSON(w, code, toClubDTO(st))
+}
+
+// identity devuelve el id del usuario que puso el api-gateway, o responde 401.
+func (h *Handler) identity(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if !h.fromGateway(r) {
+		h.problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "el pedido no pasó por el api-gateway", nil)
+		return "", false
+	}
+	id := strings.TrimSpace(r.Header.Get(UserIDHeader))
+	if id == "" {
+		h.problem(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "falta la identidad del usuario (X-User-Id)", nil)
+		return "", false
+	}
+	return id, true
 }
 
 // fromGateway compara el secreto interno en tiempo constante.
@@ -179,6 +280,13 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		h.problem(w, r, http.StatusUnauthorized, "INVALID_CREDENTIALS", "mail o contraseña incorrectos", nil)
 	case errors.Is(err, model.ErrNotFound):
 		h.problem(w, r, http.StatusNotFound, "NOT_FOUND", "el usuario no existe", nil)
+	case errors.Is(err, club.ErrRejected):
+		h.Logger.ErrorContext(r.Context(), "el Club rechazó el pedido", "error", err.Error())
+		h.problem(w, r, http.StatusUnprocessableEntity, "CLUB_REJECTED", "el Club de Beneficios no aceptó tus datos; revisá que tu mail sea válido", nil)
+	case errors.Is(err, club.ErrMisconfigured), errors.Is(err, club.ErrUnavailable):
+		h.Logger.ErrorContext(r.Context(), "el Club no está disponible", "error", err.Error())
+		w.Header().Set("Retry-After", "30")
+		h.problem(w, r, http.StatusServiceUnavailable, "CLUB_UNAVAILABLE", "el Club de Beneficios no está disponible ahora, probá más tarde", nil)
 	case errors.Is(err, model.ErrUnavailable):
 		h.Logger.ErrorContext(r.Context(), "dependencia no disponible", "error", err.Error())
 		w.Header().Set("Retry-After", "5")

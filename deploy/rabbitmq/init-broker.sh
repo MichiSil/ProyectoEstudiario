@@ -1,6 +1,6 @@
 #!/bin/sh
-# Crea en RabbitMQ los usuarios de forum-service y notification-service y la
-# topología de eventos del ADR-005 (3.1), para que ningún servicio use el
+# Crea en RabbitMQ los usuarios de forum-service, notification-service y
+# users-service y la topología de eventos del ADR-005 (3.1), para que ningún servicio use el
 # administrador del contenedor (ADR-001). Mismo criterio que
 # deploy/postgres/init-databases.sh y deploy/minio/init-storage.sh.
 #
@@ -9,10 +9,14 @@
 #                         vuelve a notifications.summary-moderation
 #   notifications.dlq     mensajes con error permanente o reintentos agotados
 #
+#   forum.events ──summary.approved──────────────▶ users.benefits          (puntos del Club, RF-28)
+#   forum.events ──document.external-registered──▶ users.external-authors  (cuenta del autor externo, ADR-014)
+#   cada una con su cola .retry y su .dlq, igual que las de notificaciones
+#
 # Permisos:
 #   - forum-service sólo puede publicar en forum.events.
-#   - notification-service sólo puede leer sus colas y publicar en la de
-#     reintentos y la DLQ (por el exchange por defecto).
+#   - notification-service y users-service sólo pueden leer sus colas y
+#     publicar en las de reintentos y la DLQ (por el exchange por defecto).
 #   Ninguno puede declarar ni borrar colas o exchanges: la topología es ésta.
 #
 # Es idempotente: lo corre el contenedor rabbitmq-init en cada
@@ -25,8 +29,10 @@ set -eu
 : "${FORUM_RABBITMQ_PASSWORD:?falta FORUM_RABBITMQ_PASSWORD}"
 : "${NOTIFICATION_RABBITMQ_USER:?falta NOTIFICATION_RABBITMQ_USER}"
 : "${NOTIFICATION_RABBITMQ_PASSWORD:?falta NOTIFICATION_RABBITMQ_PASSWORD}"
+: "${USERS_RABBITMQ_USER:?falta USERS_RABBITMQ_USER}"
+: "${USERS_RABBITMQ_PASSWORD:?falta USERS_RABBITMQ_PASSWORD}"
 
-for u in "$FORUM_RABBITMQ_USER" "$NOTIFICATION_RABBITMQ_USER"; do
+for u in "$FORUM_RABBITMQ_USER" "$NOTIFICATION_RABBITMQ_USER" "$USERS_RABBITMQ_USER"; do
 	if [ "$u" = "$RABBITMQ_ADMIN_USER" ]; then
 		echo "Los usuarios de los servicios no pueden ser el administrador del contenedor." >&2
 		exit 1
@@ -66,6 +72,10 @@ api PUT "/users/$NOTIFICATION_RABBITMQ_USER" "{\"password\":\"$NOTIFICATION_RABB
 api PUT "/permissions/$VHOST/$NOTIFICATION_RABBITMQ_USER" \
 	'{"configure":"^$","write":"^amq\\.default$","read":"^notifications\\..*"}'
 
+api PUT "/users/$USERS_RABBITMQ_USER" "{\"password\":\"$USERS_RABBITMQ_PASSWORD\",\"tags\":\"\"}"
+api PUT "/permissions/$VHOST/$USERS_RABBITMQ_USER" \
+	'{"configure":"^$","write":"^amq\\.default$","read":"^users\\..*"}'
+
 # --- Topología (ADR-005, 3.1) ---
 api PUT "/exchanges/$VHOST/forum.events" '{"type":"topic","durable":true}'
 
@@ -80,4 +90,16 @@ api PUT "/queues/$VHOST/notifications.retry" \
 
 api PUT "/queues/$VHOST/notifications.dlq" '{"durable":true}'
 
-echo "RabbitMQ listo (exchange forum.events, colas notifications.*, usuarios $FORUM_RABBITMQ_USER y $NOTIFICATION_RABBITMQ_USER)"
+# Colas de users-service: el mismo esquema de cola principal, reintentos y DLQ.
+# users_queues COLA ROUTING_KEY
+users_queues() {
+	api PUT "/queues/$VHOST/$1" '{"durable":true}'
+	api POST "/bindings/$VHOST/e/forum.events/q/$1" "{\"routing_key\":\"$2\"}"
+	api PUT "/queues/$VHOST/$1.retry" \
+		"{\"durable\":true,\"arguments\":{\"x-dead-letter-exchange\":\"\",\"x-dead-letter-routing-key\":\"$1\"}}"
+	api PUT "/queues/$VHOST/$1.dlq" '{"durable":true}'
+}
+users_queues users.benefits summary.approved
+users_queues users.external-authors document.external-registered
+
+echo "RabbitMQ listo (exchange forum.events, colas notifications.* y users.*, usuarios $FORUM_RABBITMQ_USER, $NOTIFICATION_RABBITMQ_USER y $USERS_RABBITMQ_USER)"
