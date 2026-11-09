@@ -151,7 +151,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
 | MongoDB (bases `forum` y `notifications`) | Sin puerto publicado | Sólo lo usan forum-service, notification-service y `mongo-init`, por la red interna de Docker. Cada servicio entra con su usuario (`FORUM_DB_*`, `NOTIFICATION_DB_*`), que sólo lee y escribe su base; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
 | Solr (core `summaries`) | http://localhost:8983/solr | Índice de búsqueda de los resúmenes aprobados. El panel de administración sirve para ver el esquema y probar consultas |
-| MinIO (bucket `summaries`) | Consola web en http://localhost:9001 | PDF de los resúmenes. La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar el bucket `summaries`. La consola se abre con `MINIO_ROOT_*` |
+| MinIO (buckets `summaries` y `public-documents`) | Consola web en http://localhost:9001 | PDF de los resúmenes (`summaries`, privados) y de los documentos registrados por otros sistemas (`public-documents`, que forum-service entrega sin autenticación, [ADR-014](docs/adr/ADR-014-contrato-documentos.md)). La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar esos dos buckets. La consola se abre con `MINIO_ROOT_*` |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
@@ -345,7 +345,7 @@ docker compose exec forum-service forum-service reindex
 
 El esquema del índice está versionado en [`schema.json`](services/forum-service/internal/search/schema.json). forum-service lo aplica al arrancar con la Schema API de Solr, sin pasos manuales.
 
-**Limpieza de PDF huérfanos.** forum-service borra solo, cada hora, los PDF del bucket que no tienen ningún resumen (por ejemplo, si falló la creación del documento después de subir el archivo), siempre que tengan más de 1 hora. Se configura con `FORUM_CLEANUP_INTERVAL` y `FORUM_CLEANUP_MIN_AGE` en el `.env` ([ADR-003](docs/adr/ADR-003-persistencia.md)); para probarlo se pueden bajar, por ejemplo a `30s` y `0s`. Cada vuelta deja en el log `limpieza de PDF huérfanos` con lo revisado y lo borrado.
+**Limpieza de PDF huérfanos.** forum-service borra solo, cada hora, los PDF de los dos buckets (`summaries` y `public-documents`) que no tienen ningún resumen (por ejemplo, si falló la creación del documento después de subir el archivo), siempre que tengan más de 1 hora. Se configura con `FORUM_CLEANUP_INTERVAL` y `FORUM_CLEANUP_MIN_AGE` en el `.env` ([ADR-003](docs/adr/ADR-003-persistencia.md)); para probarlo se pueden bajar, por ejemplo a `30s` y `0s`. Cada vuelta deja en el log `limpieza de PDF huérfanos` con lo revisado y lo borrado.
 
 ### Notificaciones por mail
 
@@ -423,7 +423,7 @@ docker compose logs forum-service | grep '"caché del foro"'
 
 forum-service expone directamente, sin pasar por el gateway, la API de [`docs/contracts/documents-v1.yaml`](docs/contracts/documents-v1.yaml) en `http://localhost:8083/v1`. La guía para el consumidor está en [`docs/contracts/README.md`](docs/contracts/README.md).
 
-Las API keys se configuran en `FORUM_API_KEYS` **sólo como hash SHA-256** (`consumidor:hash`). El `.env.example` trae la clave de prueba local `clave-de-prueba-grupo4`. La clave real del Grupo 4 se genera aparte y se entrega por un canal privado. Su hash se calcula con:
+Las API keys se configuran en `FORUM_API_KEYS` **sólo como hash SHA-256** (`consumidor:hash`). El nombre del consumidor es el `source` de los documentos que registra: el del Grupo 4 es `agencia_de_viajes`. El `.env.example` trae la clave de prueba local `clave-de-prueba-grupo4` para ese consumidor. La clave real del Grupo 4 se genera aparte y se entrega por un canal privado. Su hash se calcula con:
 
 ```bash
 printf '%s' 'la-clave' | shasum -a 256
@@ -437,13 +437,28 @@ K="X-API-Key: clave-de-prueba-grupo4"
 curl -i -X POST $F/v1/documents -H "$K" -H "Idempotency-Key: $(uuidgen)" \
   -F "title=Guía de trekking en los glaciares" -F "category=Patagonia" -F "tags=trekking,invierno" \
   -F "authorName=Lucía Fernández" -F "authorExternalId=viajero-1842" \
-  -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf"     # 202, queda pendiente
+  -F "authorEmail=lucia.fernandez@mail.com" \
+  -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf"     # 202, queda pendiente, source agencia_de_viajes
 curl -s "$F/v1/submissions?status=pendiente" -H "$K"                           # lo ve sólo esta API key
+curl -s -o guia.pdf "$F/v1/public/documents/<id>/file"                         # el PDF, sin API key (file.publicUrl)
 # un administrador lo aprueba desde el foro (/api/forum/admin/summaries/<id>/approve) y entonces:
 curl -s "$F/v1/documents?category=Patagonia&tag=trekking&sort=rating" -H "$K" # aparece en la búsqueda
 ```
 
-Repetir el registro con la misma `Idempotency-Key` y el mismo cuerpo devuelve el mismo documento con `Idempotent-Replayed: true`. Con otro cuerpo responde `422 IDEMPOTENCY_KEY_REUSED`. El cupo es de 60 pedidos por minuto por API key, de los cuales hasta 10 registros, y se informa en `RateLimit-Limit`, `RateLimit-Remaining` y `Retry-After`. Los documentos de sistemas externos se moderan igual que los resúmenes, pero no generan mail ni beneficios (RN-41): su evento lo indica con `notifyAuthor` y `awardBenefits` en `false`.
+Repetir el registro con la misma `Idempotency-Key` y el mismo cuerpo devuelve el mismo documento con `Idempotent-Replayed: true`. Con otro cuerpo responde `422 IDEMPOTENCY_KEY_REUSED`. El cupo es de 60 pedidos por minuto por API key, de los cuales hasta 10 registros, y se informa en `RateLimit-Limit`, `RateLimit-Remaining` y `Retry-After`. Los documentos de sistemas externos se moderan igual que los resúmenes, pero no generan mail de moderación ni beneficios (RN-41): su evento lo indica con `notifyAuthor` y `awardBenefits` en `false`.
+
+**Correcciones de la cátedra (contrato 1.1.0, [ADR-014](docs/adr/ADR-014-contrato-documentos.md#actualización-2026-11-09)):**
+
+- **`source` es el consumidor.** Lo que registra el Grupo 4 sale con `source: agencia_de_viajes`. Los documentos registrados antes conservan `externo`.
+- **PDF públicos.** Los PDF de un source distinto de `estudiario` se guardan en el bucket `public-documents` y se ven sin API key ni login en `GET /v1/public/documents/{id}/file`, salvo que se rechacen o eliminen (`404`). La ruta viene en `file.publicUrl`, también en la API del foro, y es `null` en los demás. En la nube llega sola: Caddy manda `/v1/*` a forum-service.
+- **Cuenta para el autor.** Si el registro trae `authorEmail`, forum-service guarda en el outbox del documento, en la misma escritura, el evento `document.external-registered` y el relay lo publica en `forum.events`. Lo consume users-service, que crea la cuenta y manda la contraseña por mail. El mail nunca se devuelve en las respuestas, y un reintento con la misma `Idempotency-Key` no vuelve a publicar el evento.
+
+Para ver el evento sin users-service, se puede mirar el outbox del documento en MongoDB:
+
+```bash
+docker compose exec mongo mongosh -u forum_svc -p forum-local --authenticationDatabase forum forum \
+  --eval 'db.summaries.find({"outbox.eventType":"document.external-registered"},{outbox:1}).toArray()'
+```
 
 ### Tests de forum-service
 
