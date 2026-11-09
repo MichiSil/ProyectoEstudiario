@@ -19,6 +19,10 @@ func TestPuntosDelClubUnaSolaVez(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	credit := model.ClubCredit{EventID: "resumen-aprobado-" + u.ID, UserID: u.ID, Reference: u.ID, Points: 50, Reason: "Resumen aprobado en Estudiario", CreatedAt: now}
+	before, err := repo.PendingClubPoints(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	const parallel = 5
 	added := make(chan bool, parallel)
@@ -44,6 +48,10 @@ func TestPuntosDelClubUnaSolaVez(t *testing.T) {
 	pending, err := repo.PendingClubCredits(ctx, u.ID)
 	if err != nil || len(pending) != 1 || pending[0].Points != 50 {
 		t.Fatalf("pendientes = %+v, err = %v", pending, err)
+	}
+	// La métrica de puntos pendientes suma los 50 una sola vez.
+	if after, err := repo.PendingClubPoints(ctx); err != nil || after-before != 50 {
+		t.Errorf("puntos pendientes: antes %d, después %d, err %v; se esperaban 50 más", before, after, err)
 	}
 	// Sin vincular, el barrido no los ve.
 	if linked, _ := repo.PendingCreditsOfLinkedUsers(ctx, 1000); containsCredit(linked, credit.EventID) {

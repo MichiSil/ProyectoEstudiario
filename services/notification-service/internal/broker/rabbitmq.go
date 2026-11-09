@@ -171,6 +171,7 @@ func (c *Consumer) process(ctx context.Context, out *amqp.Channel, d amqp.Delive
 	case consumer.DeadLetter:
 		err = c.forward(ctx, out, d, dlq, retries, decision)
 	}
+	messages.WithLabelValues(resultOf(decision.Action, err)).Inc()
 	if err != nil {
 		// No se pudo dejar la copia: el original vuelve a la cola y se procesa
 		// de nuevo (el eventId evita el mail duplicado).

@@ -80,7 +80,9 @@ func Observe(next http.Handler, logger *slog.Logger) http.Handler {
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
-		next.ServeHTTP(rec, r.WithContext(ctx))
+		req := r.WithContext(ctx)
+		next.ServeHTTP(rec, req)
+		observeRequest(req, rec.status, time.Since(start))
 
 		level := slog.LevelInfo
 		if rec.status >= 500 {

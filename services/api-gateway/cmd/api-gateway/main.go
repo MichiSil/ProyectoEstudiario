@@ -93,6 +93,12 @@ func main() {
 	defer stop()
 	// Chequeo de salud de las instancias del foro hasta que se apague el gateway.
 	go forumBalancer.Run(ctx)
+	// GET /metrics en un puerto aparte, que no se publica (ADR-011).
+	metricsAddr := os.Getenv("METRICS_ADDR")
+	if metricsAddr == "" {
+		metricsAddr = observability.DefaultMetricsAddr
+	}
+	go observability.ServeMetrics(ctx, metricsAddr, logger)
 
 	shutdownTracing, err := observability.SetupTracing(ctx, serviceName)
 	if err != nil {

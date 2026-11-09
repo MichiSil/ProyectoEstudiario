@@ -4,7 +4,8 @@
 //
 //	RabbitMQ (notifications.summary-moderation) → consumer → MongoDB (sent_notifications) + SMTP
 //
-// Expone GET /health.
+// Expone GET /health y, en un puerto aparte que no se publica, GET /metrics
+// (ADR-011).
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
@@ -85,6 +87,7 @@ func run(logger *slog.Logger) error {
 	// Si RabbitMQ no está, el consumidor espera y reintenta: el servicio arranca igual.
 	go (&broker.Consumer{URL: amqpURL, Handler: handler, Logger: logger}).Run(ctx)
 	logger.Info("notification-service listo", "smtp", mailer.Addr, "queue", broker.Queue)
+	go serveMetrics(ctx, env("METRICS_ADDR", ":9100"), logger)
 
 	port := env("PORT", defaultPort)
 	// Timeouts del servidor según el ADR-005: un cliente lento no retiene conexiones indefinidamente.
@@ -128,6 +131,22 @@ func retry(ctx context.Context, logger *slog.Logger, name string, ping func(cont
 			return ctx.Err()
 		}
 		wait *= 2
+	}
+}
+
+// serveMetrics expone GET /metrics en addr, aparte del puerto del servicio, así
+// no queda publicado (ADR-011). Corre hasta que se cancele ctx.
+func serveMetrics(ctx context.Context, addr string, logger *slog.Logger) {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.Handler())
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+	logger.Info("métricas expuestas en GET /metrics", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("no se pudo exponer /metrics", "error", err.Error())
 	}
 }
 

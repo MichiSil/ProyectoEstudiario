@@ -275,9 +275,16 @@ type response struct {
 	header http.Header
 }
 
-// call hace la llamada con el presupuesto, el reintento y el circuit breaker,
-// y decodifica la respuesta esperada en out.
+// call hace la llamada y la cuenta en users_club_requests_total por resultado.
 func (c *Client) call(ctx context.Context, method, path, idemKey string, in any, want int, out any) error {
+	err := c.callClub(ctx, method, path, idemKey, in, want, out)
+	requests.WithLabelValues(resultOf(err)).Inc()
+	return err
+}
+
+// callClub hace la llamada con el presupuesto, el reintento y el circuit
+// breaker, y decodifica la respuesta esperada en out.
+func (c *Client) callClub(ctx context.Context, method, path, idemKey string, in any, want int, out any) error {
 	if c.apiKey == "" {
 		return &Error{Kind: Misconfigured, Err: errors.New("falta CLUB_API_KEY")}
 	}

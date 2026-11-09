@@ -1,0 +1,69 @@
+# Alertas de Estudiario (ADR-011, sección 6). Las evalúa Prometheus cada 5 s y
+# se ven en http://localhost:9090/alerts y en Grafana (Alerting > Alert rules).
+groups:
+  - name: estudiario
+    rules:
+      # SLO de disponibilidad: 99 % de los pedidos sin 5xx. Más de 5 % en 5 min
+      # consume el margen del SLO mucho más rápido de lo aceptable.
+      - alert: ErroresAltos
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (job) (rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }}: más del 5 % de respuestas 5xx"
+          description: "{{ $labels.job }} responde 5xx en el {{ $value | humanizePercentage }} de los pedidos de los últimos 5 minutos (SLO: 99 % sin 5xx)."
+
+      # Una instancia del foro fuera de la rotación del balanceador (ADR-012).
+      - alert: InstanciaDelForoFueraDeRotacion
+        expr: gateway_upstream_instance_up{upstream="forum-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.upstream_instance }} está fuera de la rotación"
+          description: "El api-gateway sacó a {{ $labels.upstream_instance }} de la rotación hace más de 1 minuto: el foro funciona con una sola instancia."
+
+      # Un servicio que no entrega sus métricas: caído o sin red.
+      - alert: ServicioSinResponder
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} no responde"
+          description: "Prometheus no puede leer las métricas de {{ $labels.instance }} ({{ $labels.job }}) hace más de 1 minuto."
+
+      # SLO de latencia de la acción principal: p95 de confirmar por debajo de 500 ms.
+      - alert: ConfirmarLento
+        expr: |
+          histogram_quantile(0.95, sum by (le) (
+            rate(http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm"}[10m])
+          )) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Confirmar un plan tarda más de 500 ms (p95)"
+          description: "El p95 de POST /plans/{planId}/confirm es {{ $value | humanizeDuration }} en los últimos 10 minutos (SLO: 500 ms)."
+
+      # Mensajes que no se pudieron procesar (ADR-005).
+      - alert: MensajesEnLaDLQ
+        expr: increase(notification_messages_total{result="dlq"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hay mails de moderación en notifications.dlq"
+          description: "notification-service mandó {{ $value | humanize }} mensajes a la DLQ en los últimos 10 minutos: esos autores no recibieron el mail."
+
+      # El Club de Beneficios no responde y el circuit breaker está abierto (ADR-015).
+      - alert: ClubDeBeneficiosNoDisponible
+        expr: users_club_breaker_state == 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El circuit breaker del Club de Beneficios está abierto"
+          description: "users-service no llama al Club hace más de 1 minuto; los puntos quedan pendientes y se acreditan cuando vuelva."

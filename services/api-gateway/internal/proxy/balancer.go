@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -35,6 +37,19 @@ const (
 	UpstreamInstanceHeader = "X-Instance"
 )
 
+// Métricas del balanceo (ADR-011, ADR-012), separadas por instancia con el
+// nombre que la instancia informa en X-Instance (por ejemplo forum-service-2).
+var (
+	upstreamUp = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gateway_upstream_instance_up",
+		Help: "1 si la instancia está en la rotación del balanceador, 0 si está fuera (ADR-012).",
+	}, []string{"upstream", "upstream_instance"})
+	upstreamResponses = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gateway_upstream_responses_total",
+		Help: "Respuestas de cada instancia, según la instancia que la atendió (X-Served-By) (ADR-012).",
+	}, []string{"upstream", "upstream_instance"})
+)
+
 // Instance es una instancia de un servicio, por ejemplo forum-service-2:8083.
 type Instance struct {
 	Name string
@@ -43,6 +58,33 @@ type Instance struct {
 	healthy atomic.Bool
 	mu      sync.Mutex
 	fails   int
+	label   string // nombre para las métricas: el X-Instance de su /health o, hasta conocerlo, Name
+}
+
+// report publica en la métrica si la instancia está en la rotación. Si se
+// conoció su nombre (X-Instance), se borra la serie con el nombre anterior.
+func (b *Balancer) report(inst *Instance, served string) {
+	inst.mu.Lock()
+	old := inst.label
+	if old == "" {
+		old = inst.Name
+	}
+	if served != "" {
+		inst.label = served
+	}
+	current := inst.label
+	if current == "" {
+		current = inst.Name
+	}
+	inst.mu.Unlock()
+	if old != current {
+		upstreamUp.DeleteLabelValues(b.Service, old)
+	}
+	up := 0.0
+	if inst.Healthy() {
+		up = 1
+	}
+	upstreamUp.WithLabelValues(b.Service, current).Set(up)
 }
 
 // Healthy dice si la instancia está en la rotación.
@@ -98,6 +140,7 @@ func (b *Balancer) MarkDown(inst *Instance, reason error) {
 		b.logger.Warn("instancia fuera de la rotación", "upstream", b.Service, "upstreamInstance", inst.Name,
 			"reason", "falló un pedido", "error", reason.Error())
 	}
+	b.report(inst, "")
 }
 
 // Run hace el chequeo activo hasta que se cancele ctx.
@@ -117,7 +160,7 @@ func (b *Balancer) Run(ctx context.Context) {
 // CheckAll consulta el GET /health de cada instancia una vez.
 func (b *Balancer) CheckAll(ctx context.Context) {
 	for _, inst := range b.Instances {
-		err := b.check(ctx, inst)
+		served, err := b.check(ctx, inst)
 		inst.mu.Lock()
 		if err == nil {
 			inst.fails = 0
@@ -134,23 +177,26 @@ func (b *Balancer) CheckAll(ctx context.Context) {
 			b.logger.Warn("instancia fuera de la rotación", "upstream", b.Service, "upstreamInstance", inst.Name,
 				"reason", "no responde el chequeo de salud", "error", err.Error())
 		}
+		b.report(inst, served)
 	}
 }
 
-func (b *Balancer) check(ctx context.Context, inst *Instance) error {
+// check consulta el /health de la instancia y devuelve el nombre que informa
+// en X-Instance ("" si no lo manda).
+func (b *Balancer) check(ctx context.Context, inst *Instance) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inst.URL.JoinPath("/health").String(), nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return errors.New(resp.Status)
+		return "", errors.New(resp.Status)
 	}
-	return nil
+	return resp.Header.Get(UpstreamInstanceHeader), nil
 }
 
 type instanceKey struct{}
@@ -183,6 +229,7 @@ func Balanced(b *Balancer, prefix string, timeout func(*http.Request) time.Durat
 			}
 			resp.Header.Del(UpstreamInstanceHeader)
 			resp.Header.Set(InstanceHeader, name)
+			upstreamResponses.WithLabelValues(b.Service, name).Inc()
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {

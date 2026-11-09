@@ -480,9 +480,45 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
     restart: unless-stopped
 
+  # Métricas (ADR-011): Prometheus lee el GET /metrics de cada servicio en su
+  # puerto 9100, que no se publica; las dos instancias del foro por separado.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090" # interfaz web y alertas
+    restart: unless-stopped
+
+  # Tablero y alertas (ADR-011). El datasource y el tablero se provisionan desde
+  # deploy/grafana: no hay que configurar nada a mano.
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?falta GRAFANA_ADMIN_USER en el .env (ver .env.example)}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?falta GRAFANA_ADMIN_PASSWORD en el .env (ver .env.example)}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/estudiario.json
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000" # interfaz web
+    depends_on:
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   mongo-data:
   minio-data:
   solr-data:
   rabbitmq-data:
+  prometheus-data:
+  grafana-data:

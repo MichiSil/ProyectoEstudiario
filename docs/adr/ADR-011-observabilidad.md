@@ -1,6 +1,6 @@
 # ADR-011: Observabilidad
 
-- **Estado:** Propuesta (primera versión; se completa para la presentación final)
+- **Estado:** Aceptada (métricas, tablero y alertas implementados: ver [*Actualización (2026-11-09)*](#actualización-2026-11-09))
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D11
 - **Reemplaza a:** —
@@ -119,3 +119,94 @@ Un tablero de estado general con: pedidos por segundo, porcentaje de errores y l
 - Agregar las métricas por instancia de forum-service (ADR-012), las de la caché (ADR-007) y las de las colas (ADR-005) a medida que esos componentes se implementen.
 - Instrumentar el resto de los servicios con el mismo paquete de observabilidad, y sumar spans de las consultas a PostgreSQL y de la llamada a la IA en planner-service.
 - Revisar el SLO y los umbrales de alerta con nuevas pruebas de carga (ADR-013), en especial si se suman instancias o se cambia el tamaño de la base.
+
+## Actualización (2026-11-09)
+
+Se implementaron las métricas, el tablero y las alertas con la **opción 1: Prometheus + Grafana**. Los logs y las trazas siguen como estaban.
+
+### Cómo se exponen las métricas
+
+- Cada servicio expone `GET /metrics` con `prometheus/client_golang`, en un **servidor aparte, en el puerto 9100** (`METRICS_ADDR`). Ese puerto no se publica en `docker compose` ni en la nube, y como no es el puerto de la API, `/metrics` **no se puede pedir a través del api-gateway** (`/api/forum/metrics` llega a la API del foro, que no tiene esa ruta) **ni de Caddy**.
+- **Prometheus** (`prom/prometheus:v2.55.1`, http://localhost:9090) lee cada servicio cada 5 s. Las dos instancias de forum-service se leen **por separado**, con `instance` = `forum-service-1` y `forum-service-2` ([ADR-012](ADR-012-balanceo-de-carga.md)). Configuración en [`deploy/prometheus/prometheus.yml`](../../deploy/prometheus/prometheus.yml).
+- **Grafana** (`grafana/grafana:11.3.0`, http://localhost:3000) arranca con el datasource y el tablero **provisionados desde archivos** de [`deploy/grafana`](../../deploy/grafana): no se configura nada a mano. El usuario y la contraseña salen de `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` del `.env`, y el tablero no se puede editar desde la interfaz: se cambia en el repositorio.
+
+### Qué se mide
+
+| Servicio | Métrica | Etiquetas | Para qué |
+|---|---|---|---|
+| Los cinco con API HTTP | `http_requests_total` y el histograma `http_request_duration_seconds` | `route` (el **patrón registrado**, por ejemplo `/summaries/{id}`, no la URL con ids), `method`, `status` | Tráfico, errores y latencia p95 del SLO. Usar el patrón evita una serie por cada id. `GET /health` no se cuenta: lo consultan los healthchecks cada pocos segundos. |
+| api-gateway | `gateway_upstream_responses_total` | `upstream`, `upstream_instance` (el `X-Served-By`) | Reparto de los pedidos entre las instancias del foro |
+| api-gateway | `gateway_upstream_instance_up` | `upstream`, `upstream_instance` | 1 si la instancia está en la rotación del balanceador, 0 si está fuera. El nombre sale del `X-Instance` de su `/health`. |
+| forum-service | `forum_cache_requests_total` y `forum_cache_invalidations_total` (ya existían, [ADR-007](ADR-007-cache.md)) | `operation`, `result` / `write`, `result` | Porcentaje de aciertos de la caché |
+| forum-service | `forum_search_index_lag_seconds` y `forum_search_index_last_sync_timestamp_seconds` | — | Retraso del indexador de Solr (el `lagMs` del log) y hace cuánto sincronizó bien por última vez (RN-26) |
+| forum-service | `forum_outbox_pending_events` | — | Eventos que quedaron sin publicar en RabbitMQ en la última vuelta del relay (como máximo 100 por vuelta) |
+| notification-service | `notification_messages_total` | `result`: `procesado`, `reintento`, `dlq`, `reencolado` | Mensajes procesados, reintentos y DLQ ([ADR-005](ADR-005-comunicacion.md)) |
+| users-service | `users_club_requests_total` | `result`: `ok`, `indisponible`, `no_vinculada`, `rechazado`, `mal_configurado` | Llamadas al Club de Beneficios por resultado ([ADR-015](ADR-015-club-de-beneficios.md)) |
+| users-service | `users_club_breaker_state` | — | Circuit breaker del Club: 0 cerrado, 1 semiabierto, 2 abierto |
+| users-service | `users_club_pending_points` | — | Puntos guardados y todavía sin acreditar (RN-43), leídos de la base en cada lectura de Prometheus |
+| planner-service | `planner_proposals_total` | `generated_by`: `ia`, `reglas` | Propuestas por origen: la degradación de la IA (RN-09) |
+| planner-service | `planner_confirmations_total` | `result`: `confirmada`, `rechazada`, `error` | Confirmaciones de la acción principal |
+
+En planner-service las métricas de negocio entran por el puerto `app.Metrics` y las implementa el adaptador `internal/adapters/metrics`, así el núcleo hexagonal no depende de Prometheus ([ADR-002](ADR-002-arquitectura-interna.md)). Los contadores con etiquetas fijas arrancan en 0 con todas sus etiquetas: si no, `increase()` no ve el primer evento de una serie nueva (por ejemplo, el primer mensaje que va a la DLQ).
+
+Quedó afuera de la sección 4 original: la duración de las llamadas a la IA y a PostgreSQL como métricas propias (se ven en la latencia de cada ruta y en las trazas) y la cantidad de mensajes en cada cola (se cuentan los que pasan por la DLQ, no los que esperan; RabbitMQ los muestra en su panel).
+
+### Tablero: "Estudiario: estado general"
+
+Es la página de inicio de Grafana ([`estudiario.json`](../../deploy/grafana/dashboards/estudiario.json)) y se actualiza cada 5 s:
+
+1. **Servicios:** tráfico, porcentaje de `5xx` y latencia p95 de cada servicio, con las líneas del SLO (5 % y 500 ms).
+2. **Foro:** pedidos por instancia (apilados, así se ve el reparto y el total), estado de cada instancia en la rotación, instancias sanas, porcentaje de aciertos de la caché y lecturas de la caché por resultado, eventos pendientes en el outbox, retraso del índice y última sincronización con Solr.
+3. **Mensajería y Club de Beneficios:** mensajes por resultado y DLQ de la última hora; llamadas al Club por resultado, estado del circuit breaker y puntos pendientes.
+4. **Plan de estudio y alertas:** propuestas por origen, confirmaciones por resultado y la tabla de alertas disparadas.
+
+### SLO
+
+Queda el de la sección 5, ahora medido: **99 % de los pedidos sin `5xx`** (con `http_requests_total`, por servicio) y **p95 de confirmar por debajo de 500 ms** (con el histograma de `/plans/{planId}/confirm`). El de la propuesta con IA (10 s) se ve en el tablero, pero no tiene alerta propia: la latencia de la ruta mezcla las propuestas de la IA y las de reglas.
+
+### Alertas
+
+Son reglas de Prometheus en [`deploy/prometheus/alerts.yml`](../../deploy/prometheus/alerts.yml), provisionadas desde el archivo. Se ven en Prometheus (*Alerts*), en Grafana (*Alerting > Alert rules*, como reglas del datasource) y en la tabla del tablero:
+
+| Alerta | Condición | Se alinea con |
+|---|---|---|
+| `ErroresAltos` | `5xx` / total de un servicio > 5 % durante 5 min | SLO de disponibilidad (sección 6) |
+| `InstanciaDelForoFueraDeRotacion` | `gateway_upstream_instance_up == 0` durante 1 min | Servicio no disponible (sección 6), [ADR-012](ADR-012-balanceo-de-carga.md) |
+| `ServicioSinResponder` | `up == 0` durante 1 min | Servicio no disponible |
+| `ConfirmarLento` | p95 de confirmar > 500 ms durante 10 min | SLO de latencia |
+| `MensajesEnLaDLQ` | algún mensaje a `notifications.dlq` en 10 min | Mensajes no procesados ([ADR-005](ADR-005-comunicacion.md)) |
+| `ClubDeBeneficiosNoDisponible` | circuit breaker abierto durante 1 min | [ADR-015](ADR-015-club-de-beneficios.md) |
+
+No se configuró un canal de aviso (Alertmanager, mail o chat): las alertas se ven en las tres pantallas. Sumar uno no cambia las reglas.
+
+### Evidencia (2026-11-09, `docker compose` local)
+
+Con tráfico constante contra el gateway (unos 30 pedidos/s, de los cuales unos 25 al foro), se apagó la segunda instancia del foro y se la volvió a levantar. Horas de Argentina (UTC−3):
+
+| Hora | Qué pasó |
+|---|---|
+| Antes | Reparto parejo: 7,56 y 7,54 pedidos/s por instancia. Caché con 88,7 % de aciertos. |
+| 20:22:20 | `docker compose stop forum-service-2` |
+| 20:22:21 | El gateway la saca de la rotación al fallar un pedido real (chequeo pasivo) y reintenta la lectura en `forum-service-1`. El tablero la muestra *fuera de la rotación* y todo el tráfico en `forum-service-1`. |
+| 20:22:24 | `InstanciaDelForoFueraDeRotacion` y `ServicioSinResponder` pasan a *pending* |
+| 20:23:26 | Las dos alertas se **disparan** (1 minuto después) |
+| 20:24:26 | `docker compose start forum-service-2` |
+| 20:24:31 | El gateway la vuelve a poner en la rotación; el reparto vuelve a ser parejo |
+| 20:24:36 | Las alertas se resuelven solas |
+
+En los 15 minutos de la prueba, incluida la caída, el gateway atendió **8.984 pedidos del foro sin ningún `5xx`**: las lecturas que fallaron en la instancia caída se reintentaron en la otra, como define el ADR-012.
+
+También se vio en las métricas el comportamiento esperado de otros ADR: al aprobar resúmenes, `notification_messages_total` muestra `reintento` además de `procesado`, porque **las dos instancias del relay publican el mismo evento** (entrega al menos una vez, ADR-012) y notification-service manda el mail una sola vez y descarta la copia (RN-32). Y como el `.env` local no tiene `CLUB_API_KEY`, las llamadas al Club salen como `mal_configurado` y los puntos quedan pendientes; el pequeño pico de `5xx` de users-service del tablero es ese pedido de vinculación (`503 CLUB_UNAVAILABLE`).
+
+Capturas en [`docs/observabilidad/`](../observabilidad/):
+
+- [Tablero con la caída y la recuperación](../observabilidad/01-tablero-caida-y-recuperacion.jpg) y [mensajería, Club y plan](../observabilidad/02-tablero-mensajeria-club-y-plan.jpg)
+- [Tablero durante la caída](../observabilidad/03-tablero-durante-la-caida.jpg) y [alertas disparadas en el tablero](../observabilidad/04-tablero-alertas-disparadas.jpg)
+- [La alerta disparada en Prometheus](../observabilidad/05-prometheus-alerta-disparada.jpg) y [las reglas en Grafana](../observabilidad/06-grafana-reglas-de-alerta.jpg)
+
+### Consecuencias
+
+- El estado del sistema se ve en un solo lugar, y la caída de una instancia se nota en segundos en el tablero y en un minuto como alerta, sin mirar los logs.
+- Prometheus guarda 7 días de datos en un volumen de Docker. Para el volumen del sistema alcanza; no hay almacenamiento de largo plazo.
+- `users_club_pending_points` hace una consulta a PostgreSQL en cada lectura de Prometheus (cada 5 s). Es una suma sobre un índice parcial y no pesa; si creciera, se calcula aparte.
+- **En la nube:** Prometheus y Grafana publican los puertos 9090 y 3000 en el `docker-compose.yml`. Para que en la nube no queden expuestos hay que resetearlos en `deploy/azure/docker-compose.cloud.yml`, como el resto, y verlos por túnel SSH. Además, el `.env` de la nube necesita `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` (con valores propios): sin ellos `docker compose` no levanta. Se coordina con el despliegue.

@@ -184,6 +184,9 @@ func run(logger *slog.Logger) error {
 		logger.Warn("sin RABBITMQ_URL: los eventos del outbox no se publican")
 	}
 
+	// GET /metrics en un puerto aparte, que no se publica (ADR-011).
+	go observability.ServeMetrics(ctx, env("METRICS_ADDR", observability.DefaultMetricsAddr), logger)
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", controller.Health(repo))
 	forum := &controller.Forum{Svc: svc, DB: repo, Logger: logger, InternalToken: internalToken}

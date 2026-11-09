@@ -1,0 +1,13 @@
+# Datasource de Grafana, provisionado al arrancar (ADR-011). El uid fijo es el
+# que usa el tablero de deploy/grafana/dashboards.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s

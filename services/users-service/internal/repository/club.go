@@ -98,6 +98,16 @@ func (p *Postgres) PendingClubCredits(ctx context.Context, userID string) ([]mod
 	return p.credits(ctx, `WHERE status = 'pendiente' AND user_id = $1 ORDER BY created_at`, userID)
 }
 
+// PendingClubPoints suma los puntos que todavía no se acreditaron en el Club,
+// de todos los usuarios (métrica del ADR-011).
+func (p *Postgres) PendingClubPoints(ctx context.Context) (int64, error) {
+	var total int64
+	err := p.run(ctx, func(ctx context.Context) error {
+		return p.pool.QueryRow(ctx, `SELECT COALESCE(SUM(points), 0) FROM club_credits WHERE status = 'pendiente'`).Scan(&total)
+	})
+	return total, err
+}
+
 // PendingCreditsOfLinkedUsers devuelve puntos sin acreditar de usuarios ya
 // vinculados: los que quedaron así porque el Club no respondió (RN-43).
 func (p *Postgres) PendingCreditsOfLinkedUsers(ctx context.Context, limit int) ([]model.ClubCredit, error) {

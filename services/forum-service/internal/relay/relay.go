@@ -19,8 +19,19 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
 )
+
+// pendingEvents es lo que quedó sin publicar después de la última vuelta del
+// relay, de los hasta 100 que lee por vuelta (ADR-005, ADR-011). Si RabbitMQ
+// está caído, crece hasta ese tope.
+var pendingEvents = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "forum_outbox_pending_events",
+	Help: "Eventos del outbox sin publicar en RabbitMQ después de la última vuelta del relay (como máximo 100 por vuelta).",
+})
 
 // Valores del ADR-005 (3.3).
 const (
@@ -95,6 +106,7 @@ func (r *Relay) Flush(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	published := 0
+	defer func() { pendingEvents.Set(float64(len(pending) - published)) }()
 	for _, p := range pending {
 		if err := r.Publisher.Publish(ctx, p.Event); err != nil {
 			return published, err
