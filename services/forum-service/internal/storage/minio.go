@@ -1,5 +1,6 @@
-// Package storage guarda los PDF de los resúmenes en MinIO (bucket summaries,
-// ADR-003), a través de su API compatible con S3.
+// Package storage guarda los PDF en MinIO, a través de su API compatible con
+// S3: los de los estudiantes en el bucket summaries (ADR-003) y los de los
+// documentos de un source externo en public-documents (ADR-014).
 package storage
 
 import (
@@ -39,6 +40,9 @@ func NewMinIO(endpoint, accessKey, secretKey, bucket string, secure bool) (*MinI
 	}
 	return &MinIO{client: client, bucket: bucket}, nil
 }
+
+// Bucket es el nombre del bucket.
+func (m *MinIO) Bucket() string { return m.bucket }
 
 // Ping verifica que el bucket exista y se pueda acceder.
 func (m *MinIO) Ping(ctx context.Context) error {

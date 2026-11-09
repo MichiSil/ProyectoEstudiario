@@ -26,6 +26,12 @@ import (
 
 func newStore(t *testing.T) *storage.MinIO {
 	t.Helper()
+	return newBucket(t, "summaries")
+}
+
+// newBucket conecta con un bucket de forum-service: summaries o public-documents.
+func newBucket(t *testing.T, bucket string) *storage.MinIO {
+	t.Helper()
 	endpoint := os.Getenv("FORUM_TEST_MINIO_ENDPOINT")
 	if endpoint == "" {
 		t.Skip("FORUM_TEST_MINIO_ENDPOINT no definida: se omiten los tests de integración con MinIO")
@@ -34,7 +40,7 @@ func newStore(t *testing.T) *storage.MinIO {
 	if access == "" {
 		access, secret = "forum-service", "forum-minio-local" // valores de .env.example
 	}
-	s, err := storage.NewMinIO(endpoint, access, secret, "summaries", false)
+	s, err := storage.NewMinIO(endpoint, access, secret, bucket, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +51,21 @@ func newStore(t *testing.T) *storage.MinIO {
 }
 
 func TestSubirLeerYBorrarUnPDF(t *testing.T) {
-	store, ctx := newStore(t), context.Background()
+	subirLeerYBorrar(t, newStore(t))
+}
+
+// El usuario de forum-service también puede usar el bucket público (ADR-014).
+func TestBucketPublico(t *testing.T) {
+	public := newBucket(t, "public-documents")
+	subirLeerYBorrar(t, public)
+	if public.Bucket() != "public-documents" {
+		t.Errorf("Bucket = %q", public.Bucket())
+	}
+}
+
+func subirLeerYBorrar(t *testing.T, store *storage.MinIO) {
+	t.Helper()
+	ctx := context.Background()
 	key := "test-" + strings.ToLower(rand.Text()) + ".pdf"
 	data := []byte("%PDF-1.4\ncontenido de prueba\n%%EOF")
 

@@ -29,7 +29,9 @@ Este documento alcanza para integrarse sin hablar con nosotros. El contrato form
 
 | Versión mayor | Versión del contrato | Archivo | Ruta base | Estado |
 |---|---|---|---|---|
-| v1 | **1.0.0** | [`documents-v1.yaml`](documents-v1.yaml) | `/v1` | **Vigente** |
+| v1 | **1.1.0** | [`documents-v1.yaml`](documents-v1.yaml) | `/v1` | **Vigente** |
+
+La 1.1.0 suma cambios compatibles pedidos por la cátedra: el `source` dice qué consumidor registró el documento, los PDF de los consumidores son públicos y el autor puede recibir una cuenta en Estudiario (ver el [historial](#14-historial-de-cambios)).
 
 ## 2. Dónde está disponible
 
@@ -53,9 +55,10 @@ X-API-Key: <clave entregada al grupo>
 - La clave identifica al grupo consumidor. Sobre ella se cuentan el cupo de uso, el alcance de las claves de idempotencia y **qué documentos son suyos** (los que registró con esa clave).
 - Si la clave falta o no es válida, la respuesta es `401 UNAUTHENTICATED`. Si creen que se filtró, avísennos y la rotamos.
 - El mock acepta **cualquier** valor de `X-API-Key`. Sólo exige que el encabezado esté.
-- `GET /health` no requiere clave.
+- `GET /health` y `GET /v1/public/documents/{id}/file` (el PDF público) no requieren clave.
+- El nombre del consumidor de la clave es el `source` de los documentos que registra: el del Grupo 4 es `agencia_de_viajes`.
 
-Los usuarios del sistema consumidor no necesitan cuenta en Estudiario. Para relacionar un documento con uno de sus usuarios, manden su id en `authorExternalId`.
+Los usuarios del sistema consumidor no necesitan cuenta en Estudiario para usar la capacidad: la usa el sistema, con su API key. Para relacionar un documento con uno de sus usuarios, manden su id en `authorExternalId`. Si además mandan su mail en `authorEmail`, Estudiario le crea una cuenta y le manda por mail una contraseña generada, para que pueda entrar al foro.
 
 ## 4. Operaciones
 
@@ -66,6 +69,7 @@ Los usuarios del sistema consumidor no necesitan cuenta en Estudiario. Para rela
 | `GET /v1/documents/{id}` | Ver el detalle de un documento | `X-API-Key` |
 | `GET /v1/documents/{id}/file` | Descargar el PDF | `X-API-Key` |
 | `GET /v1/submissions` | Listar los documentos que registré, en cualquier estado | `X-API-Key` |
+| `GET /v1/public/documents/{id}/file` | Ver el PDF de un documento registrado por un consumidor, sin autenticación (desde 1.1.0) | — |
 | `GET /health` | Saber si el servicio puede atender pedidos | — |
 
 ## 5. Ciclo de vida de un documento
@@ -86,6 +90,8 @@ stateDiagram-v2
 | `rechazado` | Sólo la API key que lo registró, con `rejectionReason` | No |
 | eliminado | Nadie: el detalle y la descarga devuelven `404` | No, desaparece en como máximo 1 minuto |
 
+**El PDF es público desde el registro.** Lo que registra un consumidor se puede ver sin API key ni login en `GET /v1/public/documents/{id}/file` (la ruta viene en `file.publicUrl`) mientras esté `pendiente` o `aprobado`. Si se rechaza o se elimina, esa ruta responde `404` y `publicUrl` pasa a `null`. Los resúmenes que suben los estudiantes (`source: estudiario`) nunca son públicos.
+
 **Cómo enterarse de que un documento se moderó.** En v1 no hay notificaciones al consumidor: consulten `GET /v1/submissions?status=pendiente` o el detalle de cada documento. Sugerimos hacerlo cada pocos minutos, nunca más de una vez por minuto por documento. Un aviso automático (por ejemplo, un *webhook*) se puede agregar en una versión menor sin romper v1.
 
 **La calificación (`rating`)** la ponen los estudiantes de Estudiario desde el foro (de 1 a 5, RN-31). Es de sólo lectura para el consumidor.
@@ -105,6 +111,7 @@ El cuerpo es `multipart/form-data`, un campo por dato:
 | `description` | No | Hasta 2000 caracteres | Resumen de la guía |
 | `tags` | No | Hasta 10 etiquetas separadas por comas, de 2 a 40 caracteres cada una | Tipo de viaje, temporada, idioma: `trekking,invierno` |
 | `authorExternalId` | No | Hasta 100 caracteres | Id del usuario en su sistema. No lo interpretamos y sólo se lo devolvemos a ustedes |
+| `authorEmail` | No | Mail válido de hasta 254 caracteres (desde 1.1.0) | Mail de quien comparte la guía: le creamos una cuenta en Estudiario y le mandamos la contraseña por mail. Nunca se devuelve en las respuestas |
 
 La respuesta es **`202 Accepted`** con el documento en estado `pendiente` y el encabezado `Location` con la ruta de su detalle.
 
@@ -121,7 +128,7 @@ La respuesta es **`202 Accepted`** con el documento en estado `pendiente` y el e
 
 La respuesta es una página: `{ "items": [...], "page": 1, "size": 20, "total": 37 }`.
 
-Sólo se buscan documentos **aprobados**, tanto los que suben los estudiantes en el foro (`source: estudiario`) como los registrados por sistemas consumidores (`source: externo`). No se busca dentro del contenido del PDF ([ADR-006](../adr/ADR-006-busqueda.md)).
+Sólo se buscan documentos **aprobados**, tanto los que suben los estudiantes en el foro (`source: estudiario`) como los registrados por sistemas consumidores (`source` con el nombre del consumidor, por ejemplo `agencia_de_viajes`). No se busca dentro del contenido del PDF ([ADR-006](../adr/ADR-006-busqueda.md)).
 
 ### El documento
 
@@ -136,20 +143,23 @@ Lo devuelven el registro, el detalle, la búsqueda y `/v1/submissions`. Ejemplo 
   "tags": ["trekking", "invierno"],
   "status": "aprobado",
   "rejectionReason": null,
-  "source": "externo",
+  "source": "agencia_de_viajes",
   "author": { "name": "Lucía Fernández", "externalId": "viajero-1842" },
   "rating": { "average": 4.6, "count": 12 },
   "file": {
     "contentType": "application/pdf",
     "sizeBytes": 2481152,
-    "downloadPath": "/v1/documents/d7f3k2m9qx4p8r1s/file"
+    "downloadPath": "/v1/documents/d7f3k2m9qx4p8r1s/file",
+    "publicUrl": "/v1/public/documents/d7f3k2m9qx4p8r1s/file"
   },
   "createdAt": "2026-11-02T18:30:00-03:00",
   "publishedAt": "2026-11-02T19:05:00-03:00"
 }
 ```
 
-- `author.externalId` sólo se devuelve a la API key que registró el documento.
+- `source` es `estudiario` si lo subió un estudiante en el foro, o el nombre del consumidor que lo registró (`agencia_de_viajes`). `externo` es **obsoleto**: lo conservan los documentos registrados antes de la 1.1.0. Por ser lector tolerante, acepten valores nuevos.
+- `file.publicUrl` es la ruta para ver el PDF sin autenticación, o `null` si no es público (los del foro, los rechazados y los registrados antes de la 1.1.0).
+- `author.externalId` sólo se devuelve a la API key que registró el documento. `authorEmail` no se devuelve nunca.
 - `rating.average` es `null` mientras el documento no tenga calificaciones.
 - `publishedAt` es el momento de la aprobación, y `null` si no está aprobado.
 
@@ -228,8 +238,11 @@ curl -i -X POST http://localhost:4010/v1/documents \
   -F "tags=trekking,invierno" \
   -F "authorName=Lucía Fernández" \
   -F "authorExternalId=viajero-1842" \
+  -F "authorEmail=lucia.fernandez@mail.com" \
   -F "file=@docs/contracts/examples/guia-ejemplo.pdf;type=application/pdf"
 ```
+
+`authorEmail` es opcional: si viene, la persona recibe por mail una cuenta para entrar a Estudiario.
 
 **Buscar guías aprobadas de un destino, las mejor calificadas primero:**
 
@@ -249,6 +262,12 @@ curl -s "http://localhost:4010/v1/submissions?status=pendiente" -H "X-API-Key: c
 ```bash
 curl -s http://localhost:4010/v1/documents/d7f3k2m9qx4p8r1s -H "X-API-Key: clave-de-prueba"
 curl -s -o guia.pdf http://localhost:4010/v1/documents/d7f3k2m9qx4p8r1s/file -H "X-API-Key: clave-de-prueba"
+```
+
+**Ver el PDF sin API key** (la ruta de `file.publicUrl`; cualquiera puede abrirla, por ejemplo en el navegador):
+
+```bash
+curl -s -o guia.pdf http://localhost:4010/v1/public/documents/d7f3k2m9qx4p8r1s/file
 ```
 
 **Estado del servicio:**
@@ -356,4 +375,5 @@ Nosotros validamos nuestra implementación contra este mismo YAML en los tests d
 
 | Versión | Fecha | Cambios |
 |---|---|---|
+| 1.1.0 | 2026-11-09 | Correcciones de la cátedra, todas compatibles ([ADR-014](../adr/ADR-014-contrato-documentos.md#actualización-2026-11-09)): `source` es el nombre del consumidor que registró el documento (`agencia_de_viajes` para el Grupo 4) y `externo` queda obsoleto; los PDF de los consumidores son públicos, con la nueva operación `GET /v1/public/documents/{id}/file` sin autenticación y el campo `file.publicUrl`; y el campo opcional `authorEmail` en el registro, para crearle una cuenta al autor. |
 | 1.0.0 | 2026-10-29 | Primera versión: registro con moderación, búsqueda, detalle, descarga, listado de los documentos registrados y `GET /health`. Autenticación por API key, `Idempotency-Key` obligatoria al registrar, errores en formato Problem Details y cupo de 60 pedidos por minuto. Reemplaza a la capacidad de generar un plan de estudio, retirada sin llegar a implementarse. |

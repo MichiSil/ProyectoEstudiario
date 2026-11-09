@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
@@ -16,17 +17,20 @@ import (
 const staleAfter = time.Minute
 
 // Register registra un documento de un sistema externo (RF-25). Queda
-// pendiente y lo moderan los mismos administradores (RN-38).
+// pendiente y lo moderan los mismos administradores (RN-38). Su source es el
+// consumidor de la API key, por ejemplo "agencia_de_viajes" (ADR-014).
 //
 // La Idempotency-Key, por API key, evita registrarlo dos veces (RN-40):
 //   - misma clave y mismo cuerpo: devuelve el documento ya registrado y replayed = true;
 //   - misma clave y otro cuerpo: ErrIdempotencyReused;
 //   - misma clave mientras el primer pedido se procesa: ErrRequestInProgress.
 func (s *Service) Register(ctx context.Context, consumer, idemKey string, in NewDocument, f File) (doc model.Summary, replayed bool, err error) {
-	in.Source = model.SourceExternal
+	in.Source = model.Source(consumer)
 	in.Author.Consumer = consumer
 	in.Author.UserID = ""
-	in.Author.Email = "" // su autor no tiene cuenta en Estudiario (RN-41)
+	// El mail (authorEmail) es opcional: si viene, el autor recibe una cuenta
+	// en Estudiario. Nunca se devuelve en las respuestas.
+	in.Author.Email = strings.TrimSpace(in.Author.Email)
 
 	rec := model.IdempotencyRecord{ID: consumer + ":" + idemKey, RequestHash: requestHash(in, f), CreatedAt: s.now()}
 	existing, reserved, err := s.Repo.ReserveIdempotency(ctx, rec)
@@ -76,7 +80,27 @@ func requestHash(in NewDocument, f File) string {
 	}
 	file := sha256.Sum256(f.Data)
 	h.Write(file[:])
+	// El mail se suma sólo si vino, así un reintento de un registro anterior a
+	// authorEmail sigue dando el mismo resumen.
+	if in.Author.Email != "" {
+		fmt.Fprintf(h, "|email:%s", in.Author.Email)
+	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// externalRegisteredData son los datos de document.external-registered, con el
+// formato acordado con users-service (ADR-014).
+func externalRegisteredData(doc model.Summary) map[string]any {
+	return map[string]any{
+		"documentId": doc.ID,
+		"title":      doc.Title,
+		"source":     string(doc.Source),
+		"author": map[string]any{
+			"name":       doc.Author.Name,
+			"email":      doc.Author.Email,
+			"externalId": doc.Author.ExternalID,
+		},
+	}
 }
 
 // Submissions lista lo registrado con una API key, en cualquier estado (RF-27).

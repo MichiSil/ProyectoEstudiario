@@ -18,7 +18,8 @@ import (
 
 // V1 es la capacidad publicada para otros grupos, tal como la describe
 // docs/contracts/documents-v1.yaml (ADR-014). Se publica directo, sin pasar por
-// el api-gateway: la autenticación es por API key en X-API-Key.
+// el api-gateway: la autenticación es por API key en X-API-Key, salvo la
+// descarga pública de los PDF de un source externo.
 type V1 struct {
 	Svc     *service.Service
 	Keys    *apikey.Keys
@@ -35,6 +36,8 @@ func (h *V1) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/documents/{documentId}", h.authorized(false, h.detail))
 	mux.HandleFunc("GET /v1/documents/{documentId}/file", h.authorized(false, h.download))
 	mux.HandleFunc("GET /v1/submissions", h.authorized(false, h.submissions))
+	// Sin API key ni login: cualquiera puede ver el PDF (ADR-014).
+	mux.HandleFunc("GET /v1/public/documents/{documentId}/file", h.publicDownload)
 }
 
 type consumerHandler func(w http.ResponseWriter, r *http.Request, consumer string)
@@ -97,7 +100,10 @@ func (h *V1) register(w http.ResponseWriter, r *http.Request, consumer string) {
 	doc, replayed, err := h.Svc.Register(r.Context(), consumer, key, service.NewDocument{
 		Title: up.Fields["title"], Description: up.Fields["description"],
 		Category: up.Fields["category"], Tags: up.Fields["tags"],
-		Author: model.Author{Name: up.Fields["authorName"], ExternalID: strings.TrimSpace(up.Fields["authorExternalId"])},
+		Author: model.Author{
+			Name: up.Fields["authorName"], ExternalID: strings.TrimSpace(up.Fields["authorExternalId"]),
+			Email: up.Fields["authorEmail"],
+		},
 	}, up.File)
 	if err != nil {
 		fail(w, r, h.Logger, err)
@@ -155,6 +161,23 @@ func (h *V1) download(w http.ResponseWriter, r *http.Request, consumer string) {
 		return
 	}
 	sendFile(w, doc, body)
+}
+
+// publicDownload: GET /v1/public/documents/{id}/file, sin autenticación. Sólo
+// los documentos de un source externo que no fueron rechazados ni eliminados;
+// cualquier otro, 404 (ADR-014). El PDF se muestra en el navegador.
+func (h *V1) publicDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("documentId")
+	if !documentIDPattern.MatchString(id) {
+		fail(w, r, h.Logger, model.ErrNotFound)
+		return
+	}
+	doc, body, err := h.Svc.PublicDownload(r.Context(), id)
+	if err != nil {
+		fail(w, r, h.Logger, err)
+		return
+	}
+	sendPDF(w, doc, body, "inline")
 }
 
 // submissions: GET /v1/submissions, lo registrado con esta API key (RF-27).

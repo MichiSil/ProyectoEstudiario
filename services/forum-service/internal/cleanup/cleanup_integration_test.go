@@ -35,7 +35,7 @@ import (
 // del repositorio, que corren en paralelo y borran los suyos al terminar.
 const testAuthor = "test-limpieza"
 
-func setup(t *testing.T) (*repository.Mongo, *storage.MinIO, string) {
+func setup(t *testing.T) (*repository.Mongo, *storage.MinIO, *storage.MinIO, string) {
 	t.Helper()
 	uri, endpoint := os.Getenv("FORUM_TEST_MONGO_URI"), os.Getenv("FORUM_TEST_MINIO_ENDPOINT")
 	if uri == "" || endpoint == "" {
@@ -63,14 +63,20 @@ func setup(t *testing.T) (*repository.Mongo, *storage.MinIO, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	public, err := storage.NewMinIO(endpoint, access, secret, "public-documents", false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Prefijo propio: la limpieza no toca archivos de otros tests ni del foro.
 	prefix := "test-limpieza-" + strings.ToLower(rand.Text()) + "/"
 	t.Cleanup(func() {
-		_ = files.List(context.Background(), prefix, func(key string, _ time.Time) error {
-			return files.Delete(context.Background(), key)
-		})
+		for _, b := range []*storage.MinIO{files, public} {
+			_ = b.List(context.Background(), prefix, func(key string, _ time.Time) error {
+				return b.Delete(context.Background(), key)
+			})
+		}
 	})
-	return repo, files, prefix
+	return repo, files, public, prefix
 }
 
 func put(t *testing.T, files *storage.MinIO, key string) {
@@ -107,18 +113,23 @@ func withDocument(t *testing.T, repo *repository.Mongo, key string, status model
 }
 
 func TestLimpiezaBorraSoloLosPDFSinDocumento(t *testing.T) {
-	repo, files, prefix := setup(t)
+	repo, files, public, prefix := setup(t)
 	huerfano, conDoc, eliminado := prefix+"huerfano.pdf", prefix+"con-documento.pdf", prefix+"eliminado.pdf"
+	huerfanoPublico, externo := prefix+"huerfano-publico.pdf", prefix+"externo.pdf"
 	for _, k := range []string{huerfano, conDoc, eliminado} {
 		put(t, files, k)
 	}
+	for _, k := range []string{huerfanoPublico, externo} {
+		put(t, public, k)
+	}
 	withDocument(t, repo, conDoc, model.StatusApproved)
 	withDocument(t, repo, eliminado, model.StatusDeleted) // un eliminado conserva su documento y su PDF
+	withDocument(t, repo, externo, model.StatusPending)
 
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
 	// Con la antigüedad mínima de 1 hora, los recién subidos no se tocan.
-	c := &cleanup.Cleaner{Files: files, Docs: repo, Logger: logger, MinAge: time.Hour, Prefix: prefix}
+	c := &cleanup.Cleaner{Buckets: []cleanup.Files{files, public}, Docs: repo, Logger: logger, MinAge: time.Hour, Prefix: prefix}
 	if reviewed, deleted, err := c.RunOnce(context.Background()); err != nil || reviewed != 0 || deleted != 0 {
 		t.Fatalf("recién subidos: revisados %d, borrados %d, err %v; no se tenía que revisar ninguno", reviewed, deleted, err)
 	}
@@ -126,17 +137,18 @@ func TestLimpiezaBorraSoloLosPDFSinDocumento(t *testing.T) {
 		t.Fatal("se borró un PDF recién subido")
 	}
 
-	// Una hora después, el huérfano se borra y los que tienen documento quedan.
+	// Una hora después, los huérfanos de los dos buckets se borran y los que
+	// tienen documento quedan.
 	c.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
 	reviewed, deleted, err := c.RunOnce(context.Background())
-	if err != nil || reviewed != 3 || deleted != 1 {
-		t.Fatalf("revisados %d, borrados %d, err %v; se esperaban 3 revisados y 1 borrado", reviewed, deleted, err)
+	if err != nil || reviewed != 5 || deleted != 2 {
+		t.Fatalf("revisados %d, borrados %d, err %v; se esperaban 5 revisados y 2 borrados", reviewed, deleted, err)
 	}
-	if exists(files, huerfano) {
-		t.Error("el PDF huérfano sigue en el bucket")
+	if exists(files, huerfano) || exists(public, huerfanoPublico) {
+		t.Error("un PDF huérfano sigue en su bucket")
 	}
-	if !exists(files, conDoc) || !exists(files, eliminado) {
-		t.Error("se borró un PDF que tiene documento (aprobado o eliminado)")
+	if !exists(files, conDoc) || !exists(files, eliminado) || !exists(public, externo) {
+		t.Error("se borró un PDF que tiene documento (aprobado, eliminado o externo pendiente)")
 	}
 
 	// Otra vuelta (u otra instancia a la vez) no cambia nada.

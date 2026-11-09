@@ -34,6 +34,7 @@ import (
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/apikey"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/controller"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/ratelimit"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service/memory"
@@ -90,10 +91,10 @@ func newContractEnv(t *testing.T) *contractEnv {
 		return env
 	}
 
-	store, files := memory.NewStore(), memory.NewFiles()
-	env.svc = &service.Service{Repo: store, Search: store, Files: files}
-	env.key, env.otherKey = "clave-grupo4", "clave-grupo7"
-	keys, err := apikey.Parse("grupo4:" + keyHash(env.key) + ",grupo7:" + keyHash(env.otherKey))
+	store := memory.NewStore()
+	env.svc = &service.Service{Repo: store, Search: store, Files: memory.NewFiles(), PublicFiles: memory.NewFiles()}
+	env.key, env.otherKey = "clave-agencia", "clave-grupo7"
+	keys, err := apikey.Parse("agencia_de_viajes:" + keyHash(env.key) + ",grupo7:" + keyHash(env.otherKey))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,6 +187,7 @@ func guide(category string) form {
 		fields: map[string]string{
 			"title": "Guía de trekking en los glaciares", "category": category, "tags": "trekking,invierno",
 			"authorName": "Lucía Fernández", "authorExternalId": "viajero-1842", "description": "Recorridos y refugios",
+			"authorEmail": "lucia.fernandez@mail.com",
 		},
 		file: testPDF, fileType: "application/pdf",
 	}
@@ -221,6 +223,15 @@ func TestContratoRegistroYConsulta(t *testing.T) {
 	if resp.Header.Get("RateLimit-Limit") != "60" {
 		t.Errorf("falta RateLimit-Limit: %v", resp.Header)
 	}
+	if file, _ := doc["file"].(map[string]any); file["publicUrl"] != "/v1/public/documents/"+id+"/file" {
+		t.Errorf("file.publicUrl = %v", doc["file"])
+	}
+	if bytes.Contains(body, []byte("lucia.fernandez@mail.com")) {
+		t.Errorf("la respuesta devuelve el authorEmail: %s", body)
+	}
+	if !e.live && doc["source"] != "agencia_de_viajes" {
+		t.Errorf("source = %v, se esperaba el consumidor agencia_de_viajes", doc["source"])
+	}
 
 	// Reintento: mismo documento con Idempotent-Replayed.
 	resp, body = e.register(e.key, idem, guide(category))
@@ -255,6 +266,13 @@ func TestContratoRegistroYConsulta(t *testing.T) {
 	expect(t, resp, body, http.StatusOK, "")
 	if !bytes.Equal(body, testPDF) || resp.Header.Get("Content-Type") != "application/pdf" {
 		t.Errorf("descarga: Content-Type = %q, %d bytes", resp.Header.Get("Content-Type"), len(body))
+	}
+
+	// El PDF es público desde el registro: sin API key.
+	resp, body = e.get("/v1/public/documents/"+id+"/file", "")
+	expect(t, resp, body, http.StatusOK, "")
+	if !bytes.Equal(body, testPDF) || !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "inline") {
+		t.Errorf("ruta pública: Content-Disposition = %q, %d bytes", resp.Header.Get("Content-Disposition"), len(body))
 	}
 
 	if e.live {
@@ -323,6 +341,45 @@ func TestContratoErrores(t *testing.T) {
 
 	resp, body = e.get("/health", "")
 	expect(t, resp, body, http.StatusOK, "")
+}
+
+func TestContratoRutaPublica(t *testing.T) {
+	e := newContractEnv(t)
+	resp, body := e.get("/v1/public/documents/noexiste12345/file", "")
+	expect(t, resp, body, http.StatusNotFound, "NOT_FOUND")
+	if e.live {
+		return // los casos de abajo necesitan publicar como estudiante y moderar
+	}
+	ctx, admin := context.Background(), service.Viewer{UserID: "admin", Admin: true}
+
+	// Un rechazado deja de ser público, y su detalle trae publicUrl null.
+	resp, body = e.register(e.key, newKey(), guide("Patagonia"))
+	id, _ := expect(t, resp, body, http.StatusAccepted, "")["id"].(string)
+	if err := e.svc.Reject(ctx, admin, id, "no se lee"); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = e.get("/v1/public/documents/"+id+"/file", "")
+	expect(t, resp, body, http.StatusNotFound, "NOT_FOUND")
+	resp, body = e.get("/v1/documents/"+id, e.key)
+	if file, _ := expect(t, resp, body, http.StatusOK, "")["file"].(map[string]any); file["publicUrl"] != nil {
+		t.Errorf("rechazado: file.publicUrl = %v, se esperaba null", file["publicUrl"])
+	}
+
+	// Un resumen de un estudiante, aunque esté aprobado, nunca es público.
+	est, err := e.svc.Publish(ctx, service.NewDocument{Title: "Integrales dobles", Category: "Análisis II",
+		Author: model.Author{UserID: "ana", Name: "Ana"}, Source: model.SourceEstudiario}, service.File{ContentType: "application/pdf", Data: testPDF})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Approve(ctx, admin, est.ID); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = e.get("/v1/public/documents/"+est.ID+"/file", "")
+	expect(t, resp, body, http.StatusNotFound, "NOT_FOUND")
+	resp, body = e.get("/v1/documents/"+est.ID, e.key)
+	if file, _ := expect(t, resp, body, http.StatusOK, "")["file"].(map[string]any); file["publicUrl"] != nil {
+		t.Errorf("estudiario: file.publicUrl = %v, se esperaba null", file["publicUrl"])
+	}
 }
 
 func TestContratoCupo(t *testing.T) {

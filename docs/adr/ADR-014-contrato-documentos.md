@@ -1,6 +1,6 @@
 # ADR-014: Contrato propio: registro y consulta de documentos
 
-- **Estado:** Aceptada
+- **Estado:** Aceptada (con los cambios de la sección [*Actualización (2026-11-09)*](#actualización-2026-11-09))
 - **Fecha:** 2026-10-29
 - **Decisión del enunciado:** D8
 - **Reemplaza a:** [ADR-008](ADR-008-contrato-propio.md) (contrato de "generar un plan de estudio")
@@ -105,3 +105,41 @@ Se mantienen las reglas del ADR-008: versionado semántico del documento, versi�
 - Que la implementación de forum-service cumpla el contrato: tests que validen las respuestas reales contra el YAML, y Prism en modo *proxy* contra el servicio.
 - Que el Grupo 4 se integre usando sólo el contrato y la guía.
 - Publicar la URL de la nube y medir los tiempos comprometidos con una prueba de carga.
+
+## Actualización (2026-11-09)
+
+### Qué pidió la cátedra
+
+En la corrección de la Entrega 2, la cátedra pidió cuatro cambios a la capacidad:
+
+1. **Que la agencia la use sin estar logueada, sólo con la API key.** Ya funcionaba así: las rutas `/v1/*` no usan el JWT del api-gateway, sólo `X-API-Key`. No cambia.
+2. **Que `source` diga quién subió el documento.** Lo registrado por el Grupo 4 salía como `externo`, sin decir de qué sistema venía.
+3. **Que los PDF de un source que no es `estudiario` estén en una parte pública**, para que cualquiera los pueda ver sin login ni API key.
+4. **Que la persona de la agencia que sube el documento pueda entrar a Estudiario**, con una cuenta creada para ella y una contraseña generada que le llega por mail.
+
+### Cambios
+
+| Pedido | Decisión |
+|---|---|
+| `source` | Es el **nombre del consumidor** de la API key que registró el documento. En `FORUM_API_KEYS` el consumidor del Grupo 4 pasa a llamarse `agencia_de_viajes`. Los documentos ya guardados con `externo` lo conservan y se siguen leyendo igual: en el contrato, `externo` queda como valor **obsoleto**. |
+| Archivos públicos | Los PDF de los documentos con un source distinto de `estudiario` se guardan en un bucket aparte de MinIO, **`public-documents`**, con permisos sólo para el usuario de forum-service. Los de los estudiantes siguen en `summaries` y siguen siendo privados. La nueva ruta **`GET /v1/public/documents/{id}/file`**, sin autenticación, entrega el PDF si el documento es de un source externo, está en el bucket público y no fue rechazado ni eliminado; si no, `404`. El documento informa esa ruta en **`file.publicUrl`** (`null` si el archivo no es público). |
+| Cuenta para el autor | El registro suma el campo opcional **`authorEmail`**. Si viene, forum-service guarda en el *outbox* del documento, en la misma escritura que lo crea, el evento **`document.external-registered`** (con el sobre del [ADR-005](ADR-005-comunicacion.md) y en `data` el id, el título, el source y el autor con nombre, mail e id externo), y el relay lo publica en el exchange `forum.events`. **La cuenta la crea users-service**, que consume ese evento, genera la contraseña y la manda por mail. |
+
+**Por qué el bucket público no es público en MinIO.** MinIO no se publica a internet ([ADR-003](ADR-003-persistencia.md)): los PDF públicos también salen a través de forum-service, que antes de entregarlos verifica que el documento no fue rechazado ni eliminado. Así un rechazo o una eliminación dejan de mostrar el archivo sin borrarlo ni moverlo: enseguida, salvo que al eliminar un aprobado falle la invalidación de la caché, que puede mantenerlo hasta 10 min ([ADR-007](ADR-007-cache.md)). En la nube la ruta llega sola, porque Caddy ya manda `/v1/*` a forum-service.
+
+**Por qué la cuenta la crea users-service por evento.** Las cuentas son de users-service ([ADR-001](ADR-001-limites-de-servicios.md)): forum-service no las conoce ni las crea. Con el evento, registrar un documento no depende de que users-service o el servidor de mail respondan en ese momento ([ADR-005](ADR-005-comunicacion.md), [ADR-010](ADR-010-resiliencia.md)): si RabbitMQ está caído, el evento espera en el *outbox* y el relay lo publica cuando vuelve. Como el evento se crea junto con el documento, un reintento con la misma `Idempotency-Key` devuelve el documento ya registrado y **no publica otro evento**. notification-service no se entera: su cola sólo está enlazada a `summary.approved` y `summary.rejected`.
+
+### Compatibilidad
+
+Todos los cambios son compatibles con v1, según la política de este ADR: un valor nuevo en `source`, un campo nuevo opcional en el registro (`authorEmail`), un campo nuevo en la respuesta (`file.publicUrl`) y una operación nueva. El contrato pasa a la versión **1.1.0**, sin cambiar la ruta `/v1`, y el cambio queda en el historial del [README del contrato](../contracts/README.md#14-historial-de-cambios).
+
+### Consecuencias
+
+- **Los archivos externos son públicos desde que se suben.** Cualquiera que conozca el id de un documento **pendiente** puede ver su PDF antes de que un administrador lo modere. Se acepta porque es lo que pidió la cátedra y porque el id no es adivinable (26 caracteres aleatorios). Rechazarlo o eliminarlo lo saca de la ruta pública.
+- **Lo moderado sigue moderándose.** El archivo es público, pero el documento sólo aparece en la búsqueda y en el foro cuando se aprueba (RN-19, RN-24).
+- **Los documentos anteriores a la 1.1.0 no cambian:** conservan `source: externo` y su PDF queda en `summaries`, así que no tienen `publicUrl`. No se migran porque nadie los pidió públicos y moverlos agregaría un paso que puede fallar a mitad de camino.
+- **forum-service guarda el mail del autor externo**, porque viaja en el evento del *outbox*. Es un dato personal: nunca se devuelve en las respuestas. Los documentos externos siguen sin generar el mail de moderación (RN-41), aunque traigan `authorEmail`.
+- **La ruta pública no tiene cupo**, porque no hay API key con la que contarlo. Cada descarga pasa por forum-service, así que una avalancha de pedidos le pega a sus dos instancias ([ADR-012](ADR-012-balanceo-de-carga.md)). Se acepta para el volumen esperado.
+- **La limpieza de PDF huérfanos** ([ADR-003](ADR-003-persistencia.md)) recorre los dos buckets.
+- **Hay que renombrar el consumidor en la nube.** El `FORUM_API_KEYS` del `.env` de la nube tiene que usar `agencia_de_viajes` como nombre del consumidor del Grupo 4 (el hash de su clave no cambia). Si no, sus documentos nuevos salen con el nombre viejo como `source`.
+- **El contrato del evento lo comparten forum-service y users-service**: cambiar sus campos exige acordarlo con quien mantiene users-service.

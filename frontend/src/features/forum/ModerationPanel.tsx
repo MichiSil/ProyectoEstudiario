@@ -82,7 +82,7 @@ export function ModerationPanel({ onCountChange }: { onCountChange: (n: number) 
             return (
               <SummaryRow key={s.id} summary={s}>
                 {s.description && <p className="mt-3 line-clamp-3 text-xs text-muted">{s.description}</p>}
-                {s.source === 'externo' && (
+                {s.source !== 'estudiario' && (
                   <p className="mt-2 text-xs text-subtle">Registrado por un sistema externo (Grupo 4).</p>
                 )}
 

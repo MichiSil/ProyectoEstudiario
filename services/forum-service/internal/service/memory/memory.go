@@ -257,7 +257,8 @@ func hasAll(have, want []string) bool {
 	return true
 }
 
-// Files guarda archivos en memoria. Err, si no es nil, hace fallar Put.
+// Files guarda archivos en memoria, como un bucket. Err, si no es nil, hace
+// fallar Put.
 type Files struct {
 	mu   sync.Mutex
 	data map[string][]byte

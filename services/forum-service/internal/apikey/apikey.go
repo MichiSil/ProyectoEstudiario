@@ -25,7 +25,10 @@ type Keys struct {
 // Parse lee la configuración: pares consumidor:hash separados por comas, con
 // el hash SHA-256 de la clave en hexadecimal. Por ejemplo:
 //
-//	FORUM_API_KEYS=grupo4:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8
+//	FORUM_API_KEYS=agencia_de_viajes:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8
+//
+// El consumidor es también el source de los documentos que registra (ADR-014):
+// el del Grupo 4 se llama agencia_de_viajes.
 //
 // El hash de una clave se calcula con: printf '%s' 'la-clave' | shasum -a 256
 func Parse(config string) (*Keys, error) {
