@@ -502,11 +502,25 @@ func (r *Repository) SaveProposal(ctx context.Context, p domain.Plan) error {
 	if warnings == nil {
 		warnings = []string{}
 	}
-	_, err = r.pool.Exec(ctx, `
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	// Pedir otra propuesta descarta las anteriores del mismo examen que no se
+	// confirmaron (sección 6.3): ya no se pueden confirmar (RN-08).
+	if _, err := tx.Exec(ctx, `UPDATE plans SET status = 'descartado' WHERE exam_id = $1 AND student_id = $2 AND status = 'propuesto'`,
+		p.ExamID, p.StudentID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO plans (id, student_id, exam_id, status, generated_by, warnings, drafts, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		p.ID, p.StudentID, p.ExamID, string(p.Status), string(p.GeneratedBy), warnings, drafts, p.CreatedAt)
-	return err
+		p.ID, p.StudentID, p.ExamID, string(p.Status), string(p.GeneratedBy), warnings, drafts, p.CreatedAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) GetPlan(ctx context.Context, studentID, id string) (domain.Plan, error) {
