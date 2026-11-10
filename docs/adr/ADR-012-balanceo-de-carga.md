@@ -94,7 +94,7 @@ Condiciones que pesan:
 - Las dos instancias tienen que ser realmente sin estado: nada que dependa de la memoria de una instancia (por ejemplo, una caché local por instancia) puede usarse para lo que tiene que ser igual en las dos. Por eso la caché compartida es Memcached.
 - Con varias instancias, el *relay* del *outbox* puede publicar un mismo evento más de una vez (ADR-005); los consumidores ya lo toleran por ser idempotentes.
 
-**A validar en la presentación final**
+**A validar en la presentación final** *(validado: ver la sección Actualización y el escenario 1 del [POSTMORTEM](../POSTMORTEM.md))*
 
 - Implementar las dos instancias y el balanceo cuando se implemente forum-service, y ajustar los valores iniciales de los chequeos de salud con las pruebas.
 - Demostrar la caída de una instancia con los logs, las métricas por instancia y el tablero.

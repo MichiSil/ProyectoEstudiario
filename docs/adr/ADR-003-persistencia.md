@@ -1,6 +1,6 @@
 # ADR-003: Persistencia
 
-- **Estado:** Aceptada (validada para planner-service en la Entrega 2)
+- **Estado:** Aceptada (validada en todos los servicios el 2026-11-10; ver *Validación final*)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D3
 - **Reemplaza a:** —
@@ -113,7 +113,7 @@ Implementado en `services/planner-service/internal/adapters/postgres/schema.sql`
 
 **Rendimiento.** Con 1 vCPU, la base sostiene unos 250 flujos completos por segundo, y su CPU es el principal límite del sistema ([ADR-013](ADR-013-capacidad-y-costos.md)).
 
-### Pendiente de validar
+### Pendiente de validar *(validado: ver Validación final)*
 
 - **users-service** (PostgreSQL) y **forum-service** (MongoDB, MinIO, Solr y Memcached) siguen en esqueleto, y **notification-service** (MongoDB) todavía no consume eventos. Sus almacenamientos se validan para la presentación final.
 - En el `docker-compose.yml` de esta entrega, el usuario de la base `planner` es también el usuario administrador del contenedor, porque es la única base. Cuando se sume la base `users`, cada servicio tiene que tener su propio usuario sin permisos sobre la otra. *(Resuelto el 2026-10-29: ver la actualización de abajo.)*
@@ -174,3 +174,18 @@ Se acepta que, si el usuario cambia su nombre o su mail después, el resumen con
 | Test de integración contra MinIO y MongoDB reales (`internal/cleanup`) | Con antigüedad mínima de 1 h no toca los recién subidos; después borra sólo el huérfano y conserva los PDF de un resumen aprobado y de uno eliminado; una segunda vuelta no cambia nada |
 | `docker compose` con la limpieza cada 20 s y antigüedad 0 s, y un PDF subido a mano al bucket sin documento | Borrado en la vuelta siguiente (`reviewed: 10`, `deleted: 1`); los PDF de los resúmenes no se tocaron |
 | MongoDB pausado durante una vuelta | `WARN` con el error; la vuelta siguiente funcionó y el servicio siguió respondiendo |
+
+## Validación final (2026-11-10)
+
+**Resultado: cada almacenamiento quedó integrado a su flujo y probado contra el motor real.** Los cuatro servicios con datos tienen tests de integración contra su dependencia real (enunciado 2.11):
+
+| Servicio | Almacenamiento | Garantía que da la base | Test de integración |
+|---|---|---|---|
+| planner-service | PostgreSQL (`planner`) | Sin superposiciones (`EXCLUDE gist`), una confirmación por clave, un plan confirmado por examen | `adapters/postgres/*_integration_test.go`, `adapters/mcpserver/server_integration_test.go` |
+| users-service | PostgreSQL (`users`) | Mail único (RN-01); puntos del Club una sola vez por resumen (clave primaria por `eventId`, RN-42) | `repository/postgres_integration_test.go`, `repository/club_integration_test.go` (5 inserciones simultáneas del mismo evento guardan una) |
+| forum-service | MongoDB (`forum`) | Una calificación por estudiante y resumen (índice único), *outbox* en el mismo documento | `repository/mongo_integration_test.go` |
+| forum-service | MinIO (`summaries` privado, `public-documents` público) | PDF guardado antes que el documento; limpieza de huérfanos | `storage/minio_integration_test.go`, `cleanup/cleanup_integration_test.go` |
+| forum-service | Solr y Memcached (derivados) | Se reconstruyen desde MongoDB; la caché nunca es fuente de verdad | `search/solr_integration_test.go`, `cache/memcached_integration_test.go` |
+| notification-service | MongoDB (`notifications`) | Un mail por evento (índice único sobre `eventId`, RN-32) | `repository/mongo_integration_test.go`, `broker/rabbitmq_integration_test.go` |
+
+Las caídas de PostgreSQL y de Solr se provocaron en la jornada de fallas ([POSTMORTEM](../POSTMORTEM.md)): PostgreSQL responde `503` y vuelve solo; con Solr caído, lo aprobado entra al índice al volver, sin reindexar a mano.

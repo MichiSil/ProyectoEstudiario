@@ -93,7 +93,7 @@ Se mantienen las reglas del ADR-008: versionado semántico del documento, versi�
 
 **Negativas / limitaciones aceptadas**
 
-- La capacidad pasa a depender de forum-service, que hoy es un esqueleto. Implementarlo es ahora prioridad para la presentación final.
+- La capacidad pasa a depender de forum-service, que hoy es un esqueleto. Implementarlo es ahora prioridad para la presentación final. *(Implementado y desplegado: ver Actualización.)*
 - El consumidor no se entera solo de la moderación: tiene que consultar el estado. Se acepta para v1; un *webhook* queda como posible versión menor.
 - Un documento registrado por el Grupo 4 tarda en publicarse lo que tarde un administrador en moderarlo. El contrato no promete un plazo de moderación, sólo el de aparición en la búsqueda una vez aprobado.
 - Como en el ADR-008, forum-service tiene que resolver por su cuenta, para estas rutas, la API key, el cupo y la correlación, y la idempotencia guarda respuestas durante 24 h en su base.

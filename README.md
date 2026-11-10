@@ -111,7 +111,7 @@ Además de lo obligatorio, el grupo encara dos desafíos adicionales. El alcance
 
 Todo el sistema se levanta con **un único comando** usando Docker, sin configuraciones manuales.
 
-Funcionan **users-service** (registro, inicio de sesión y emisión del JWT) y **planner-service** (pedir y confirmar el plan de estudio), cada uno con su base en PostgreSQL, y **forum-service** (foro de resúmenes y capacidad de documentos para el Grupo 4) con MongoDB y MinIO. El **frontend web** usa users-service y planner-service a través del api-gateway. notification-service todavía es un esqueleto que sólo responde `GET /health`.
+Levanta los cinco componentes con todas sus dependencias: **api-gateway**; **users-service** (cuentas, JWT y Club de Beneficios) y **planner-service** (plan de estudio), cada uno con su base en PostgreSQL; **forum-service** en dos instancias (foro y capacidad para el Grupo 4) con MongoDB, MinIO, Solr y Memcached; **notification-service** (mails de moderación) con MongoDB; RabbitMQ; Prometheus, Grafana y Jaeger; y el **frontend web**.
 
 ### Requisitos
 
