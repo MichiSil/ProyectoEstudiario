@@ -5,6 +5,9 @@ export type PomodoroPhase = 'estudio' | 'descanso'
 export function usePomodoro(studyMinutes: number, breakMinutes: number) {
   const [phase, setPhase] = useState<PomodoroPhase>('estudio')
   const [secondsLeft, setSecondsLeft] = useState(studyMinutes * 60)
+  // Duración de la fase en curso: si se cambian los minutos a mitad de una
+  // fase, el progreso se sigue midiendo contra la duración con la que empezó.
+  const [phaseSeconds, setPhaseSeconds] = useState(studyMinutes * 60)
   const [running, setRunning] = useState(false)
   // started: se apretó Empezar y no se reinició. Pausado = started && !running:
   // el tiempo restante se conserva hasta reanudar o reiniciar.
@@ -16,7 +19,9 @@ export function usePomodoro(studyMinutes: number, breakMinutes: number) {
   // pausado), la duración nueva se aplica recién en la próxima fase.
   useEffect(() => {
     if (started) return
-    setSecondsLeft((phase === 'estudio' ? studyMinutes : breakMinutes) * 60)
+    const duration = (phase === 'estudio' ? studyMinutes : breakMinutes) * 60
+    setSecondsLeft(duration)
+    setPhaseSeconds(duration)
   }, [studyMinutes, breakMinutes, phase, started])
 
   useEffect(() => {
@@ -50,7 +55,10 @@ export function usePomodoro(studyMinutes: number, breakMinutes: number) {
   useEffect(() => {
     if (!running || secondsLeft !== 0) return
     const duration = (phase === 'estudio' ? studyMinutes : breakMinutes) * 60
-    const timeout = window.setTimeout(() => setSecondsLeft(duration), 400)
+    const timeout = window.setTimeout(() => {
+      setSecondsLeft(duration)
+      setPhaseSeconds(duration)
+    }, 400)
     return () => window.clearTimeout(timeout)
   }, [secondsLeft, running, phase, studyMinutes, breakMinutes])
 
@@ -64,8 +72,9 @@ export function usePomodoro(studyMinutes: number, breakMinutes: number) {
     setStarted(false)
     setPhase('estudio')
     setSecondsLeft(studyMinutes * 60)
+    setPhaseSeconds(studyMinutes * 60)
     setCompletedCycles(0)
   }, [studyMinutes])
 
-  return { phase, secondsLeft, running, paused: started && !running, completedCycles, start, pause, reset }
+  return { phase, secondsLeft, phaseSeconds, running, paused: started && !running, completedCycles, start, pause, reset }
 }
