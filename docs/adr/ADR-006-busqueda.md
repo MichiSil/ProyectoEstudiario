@@ -271,3 +271,22 @@ Está en `internal/search/fallback.go` (`ListFallback`), un envoltorio de la bú
 - La página principal del foro y la capacidad del Grupo 4 siguen andando con Solr caído; lo único que se pierde es la búsqueda por texto.
 - Con Solr caído, el listado pesa sobre MongoDB (un `count` y un `find` por página que no esté en la caché). Para el volumen del sistema alcanza.
 - Si Solr está desactualizado (por ejemplo, con un resumen que ya no existe en MongoDB), el total de una página de Solr y el de MongoDB pueden diferir hasta la reconciliación. Se vio en la prueba: dos documentos de un test de integración, borrados de MongoDB a mano, que la reconciliación sacó del índice a los 5 minutos.
+
+## Actualización (2026-11-10): calificaciones al índice
+
+**Problema.** Al calificar un resumen y filtrar por "4 ★ o más", el resumen no aparecía hasta varios minutos después. Calificar guardaba el promedio en MongoDB pero no cambiaba el `updatedAt` del resumen, y el indexador busca los cambios por `updatedAt` cada 5 s: no se enteraba, y el promedio llegaba a Solr recién con la reconciliación. Era el retraso de **5 minutos** aceptado en la sección 5 para el promedio.
+
+**Cambio.** Calificar actualiza el promedio **y el `updatedAt`** del resumen en la misma escritura. El indexador lo vuelve a mandar a Solr en el próximo ciclo y, cuando Solr ya lo muestra, invalida el listado cacheado, como con una aprobación ([ADR-007](ADR-007-cache.md)). La calificación sigue sin invalidar el listado en el momento, para no bajar el porcentaje de aciertos de la caché (ADR-007, actualización de la medición).
+
+La fila del promedio en la tabla de la sección 5 queda así:
+
+| Cambio | Retraso máximo aceptado | Cómo se cumple |
+|---|---|---|
+| Cambia el **promedio** de calificaciones en el filtro y el orden | **1 minuto**, en general **menos de 10 s** | El indexador ve el `updatedAt` nuevo en el próximo ciclo (5 s) + `commitWithin` (≤ 5 s). La reconciliación periódica sigue como respaldo. |
+
+**Frontend.** Calificar ya no reinicia la pestaña *Explorar* (perdía los filtros): relee el listado con la búsqueda puesta enseguida y otra vez a los 6 s, cuando la calificación ya está en Solr, con el aviso *"Actualizando el listado con tu calificación"* si hay una calificación mínima elegida.
+
+**Validación.**
+
+- Test de integración con MongoDB real (`TestCalificarAvisaAlIndexador`): después de calificar, el resumen aparece en `ChangedSince` con el promedio y el `updatedAt` nuevos.
+- Con el sistema levantado: un resumen aprobado sin calificaciones, calificado con 4, apareció con `minRating=4` a los **4,3 s**. En el navegador, al calificarlo y elegir "4 ★ o más", ya estaba en el listado.
