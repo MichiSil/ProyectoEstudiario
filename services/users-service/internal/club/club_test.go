@@ -223,3 +223,23 @@ func TestCorrelationIdSoloSiEsUUID(t *testing.T) {
 		t.Errorf("X-Correlation-Id mandados = %q; se esperaba sólo el UUID", got)
 	}
 }
+
+// Un Club que tarda cuenta como falla para el circuit breaker (POSTMORTEM del
+// 2026-11-10, hallazgo 1): después de 3 timeouts se deja de esperarlo.
+func TestLosTimeoutsAbrenElCircuito(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-r.Context().Done():
+		}
+	})
+	c.callBudget = 400 * time.Millisecond // menos que dos intentos: un solo intento por llamada
+	for range breakerFailures {
+		if _, err := c.Balance(context.Background(), "estudiario-u1"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v", err)
+		}
+	}
+	if c.BreakerState() != "open" {
+		t.Fatalf("estado = %s: los timeouts no contaron como falla", c.BreakerState())
+	}
+}

@@ -53,7 +53,7 @@ Los timeouts entre componentes propios y hacia la IA son los del [ADR-005](ADR-0
 
 | Dependencia | Timeout | Si falla | Si responde lento |
 |---|---|---|---|
-| PostgreSQL (`users`) | 3 s por consulta | `503 SERVICE_UNAVAILABLE` en registro e inicio de sesión. No hay alternativa: sin la base no se pueden verificar credenciales. | Se corta la consulta al vencer el timeout y se responde `503`. |
+| PostgreSQL (`users`) | 3 s por consulta (2 s desde el 2026-11-10, ver *Actualización*) | `503 SERVICE_UNAVAILABLE` en registro e inicio de sesión. No hay alternativa: sin la base no se pueden verificar credenciales. | Se corta la consulta al vencer el timeout y se responde `503`. |
 
 #### planner-service
 
@@ -188,3 +188,15 @@ La degradación de la IA al motor de reglas (escenario principal de la sección 
 - **Solr no es sólo la búsqueda.** La tabla de forum-service queda así para Solr: *"La búsqueda y el listado de aprobados responden `503 SEARCH_UNAVAILABLE`; el detalle, publicar, moderar y calificar siguen."* La corrección (leer el listado sin texto de MongoDB o servir la copia vencida de la caché si Solr falla) queda como acción alta del POSTMORTEM.
 - **users-service tiene una sola instancia:** reiniciarlo deja sin login ni perfil entre 15 y 65 s. Se acepta para la entrega y queda como acción.
 - **Se corrigió** el encabezado `X-Correlation-Id` que users-service le manda al Club: el contrato pide un UUID y el mock rechazaba los pedidos.
+
+### Timeouts alineados (2026-11-10)
+
+La acción alta del POSTMORTEM se resolvió así:
+
+| Dependencia de users-service | Antes | Ahora | Resultado |
+|---|---|---|---|
+| Club de Beneficios, desde el perfil | 4 s por intento y dos llamadas en serie, con 3 s del gateway | El gateway da **10 s** a `/api/users/me/club`; users-service pide saldo y movimientos **en paralelo**, con un tope de **7 s** | Con el Club lento, el perfil responde `200` con `CLUB_UNAVAILABLE`; el corte es de users-service, así que cuenta como falla y abre el *circuit breaker* ([ADR-015](ADR-015-club-de-beneficios.md)) |
+| PostgreSQL (`users`) | 3 s por consulta, igual que el gateway | **2 s** por consulta | Con la base caída, el login responde el `503 SERVICE_UNAVAILABLE` de users-service y no el `504` del gateway |
+
+Además, un pedido que el gateway ya cortó no se registra como `500 error interno`: responde `499` con un log `WARN`.
+

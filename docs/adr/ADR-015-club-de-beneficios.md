@@ -73,7 +73,8 @@ sequenceDiagram
 | Parámetro | ADR-009 | Ahora | Por qué |
 |---|---|---|---|
 | Timeout por intento | 2 s | **4 s** | El Club tarda ~2 s con el despliegue frío; 2 s cortaría pedidos sanos. Queda por debajo de los 5 s de su gateway. |
-| Presupuesto de la llamada | 3 s | **6 s**, reintento incluido | Entra en el timeout del api-gateway hacia users-service. Las acreditaciones no lo usan desde un pedido del usuario: van por la cola. |
+| Presupuesto de la llamada | 3 s | **6 s**, reintento incluido | Las acreditaciones no lo usan desde un pedido del usuario: van por la cola. |
+| Tope del perfil (`GET /me/club`) | — | **7 s**, con el saldo y los movimientos pedidos en paralelo | Si el Club tarda más, el perfil responde con `CLUB_UNAVAILABLE` en lugar de un error. El api-gateway le da **10 s** a `/api/users/me/club` (al resto de `/api/users`, 3 s). *Corregido el 2026-11-10: con los 3 s del gateway y las dos llamadas en serie, un Club lento terminaba en `504`.* |
 | Reintentos | 1 | **1**, a los 200 ms ± 20 % (o `Retry-After`) | Sólo ante error de red, timeout, `429`, `502`, `503`, `504` o `409 IDEMPOTENCY_IN_PROGRESS`, siempre con la misma `Idempotency-Key`. Nunca ante `500` ni `4xx`. |
 | *Circuit breaker* | 3 fallas, 30 s, 1 de prueba | **igual** | Misma librería que la IA (`sony/gobreaker`). Cuentan como falla la indisponibilidad y la API key rechazada; un `404` o un `400` no, porque son problemas del pedido. |
 | Reintentos de la cola | — | 5 s, 15 s, 45 s, 2 min 15 s, 6 min 45 s, después DLQ | Los mismos que notification-service ([ADR-005](ADR-005-comunicacion.md)). |
