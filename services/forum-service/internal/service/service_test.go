@@ -584,3 +584,58 @@ func TestConSolrCaidoElListadoSaleIgual(t *testing.T) {
 		t.Errorf("búsqueda con texto: err = %v, se esperaba ErrSearchUnavailable", err)
 	}
 }
+
+// ---------- El autor elimina su resumen (RF-31) ----------
+
+func TestElAutorEliminaSusResumenes(t *testing.T) {
+	svc, store, _ := newService()
+	pendiente := publish(t, svc, student)
+	aprobado := publish(t, svc, student)
+	if err := svc.Approve(ctx, admin, aprobado.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, doc := range []model.Summary{pendiente, aprobado} {
+		if err := svc.DeleteOwn(ctx, beto, doc.ID); !errors.Is(err, model.ErrNotAuthor) {
+			t.Errorf("otro estudiante elimina: err = %v, se esperaba ErrNotAuthor", err)
+		}
+		if err := svc.DeleteOwn(ctx, ana, doc.ID); err != nil {
+			t.Fatalf("la autora elimina uno %s: %v", doc.Status, err)
+		}
+		if _, err := svc.Get(ctx, ana, doc.ID); !errors.Is(err, model.ErrNotFound) {
+			t.Errorf("después de eliminar: err = %v, se esperaba ErrNotFound (RN-24)", err)
+		}
+		if err := svc.DeleteOwn(ctx, ana, doc.ID); !errors.Is(err, model.ErrNotFound) {
+			t.Errorf("eliminar dos veces: err = %v, se esperaba ErrNotFound", err)
+		}
+		// La misma eliminación que la del admin: summary.deleted en el outbox,
+		// que lo saca del índice (RN-26). No hay evento de mail (RN-35).
+		got, _ := store.Get(ctx, doc.ID)
+		last := got.Outbox[len(got.Outbox)-1]
+		if got.Status != model.StatusDeleted || last.EventType != model.EventDeleted || last.Data["deletedBy"] != "ana" {
+			t.Errorf("estado = %s, último evento = %s %v", got.Status, last.EventType, last.Data)
+		}
+	}
+
+	rechazado := publish(t, svc, student)
+	if err := svc.Reject(ctx, admin, rechazado.ID, "el PDF está incompleto"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteOwn(ctx, ana, rechazado.ID); err != nil {
+		t.Errorf("la autora elimina uno rechazado: %v", err)
+	}
+	if err := svc.DeleteOwn(ctx, ana, "no-existe"); !errors.Is(err, model.ErrNotFound) {
+		t.Errorf("uno que no existe: err = %v, se esperaba ErrNotFound", err)
+	}
+}
+
+func TestUnEstudianteNoEliminaDocumentosExternos(t *testing.T) {
+	svc, _, _ := newService()
+	doc := register(t, svc, "agencia_de_viajes", "", model.Author{Name: "Guía", ExternalID: "ana"})
+	if err := svc.DeleteOwn(ctx, ana, doc.ID); !errors.Is(err, model.ErrNotAuthor) {
+		t.Errorf("err = %v, se esperaba ErrNotAuthor", err)
+	}
+	if err := svc.Delete(ctx, admin, doc.ID); err != nil {
+		t.Errorf("el admin sigue eliminando cualquiera (RF-18): %v", err)
+	}
+}

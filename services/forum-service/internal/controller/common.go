@@ -308,6 +308,8 @@ func fail(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error
 		problem(w, r, http.StatusNotFound, "NOT_FOUND", "el documento no existe", nil)
 	case errors.Is(err, model.ErrForbidden):
 		problem(w, r, http.StatusForbidden, "FORBIDDEN", "la operación es sólo para administradores", nil)
+	case errors.Is(err, model.ErrNotAuthor):
+		problem(w, r, http.StatusForbidden, "FORBIDDEN", "sólo el autor puede eliminar su resumen", nil)
 	case errors.Is(err, model.ErrAlreadyModerated):
 		problem(w, r, http.StatusConflict, "ALREADY_MODERATED", "la publicación ya fue moderada", nil)
 	case errors.Is(err, model.ErrNotApproved):

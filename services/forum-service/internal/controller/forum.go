@@ -45,6 +45,7 @@ func (h *Forum) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /summaries/{id}", h.withViewer(h.detail))
 	mux.HandleFunc("GET /summaries/{id}/file", h.withViewer(h.download))
 	mux.HandleFunc("PUT /summaries/{id}/rating", h.withViewer(h.rate))
+	mux.HandleFunc("DELETE /summaries/{id}", h.withViewer(h.deleteOwn))
 
 	mux.HandleFunc("GET /admin/summaries/pending", h.withAdmin(h.pending))
 	mux.HandleFunc("POST /admin/summaries/{id}/approve", h.withAdmin(h.approve))
@@ -249,6 +250,16 @@ func (h *Forum) afterModeration(w http.ResponseWriter, r *http.Request, v servic
 
 func (h *Forum) delete(w http.ResponseWriter, r *http.Request, v service.Viewer) {
 	if err := h.Svc.Delete(r.Context(), v, r.PathValue("id")); err != nil {
+		fail(w, r, h.Logger, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteOwn: el autor elimina su propio resumen, en cualquier estado (RF-31).
+// Si no es suyo, 403; si no existe o ya se eliminó, 404.
+func (h *Forum) deleteOwn(w http.ResponseWriter, r *http.Request, v service.Viewer) {
+	if err := h.Svc.DeleteOwn(r.Context(), v, r.PathValue("id")); err != nil {
 		fail(w, r, h.Logger, err)
 		return
 	}
