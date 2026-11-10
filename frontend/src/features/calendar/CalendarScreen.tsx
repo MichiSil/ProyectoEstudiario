@@ -20,8 +20,9 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { EXAM_TYPE_LABEL, type Exam, type Session } from '@/api/types'
-import { SESSION_COLOR, SESSION_STATUS_LABEL, examTypeColorVar } from '@/lib/domain-ui'
-import { formatTime, formatTimeRange, localDate } from '@/lib/format'
+import { SESSION_COLOR, examTypeColorVar, sessionPhase } from '@/lib/domain-ui'
+import { formatTime, localDate } from '@/lib/format'
+import { SessionCard } from '@/features/planner/SessionCard'
 import { ExamFormSheet } from './ExamFormSheet'
 import { ExamDetailSheet } from './ExamDetailSheet'
 
@@ -89,8 +90,19 @@ export function CalendarScreen() {
     if (viewMode === 'dia') setSelectedDate(iso(next))
   }
 
+  // Las sesiones usan los mismos colores que en el Plan: verde si se completó,
+  // rojo si terminó sin marcarse.
   function itemColor(item: CalendarItem) {
-    return item.kind === 'exam' ? examTypeColorVar(item.exam.type) : SESSION_COLOR
+    if (item.kind === 'exam') return examTypeColorVar(item.exam.type)
+    const phase = sessionPhase(item.session)
+    if (phase === 'completada') return 'var(--success)'
+    if (phase === 'no-hecha') return 'var(--danger)'
+    return SESSION_COLOR
+  }
+
+  function sessionSubjectName(session: Session) {
+    const exam = examsById.get(session.examId)
+    return exam ? subjectsById.get(exam.subjectId)?.name : undefined
   }
 
   function itemTitle(item: CalendarItem) {
@@ -211,29 +223,27 @@ export function CalendarScreen() {
           <EmptyState title="No hay eventos este día" />
         ) : (
           <div className="flex flex-col gap-2">
-            {selectedDayItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  if (item.kind === 'exam') setDetailExam(item.exam)
-                  else {
-                    const exam = examsById.get(item.session.examId)
-                    if (exam) setDetailExam(exam)
-                  }
-                }}
-                className="animate-fade-in flex w-full items-center gap-3 rounded-2xl border border-border bg-surface p-4 text-left hover:border-accent/40"
-              >
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: itemColor(item) }} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink">{itemTitle(item)}</p>
-                  <p className="text-xs text-muted">
-                    {item.kind === 'exam'
-                      ? `${EXAM_TYPE_LABEL[item.exam.type]}${formatTime(item.exam.startsAt) !== '00:00' ? ` · ${formatTime(item.exam.startsAt)}` : ''}`
-                      : `Sesión de estudio · ${formatTimeRange(item.session.start, item.session.end)} · ${SESSION_STATUS_LABEL[item.session.status]}`}
-                  </p>
-                </div>
-              </button>
-            ))}
+            {selectedDayItems.map((item) =>
+              item.kind === 'session' ? (
+                // Las sesiones se pueden marcar desde acá igual que en el Plan (RF-11).
+                <SessionCard key={item.id} session={item.session} subjectName={sessionSubjectName(item.session)} />
+              ) : (
+                <button
+                  key={item.id}
+                  onClick={() => setDetailExam(item.exam)}
+                  className="animate-fade-in flex w-full items-center gap-3 rounded-2xl border border-border bg-surface p-4 text-left hover:border-accent/40"
+                >
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: itemColor(item) }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-ink">{itemTitle(item)}</p>
+                    <p className="text-xs text-muted">
+                      {EXAM_TYPE_LABEL[item.exam.type]}
+                      {formatTime(item.exam.startsAt) !== '00:00' ? ` · ${formatTime(item.exam.startsAt)}` : ''}
+                    </p>
+                  </div>
+                </button>
+              ),
+            )}
           </div>
         )}
       </section>

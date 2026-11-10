@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { AlertTriangle, BookOpen, Pencil, Sparkles, XCircle } from 'lucide-react'
+import { AlertTriangle, BookOpen, Pencil, RefreshCw, Sparkles, XCircle } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -19,6 +19,7 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
   const [editing, setEditing] = useState(false)
   const [confirmingCancel, setConfirmingCancel] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [replanning, setReplanning] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
   useEffect(() => {
@@ -46,6 +47,22 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
   const time = formatTime(exam.startsAt)
   const cancelled = exam.status === 'cancelado'
   const outdated = exam.planStatus === 'desactualizado'
+
+  // RF-06: rehacer el plan aunque el examen no haya cambiado (por ejemplo, si
+  // el estudiante va atrasado). Queda desactualizado y se pide uno nuevo.
+  async function replan() {
+    setReplanning(true)
+    setError(null)
+    try {
+      rememberExam(await plannerApi.replan(exam.id))
+      await refreshSessions()
+      goTo(`/plan?examen=${exam.id}`)
+    } catch (err) {
+      setError(err)
+    } finally {
+      setReplanning(false)
+    }
+  }
 
   async function cancelExam() {
     setCancelling(true)
@@ -95,8 +112,8 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
       {outdated && !cancelled && (
         <p className="mb-4 flex gap-2 rounded-xl bg-warning/10 px-3 py-2.5 text-sm text-ink">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
-          El examen cambió de fecha y el plan quedó desactualizado. Sus sesiones siguen en el calendario hasta que pidas
-          uno nuevo.
+          El plan quedó desactualizado: cambió el examen, pospusiste una sesión o pediste rehacerlo. Sus sesiones siguen en
+          el calendario hasta que confirmes uno nuevo, que reemplaza las pendientes (las completadas se conservan).
         </p>
       )}
 
@@ -108,7 +125,10 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
           <div className="flex flex-col gap-1.5">
             {plan.map((s) => (
               <div key={s.id} className="flex items-center justify-between gap-3 rounded-xl bg-paper px-3 py-2 text-sm">
-                <span className="min-w-0 truncate text-ink">{s.objective || s.topic}</span>
+                <span className={`min-w-0 truncate ${s.status === 'completada' ? 'text-muted line-through' : s.status === 'pospuesta' ? 'text-subtle' : 'text-ink'}`}>
+                  {s.status === 'completada' ? '✓ ' : s.status === 'pospuesta' ? '⏸ ' : ''}
+                  {s.objective || s.topic}
+                </span>
                 <span className="shrink-0 text-xs text-subtle">
                   {formatDateLong(localDate(s.start))} · {formatTimeRange(s.start, s.end)}
                 </span>
@@ -129,6 +149,12 @@ export function ExamDetailSheet({ exam: selected, onClose }: { exam: Exam | null
           <Button onClick={() => goTo(`/plan?examen=${exam.id}`)}>
             <Sparkles size={16} />
             {outdated ? 'Replanificar' : 'Pedir plan de estudio'}
+          </Button>
+        )}
+        {!cancelled && !!plan.length && !outdated && new Date(exam.startsAt) > new Date() && (
+          <Button variant="secondary" onClick={() => void replan()} disabled={replanning}>
+            <RefreshCw size={16} />
+            {replanning ? 'Preparando…' : 'Rehacer plan'}
           </Button>
         )}
         {subject && !onSubjectPage && (

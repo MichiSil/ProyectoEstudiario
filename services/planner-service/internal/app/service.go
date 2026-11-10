@@ -42,6 +42,53 @@ func (s *Service) ListSubjects(ctx context.Context, studentID string) ([]domain.
 	return s.Repo.ListSubjects(ctx, studentID)
 }
 
+// SubjectPatch son los cambios de una materia. Los campos nil no cambian.
+type SubjectPatch struct {
+	Name       *string
+	Professors *[]string
+	Difficulty *domain.Difficulty
+}
+
+// UpdateSubject edita el nombre, los profesores o la dificultad de una
+// materia propia (RF-04), con las mismas validaciones que al crearla. No toca
+// los planes: cambiar la dificultad no desactualiza un plan ya confirmado; el
+// estudiante decide si lo rehace (RF-06).
+func (s *Service) UpdateSubject(ctx context.Context, studentID, subjectID string, p SubjectPatch) (domain.Subject, error) {
+	return s.Repo.UpdateSubject(ctx, studentID, subjectID, func(sub domain.Subject) (domain.Subject, error) {
+		if p.Name != nil {
+			sub.Name = strings.TrimSpace(*p.Name)
+		}
+		if p.Professors != nil {
+			sub.Professors = cleanList(*p.Professors)
+		}
+		if p.Difficulty != nil {
+			sub.Difficulty = *p.Difficulty
+		}
+		verr := &domain.ValidationError{}
+		if sub.Name == "" {
+			verr.Violations = append(verr.Violations, domain.RuleViolation{Rule: "RF-04", Message: "la materia necesita un nombre", SessionIndex: -1})
+		}
+		if !sub.Difficulty.Valid() {
+			verr.Violations = append(verr.Violations, domain.RuleViolation{Rule: "RF-04", Message: "la dificultad tiene que ser de 1 a 4", SessionIndex: -1})
+		}
+		if len(verr.Violations) > 0 {
+			return sub, verr
+		}
+		return sub, nil
+	})
+}
+
+// cleanList saca los espacios de cada elemento y los vacíos.
+func cleanList(in []string) []string {
+	out := []string{}
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func (s *Service) CreateExam(ctx context.Context, e domain.Exam) (domain.Exam, error) {
 	if _, err := s.Repo.GetSubject(ctx, e.StudentID, e.SubjectID); err != nil {
 		return domain.Exam{}, err // RN-03: sólo sobre materias propias
@@ -378,6 +425,16 @@ func (s *Service) confirmPlan(ctx context.Context, studentID, planID, idempotenc
 		func(booked []domain.Session) error {
 			return domain.ValidatePlan(plan.Drafts, exam, av, booked, now)
 		})
+}
+
+// SetSessionStatus marca una sesión como completada o pospuesta, o deshace
+// una completada (RF-11, RN-48, RN-49). Posponer deja el plan del examen
+// desactualizado, para que el estudiante lo rehaga con ese tema.
+func (s *Service) SetSessionStatus(ctx context.Context, studentID, sessionID string, to domain.SessionStatus) (domain.Session, error) {
+	now := s.Clock.Now()
+	return s.Repo.UpdateSession(ctx, studentID, sessionID, func(cur domain.Session) (domain.Session, bool, error) {
+		return cur.ChangeStatus(to, now)
+	})
 }
 
 func (s *Service) ListSessions(ctx context.Context, studentID string) ([]domain.Session, error) {

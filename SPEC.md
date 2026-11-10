@@ -129,6 +129,14 @@ Un plan sólo se confirma si se cumplen **todas** estas reglas. Si alguna falla,
 | RN-17 | Si un examen se cancela, sus sesiones pendientes se liberan. Las sesiones completadas se conservan como historial. |
 | RN-18 | Al replanificar, sólo se reemplazan las sesiones pendientes. Las completadas no se modifican. |
 
+**Seguimiento de las sesiones** (RF-11)
+
+| ID | Regla |
+|---|---|
+| RN-48 | Una sesión se puede marcar como completada desde su hora de inicio, no antes. Una completada se puede volver a pendiente si se marcó por error. |
+| RN-49 | Una sesión pendiente se puede posponer: libera su horario y el plan de su examen pasa a *desactualizado*, para que el estudiante lo rehaga con ese tema. Una sesión pospuesta no vuelve a pendiente. |
+| RN-50 | Editar una materia (nombre, profesores o dificultad) no cambia los planes ya confirmados: si cambia la dificultad, el estudiante decide si rehace el plan (RF-06). |
+
 ### 6.3 Estados
 
 ```mermaid
@@ -247,6 +255,9 @@ Cada criterio indica entre paréntesis las reglas o requisitos que verifica. Los
 | CA-12 | **Dado** un examen con plan confirmado, **cuando** el estudiante cambia la fecha o los temas del examen, o pide rehacer el plan, **entonces** el plan pasa a *desactualizado*, sus sesiones pendientes se muestran marcadas como desactualizadas y, al confirmar un plan nuevo, lo reemplazan. *(RN-16)* |
 | CA-13 | **Dado** un examen con sesiones completadas y pendientes, **cuando** el estudiante lo cancela, **entonces** las pendientes se liberan y las completadas se conservan. *(RN-17)* |
 | CA-14 | *Retirado el 2026-10-29 junto con RF-13.* Los criterios de la capacidad publicada están en la sección 11. |
+| CA-40 | **Dado** una materia con un error en el nombre, **cuando** el estudiante la edita, **entonces** se guarda el nombre nuevo y sus exámenes y planes siguen igual. *(RF-04, RN-50)* |
+| CA-41 | **Dado** una sesión reservada que ya empezó, **cuando** el estudiante la marca como completada, **entonces** queda completada y cuenta en su progreso; si todavía no empezó, se rechaza. *(RF-11, RN-48)* |
+| CA-42 | **Dado** una sesión pendiente, **cuando** el estudiante la pospone, **entonces** su horario queda libre y el plan del examen pasa a *desactualizado*. *(RF-11, RN-49)* |
 
 ### 9.3 Foro
 

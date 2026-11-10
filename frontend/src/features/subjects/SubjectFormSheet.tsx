@@ -9,17 +9,28 @@ import { plannerApi } from '@/api/planner'
 import { ANTICIPATION_DAYS, DIFFICULTY_LABEL, type Difficulty, type Subject } from '@/api/types'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 
-/** Alta de materia (RF-04): nombre, profesores y dificultad, como POST /subjects. */
+/**
+ * Alta y edición de una materia (RF-04): nombre, profesores y dificultad. Con
+ * `subject` edita esa materia (PATCH, sólo los campos que cambiaron); sin
+ * él, crea una nueva (POST).
+ */
 export function SubjectFormSheet({
   open,
   onClose,
   onCreated,
+  subject,
+  onSaved,
 }: {
   open: boolean
   onClose: () => void
   onCreated?: (subject: Subject) => void
+  /** Materia a editar. */
+  subject?: Subject
+  /** Al guardar una edición, con la materia como estaba antes. */
+  onSaved?: (saved: Subject, before: Subject) => void
 }) {
-  const { addSubject } = usePlannerData()
+  const { addSubject, rememberSubject } = usePlannerData()
+  const editing = !!subject
   const [name, setName] = useState('')
   const [difficulty, setDifficulty] = useState<Difficulty>(2)
   const [professors, setProfessors] = useState<string[]>([])
@@ -29,21 +40,32 @@ export function SubjectFormSheet({
 
   useEffect(() => {
     if (!open) return
-    setName('')
-    setDifficulty(2)
-    setProfessors([])
-    setShowDetails(false)
+    setName(subject?.name ?? '')
+    setDifficulty(subject?.difficulty ?? 2)
+    setProfessors(subject?.professors ?? [])
+    // Al editar se muestran los profesores: suele ser lo que hay que corregir.
+    setShowDetails(!!subject)
     setError(null)
-  }, [open])
+  }, [open, subject])
 
   async function handleSubmit() {
     if (!name.trim()) return
     setSubmitting(true)
     setError(null)
     try {
-      const created = await plannerApi.createSubject({ name: name.trim(), professors, difficulty })
-      addSubject(created)
-      onCreated?.(created)
+      if (subject) {
+        const changes: { name?: string; professors?: string[]; difficulty?: Difficulty } = {}
+        if (name.trim() !== subject.name) changes.name = name.trim()
+        if (professors.join('\n') !== subject.professors.join('\n')) changes.professors = professors
+        if (difficulty !== subject.difficulty) changes.difficulty = difficulty
+        const saved = Object.keys(changes).length ? await plannerApi.updateSubject(subject.id, changes) : subject
+        rememberSubject(saved)
+        onSaved?.(saved, subject)
+      } else {
+        const created = await plannerApi.createSubject({ name: name.trim(), professors, difficulty })
+        addSubject(created)
+        onCreated?.(created)
+      }
       onClose()
     } catch (err) {
       setError(err)
@@ -53,7 +75,7 @@ export function SubjectFormSheet({
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title="Nueva materia">
+    <Sheet open={open} onClose={onClose} title={editing ? 'Editar materia' : 'Nueva materia'}>
       <FieldGroup>
         <Label>Nombre</Label>
         <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Física I" />
@@ -74,13 +96,15 @@ export function SubjectFormSheet({
         </p>
       </FieldGroup>
 
-      <button
-        onClick={() => setShowDetails((v) => !v)}
-        className="mb-4 flex w-full items-center justify-between rounded-xl border border-border px-3 py-2.5 text-sm font-medium text-muted hover:bg-surface-raised"
-      >
-        Más detalles (opcional)
-        {showDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-      </button>
+      {!editing && (
+        <button
+          onClick={() => setShowDetails((v) => !v)}
+          className="mb-4 flex w-full items-center justify-between rounded-xl border border-border px-3 py-2.5 text-sm font-medium text-muted hover:bg-surface-raised"
+        >
+          Más detalles (opcional)
+          {showDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+      )}
 
       {showDetails && (
         <FieldGroup>
@@ -96,7 +120,7 @@ export function SubjectFormSheet({
       )}
 
       <Button className="w-full" disabled={!name.trim() || submitting} onClick={() => void handleSubmit()}>
-        {submitting ? 'Guardando…' : 'Crear materia'}
+        {submitting ? 'Guardando…' : editing ? 'Guardar cambios' : 'Crear materia'}
       </Button>
     </Sheet>
   )

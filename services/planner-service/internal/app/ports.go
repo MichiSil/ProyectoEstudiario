@@ -62,6 +62,9 @@ type PlanRepository interface {
 	CreateSubject(ctx context.Context, s domain.Subject) error
 	GetSubject(ctx context.Context, studentID, subjectID string) (domain.Subject, error)
 	ListSubjects(ctx context.Context, studentID string) ([]domain.Subject, error)
+	// UpdateSubject cambia una materia propia (RF-04). apply recibe la actual y
+	// devuelve la nueva.
+	UpdateSubject(ctx context.Context, studentID, subjectID string, apply func(domain.Subject) (domain.Subject, error)) (domain.Subject, error)
 
 	CreateExam(ctx context.Context, e domain.Exam) error
 	GetExam(ctx context.Context, studentID, examID string) (domain.Exam, error)
@@ -87,6 +90,10 @@ type PlanRepository interface {
 	GetAvailability(ctx context.Context, studentID string) (domain.Availability, error)
 
 	ListBookedSessions(ctx context.Context, studentID string, from time.Time) ([]domain.Session, error)
+	// UpdateSession cambia el estado de una sesión propia (RF-11) dentro de
+	// una transacción con las filas del estudiante bloqueadas. apply recibe la
+	// sesión actual y devuelve la nueva y si su plan pasa a desactualizado.
+	UpdateSession(ctx context.Context, studentID, sessionID string, apply func(domain.Session) (domain.Session, bool, error)) (domain.Session, error)
 
 	SaveProposal(ctx context.Context, p domain.Plan) error
 	GetPlan(ctx context.Context, studentID, planID string) (domain.Plan, error)

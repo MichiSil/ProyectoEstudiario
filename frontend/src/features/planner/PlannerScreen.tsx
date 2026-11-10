@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarPlus, CheckCircle2, Pencil, Settings, Sparkles } from 'lucide-react'
+import { CalendarPlus, CheckCircle2, ChevronDown, ChevronUp, Pencil, Settings, Sparkles } from 'lucide-react'
 import { plannerApi } from '@/api/planner'
 import { ApiError } from '@/api/client'
-import { EXAM_TYPE_LABEL, type Availability, type Exam, type PlanProposal } from '@/api/types'
+import { EXAM_TYPE_LABEL, type Availability, type Exam, type PlanProposal, type Session } from '@/api/types'
 import { ExamDetailSheet } from '@/features/calendar/ExamDetailSheet'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { Card } from '@/components/ui/Card'
@@ -13,6 +13,7 @@ import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { formatDateLong, formatDaysUntil, localDate } from '@/lib/format'
 import { ProposalCard } from './ProposalCard'
 import { SessionCard } from './SessionCard'
+import { sessionPhase } from '@/lib/domain-ui'
 
 /**
  * Plan de estudio: el estudiante pide una propuesta para un examen (RF-08), la
@@ -49,20 +50,22 @@ export function PlannerScreen() {
     [exams, examsWithPlan],
   )
 
-  const today = localDate(new Date())
-  const upcomingSessions = useMemo(
-    () => sessions.filter((s) => s.status !== 'completada').sort((a, b) => a.start.localeCompare(b.start)),
-    [sessions],
-  )
-  const grouped = useMemo(() => {
-    const map = new Map<string, typeof upcomingSessions>()
-    for (const s of upcomingSessions) {
-      const day = localDate(s.start)
-      if (!map.has(day)) map.set(day, [])
-      map.get(day)!.push(s)
+  // Próximas: las que todavía no terminaron (y no se pospusieron), de la más cercana a la más lejana.
+  // Anteriores: las que ya terminaron, completadas o no, y las pospuestas, de la más nueva a la más vieja.
+  const [showPast, setShowPast] = useState(false)
+  const { upcoming, past } = useMemo(() => {
+    const now = new Date()
+    const upcoming: Session[] = []
+    const past: Session[] = []
+    for (const s of sessions) {
+      if (s.status === 'pospuesta' || new Date(s.end) <= now) past.push(s)
+      else upcoming.push(s)
     }
-    return map
-  }, [upcomingSessions])
+    upcoming.sort((a, b) => a.start.localeCompare(b.start))
+    past.sort((a, b) => b.start.localeCompare(a.start))
+    return { upcoming, past }
+  }, [sessions])
+  const pastPending = past.filter((s) => sessionPhase(s) === 'no-hecha').length
 
   async function requestProposal(examId: string) {
     setRequestingId(examId)
@@ -116,6 +119,11 @@ export function PlannerScreen() {
   function discard() {
     setProposal(null)
     setConfirmError(null)
+  }
+
+  const subjectNameOf = (session: Session) => {
+    const exam = examsById.get(session.examId)
+    return exam ? subjectsById.get(exam.subjectId)?.name : undefined
   }
 
   const proposalExam = proposal ? examsById.get(proposal.examId) : undefined
@@ -195,7 +203,7 @@ export function PlannerScreen() {
 
       {!!plannableExams.length && (
         <section className="mt-6">
-          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.1em] text-subtle">Todavía sin plan</p>
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.1em] text-subtle">Para planificar</p>
           <div className="flex flex-col gap-2">
             {plannableExams.map((exam) => {
               const subject = subjectsById.get(exam.subjectId)
@@ -211,7 +219,7 @@ export function PlannerScreen() {
                       {formatDateLong(localDate(exam.startsAt))} · {formatDaysUntil(localDate(exam.startsAt))}
                     </p>
                     {exam.planStatus === 'desactualizado' && (
-                      <p className="mt-0.5 text-xs text-warning">Cambió la fecha: el plan quedó desactualizado.</p>
+                      <p className="mt-0.5 text-xs text-warning">El plan quedó desactualizado: pedí uno nuevo.</p>
                     )}
                     {availability && !hasSlotBefore(availability, exam.startsAt) && (
                       <p className="mt-0.5 text-xs text-warning">No tenés horarios disponibles antes de este examen.</p>
@@ -246,7 +254,7 @@ export function PlannerScreen() {
       )}
 
       <section className="mt-6">
-        {!upcomingSessions.length ? (
+        {!upcoming.length && !past.length ? (
           !plannableExams.length &&
           !proposal && (
             <EmptyState
@@ -264,32 +272,67 @@ export function PlannerScreen() {
           )
         ) : (
           <>
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.1em] text-subtle">Sesiones reservadas</p>
-            <div className="flex flex-col gap-5">
-              {[...grouped.entries()].map(([date, items]) => (
-                <div key={date}>
-                  <h2 className="mb-2 text-sm font-medium capitalize text-ink">
-                    {date < today ? `${formatDateLong(date)} · ya pasó` : formatDateLong(date)}
-                  </h2>
-                  <div className="flex flex-col gap-2">
-                    {items.map((session) => {
-                      const exam = examsById.get(session.examId)
-                      return (
-                        <SessionCard
-                          key={session.id}
-                          session={session}
-                          subjectName={exam ? subjectsById.get(exam.subjectId)?.name : undefined}
-                        />
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.1em] text-subtle">Próximas sesiones</p>
+            {upcoming.length ? (
+              <SessionsByDay sessions={upcoming} subjectNameOf={subjectNameOf} />
+            ) : (
+              <p className="text-sm text-muted">No tenés sesiones por delante. Pedí un plan para tu próximo examen.</p>
+            )}
           </>
         )}
       </section>
+
+      {!!past.length && (
+        <section className="mt-8">
+          <button
+            onClick={() => setShowPast((v) => !v)}
+            className="flex w-full items-center justify-between rounded-xl border border-border px-4 py-3 text-left hover:bg-surface-raised"
+            aria-expanded={showPast}
+          >
+            <span>
+              <span className="text-sm font-medium text-ink">Sesiones anteriores</span>
+              <span className="ml-2 text-xs text-muted">
+                {past.length} · {past.filter((s) => s.status === 'completada').length} completadas
+                {pastPending > 0 && <span className="text-danger"> · {pastPending} sin marcar</span>}
+              </span>
+            </span>
+            {showPast ? <ChevronUp size={16} className="text-muted" /> : <ChevronDown size={16} className="text-muted" />}
+          </button>
+          {showPast && (
+            <div className="mt-4">
+              <SessionsByDay sessions={past} subjectNameOf={subjectNameOf} />
+            </div>
+          )}
+        </section>
+      )}
       <ExamDetailSheet exam={detailExam} onClose={() => setDetailExam(null)} />
+    </div>
+  )
+}
+
+/** Sesiones agrupadas por día, en el orden en que llegan. */
+function SessionsByDay({ sessions, subjectNameOf }: { sessions: Session[]; subjectNameOf: (s: Session) => string | undefined }) {
+  const days = new Map<string, Session[]>()
+  for (const s of sessions) {
+    const day = localDate(s.start)
+    if (!days.has(day)) days.set(day, [])
+    days.get(day)!.push(s)
+  }
+  const today = localDate(new Date())
+  return (
+    <div className="flex flex-col gap-5">
+      {[...days.entries()].map(([date, items]) => (
+        <div key={date}>
+          <h2 className="mb-2 text-sm font-medium capitalize text-ink">
+            {date === today ? `Hoy · ${formatDateLong(date)}` : formatDateLong(date)}
+          </h2>
+          <div className="flex flex-col gap-2">
+            {items.map((session) => (
+              <SessionCard key={session.id} session={session} subjectName={subjectNameOf(session)} />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

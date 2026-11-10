@@ -111,6 +111,16 @@ func (g Guarded) ListMaterials(ctx context.Context, studentID, subjectID string)
 	return out, err
 }
 
+func (g Guarded) UpdateSubject(ctx context.Context, studentID, id string, apply func(domain.Subject) (domain.Subject, error)) (s domain.Subject, err error) {
+	err = g.run(ctx, func(ctx context.Context) error { s, err = g.Repo.UpdateSubject(ctx, studentID, id, apply); return err })
+	return s, err
+}
+
+func (g Guarded) UpdateSession(ctx context.Context, studentID, id string, apply func(domain.Session) (domain.Session, bool, error)) (s domain.Session, err error) {
+	err = g.run(ctx, func(ctx context.Context) error { s, err = g.Repo.UpdateSession(ctx, studentID, id, apply); return err })
+	return s, err
+}
+
 func (g Guarded) DeleteSubject(ctx context.Context, studentID, id string) error {
 	return g.run(ctx, func(ctx context.Context) error { return g.Repo.DeleteSubject(ctx, studentID, id) })
 }
