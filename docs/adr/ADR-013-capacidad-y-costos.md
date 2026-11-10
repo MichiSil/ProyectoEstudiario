@@ -1,6 +1,6 @@
 # ADR-013: Capacidad y costos
 
-- **Estado:** Aceptada (primera medición; se repite con el sistema completo para la presentación final)
+- **Estado:** Aceptada (repetida con el sistema completo el 2026-11-10, ver [Actualización](#actualización-2026-11-10-sistema-completo))
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D13
 - **Reemplaza a:** —
@@ -88,3 +88,70 @@ El costo lo domina la base de datos, igual que la capacidad. A esto se suma el p
 
 - Con el sistema completo: a través del api-gateway, con el foro (lecturas con caché) y con el proveedor de IA.
 - Con el sistema desplegado en la nube, para medir con latencia de red real.
+
+## Actualización (2026-11-10): sistema completo
+
+Se repitió la prueba con el **sistema completo**, como pedía la sección *A repetir*: el flujo principal del plan y la lectura del foro (con caché) **al mismo tiempo y a través del api-gateway**, con el `docker compose` entero (22 contenedores) en una notebook. Script: [`tests/load/sistema-completo.js`](../../tests/load/sistema-completo.js). Detalle: [`tests/load/RESULTADOS.md`](../../tests/load/RESULTADOS.md#2026-11-10-sistema-completo-por-el-api-gateway).
+
+### Resultados
+
+| Usuarios (plan + foro) | Flujos del plan por segundo | Pedidos del foro por segundo | Errores | p95 confirmar |
+|---|---|---|---|---|
+| 10 + 10 | **3,9** | 70,7 | 0 % | 726 ms |
+| 50 + 50 | 6,1 | 91,8 | 0,04 % | 2,4 s |
+| 100 + 100 | 6,9 | 111,9 | 0 % | 3,6 s |
+| Referencia: sólo planner-service, sin gateway | 34,9 | — | 0 % | 820 ms |
+
+Después de todas las corridas: 15.456 planes confirmados, 15.456 confirmaciones, 8 sesiones por plan y **ningún examen con dos planes confirmados**. Bajo carga y con el sistema completo, RN-14 y RN-15 se siguen cumpliendo.
+
+La notebook resultó unas **8 veces más lenta** que la máquina de la primera medición para el mismo script (35 contra 273 flujos por segundo). Por eso estos números no se comparan con los de octubre: se comparan entre sí.
+
+### Principal límite
+
+- **Con todo en una máquina, el límite es la CPU de la máquina, compartida por todos los componentes.** De 50 a 100 usuarios el throughput casi no crece y la latencia se duplica, con los contenedores sumando siempre lo mismo (680 % de promedio, 850 % de pico) y ninguno al máximo. Es el caso del despliegue actual en la nube: una sola VM con todo.
+- **Dentro de esa CPU, el que más consume es el api-gateway** (1,2 a 1,5 CPU), porque todo pasa por él y en cada pedido valida el JWT, arma una traza y registra métricas. Le siguen RabbitMQ (ver abajo) y **PostgreSQL**, que sigue siendo el límite del flujo del plan cuando se lo mide solo (241 % de CPU contra 172 % de planner-service).
+- **La memoria es el segundo límite.** El sistema completo usa entre 1,6 y 2,2 GB. Con 2,9 GB para Docker, la prueba encontró a Jaeger guardando trazas en memoria sin tope (928 MB) y a la VM usando todo el swap, con pausas de 30 s y fallas del DNS interno de Docker. La VM de la nube tiene 4 GB.
+
+Se corrigieron dos cosas de infraestructura que la prueba encontró, sin tocar código:
+
+| Cambio | Efecto |
+|---|---|
+| Jaeger con `MEMORY_MAX_TRACES: 5000` | De 928 MB a ~145 MB con la misma carga |
+| Healthcheck de RabbitMQ cada 30 s (cada 5 s sólo mientras arranca) y `+sbwt none` | RabbitMQ en reposo de ~250 % a ~1 % de CPU: cada chequeo arranca una VM de Erlang que gasta ~9 s de CPU |
+
+### Capacidad frente a la demanda
+
+La demanda estimada en la sección *Contexto* es de **0,35 flujos por segundo** en la hora pico, con un objetivo de **4 flujos por segundo** (10 veces de margen) y el p95 de confirmar por debajo de 500 ms.
+
+- En la notebook, con el sistema completo, se sostuvieron **3,9 flujos por segundo junto con 71 lecturas del foro por segundo, sin errores**. El p95 de confirmar (726 ms) quedó arriba del objetivo en esa corrida: el objetivo de latencia se cumple con menos carga.
+- Para la demanda esperada (0,35 flujos por segundo), alcanza con holgura. Para el margen de 10 veces, en esta notebook, no.
+- **La VM de la nube** (`Standard_B2s`: 2 vCPU *burstable* y 4 GB) tiene bastante menos CPU que la notebook, y además sólo sostiene el 100 % de sus 2 vCPU mientras le duran los créditos de CPU. Con estas mediciones, **alcanza para la demanda estimada y para la evaluación, pero no para el margen de 10 veces**. Queda por medir ahí (se repite cuando el despliegue esté estable).
+
+### Alternativas de escalado, en orden
+
+Reemplazan la lista de la primera medición, que pensaba sólo en planner-service:
+
+1. **Muestrear las trazas** (por ejemplo, el 10 % de los pedidos más todos los que fallan) en vez de trazar todos. Baja la CPU del gateway y de cada servicio, y la memoria de Jaeger, sin cambiar la arquitectura. Es configuración de OpenTelemetry.
+2. **Una VM más grande y no *burstable*** para el despliegue de una sola máquina (por ejemplo 4 vCPU y 16 GB). No requiere cambios.
+3. **Separar las bases** (PostgreSQL y MongoDB) a servicios administrados, para que no compitan por CPU con los servicios. PostgreSQL es el límite del flujo del plan.
+4. **Una segunda instancia del api-gateway y de users-service** detrás de Caddy, como forum-service. El gateway no guarda estado salvo el control de tráfico, que pasaría a ser por instancia (o compartido en Memcached). Además resuelve que reiniciar users-service corte el login ([POSTMORTEM](../POSTMORTEM.md)).
+5. Las de la primera medición siguen valiendo para PostgreSQL una vez separado: más vCPU, PgBouncer con varias instancias de planner-service y réplicas de lectura.
+
+### Costos
+
+Valores **aproximados y a confirmar** con la calculadora de Azure (región East US, pago por uso), para comparar escenarios:
+
+| Escenario | Qué se usa | Costo mensual aproximado |
+|---|---|---|
+| **Evaluación de la materia** (hoy) | Una VM `Standard_B2s` (2 vCPU, 4 GB) con todo el `docker compose` | **USD 30** (del crédito de Azure for Students; detenida no cobra el cómputo) |
+| **5.000 estudiantes** (demanda estimada) | Una VM de 4 vCPU y 16 GB no *burstable* (por ejemplo `D4s_v5`) con todo, y trazas muestreadas | **USD 140 a 160** |
+| **5.000 estudiantes con margen de 10 veces** | Una VM de 4 vCPU para los servicios, PostgreSQL administrado (2 vCPU) y MongoDB administrado chico | **USD 250 a 350** |
+| **50.000 estudiantes** | Dos VM para los servicios detrás de un balanceador, PostgreSQL de 4 vCPU con réplica, MongoDB administrado | **USD 600 a 900** |
+
+Respecto de la primera estimación (USD 15 a 40 para 5.000 estudiantes), el costo sube porque aquella consideraba sólo planner-service y PostgreSQL, y ahora el sistema suma MongoDB, Solr, RabbitMQ, MinIO, Memcached, Prometheus, Grafana y Jaeger. **El costo lo sigue dominando lo que guarda datos**: las bases y Solr son lo que más memoria y CPU pide. La IA se sigue cobrando por uso, y el motor de reglas sigue siendo la alternativa sin costo (RN-09).
+
+### Consecuencias de la actualización
+
+- La prueba encontró dos problemas de configuración que en la nube habrían costado caro: Jaeger llenando la memoria de la VM de 4 GB con tráfico sostenido y el healthcheck de RabbitMQ gastando una parte grande de sus 2 vCPU. Los dos se corrigieron en `docker-compose.yml`, que usa también el despliegue.
+- El sistema completo sigue sin perder ni duplicar datos bajo carga.
+- **Limitaciones:** todo corre en una notebook, k6 incluido, y corridas iguales variaron hasta un 30 %. No se midió con la IA (sin clave en el `.env` local) ni en la nube; las dos quedan pendientes.
