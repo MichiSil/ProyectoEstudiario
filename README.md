@@ -349,6 +349,12 @@ curl -s -X POST -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/
 curl -s -X DELETE -H "Authorization: Bearer $ADMIN" $G/api/forum/admin/summaries/$ID
 ```
 
+**Eliminar un resumen propio** (RF-31). El autor puede eliminar los suyos, en cualquier estado (por ejemplo, si se equivocó de archivo). Es la misma eliminación que la del administrador: deja de verse enseguida, sale de la búsqueda en menos de 10 s, no manda mail (RN-35) y no descuenta los puntos del Club (RN-44). Si el resumen es de otro estudiante responde `403 FORBIDDEN`, y si no existe o ya se eliminó, `404`:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H "Authorization: Bearer $EST" $G/api/forum/summaries/$ID   # 204
+```
+
 Aprobar o rechazar algo que ya no está pendiente responde `409 ALREADY_MODERATED` (RN-23). Cada moderación guarda su evento (`summary.approved`, `summary.rejected` o `summary.deleted`, con el formato del [ADR-005](docs/adr/ADR-005-comunicacion.md)) en el arreglo `outbox` del mismo documento, en la misma actualización, y un *relay* lo publica en RabbitMQ (ver [Notificaciones por mail](#notificaciones-por-mail)).
 
 **Leer y calificar:**
