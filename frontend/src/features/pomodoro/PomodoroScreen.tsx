@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import clsx from 'clsx'
-import { Pause, Play, RotateCcw, Timer } from 'lucide-react'
+import { CheckCircle2, Pause, Play, RotateCcw, Save, Timer } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -18,8 +18,25 @@ type Mode = (typeof PRESETS)[number]['id'] | 'propio'
 
 interface Preferences {
   mode: Mode
+  // Los minutos que se usan ahora (los del predefinido o los propios).
   study: number
   rest: number
+  // Los minutos propios, guardados aparte: elegir 25/5 y volver a "Armar el mío" no los pierde.
+  customStudy: number
+  customRest: number
+}
+
+// Límites de los minutos propios.
+const STUDY_RANGE = { min: 5, max: 120 }
+const REST_RANGE = { min: 1, max: 60 }
+
+/** Valida un campo de minutos: entero dentro del rango, o un mensaje de error. */
+function parseMinutes(text: string, range: { min: number; max: number }, label: string): number | string {
+  const value = Number(text.trim())
+  if (!text.trim() || !Number.isInteger(value) || value < range.min || value > range.max) {
+    return `${label}: un número entero de ${range.min} a ${range.max}.`
+  }
+  return value
 }
 
 const RADIUS = 90
@@ -35,8 +52,17 @@ export function PomodoroScreen() {
     // Preferencias guardadas antes de que existieran los modos: si coinciden con
     // un predefinido se muestran así; si no, como propias.
     const mode = stored.mode ?? PRESETS.find((p) => p.study === study && p.rest === rest)?.id ?? 'propio'
-    return { mode, study, rest }
+    // Antes de guardarse aparte, los propios eran los minutos de uso con el modo "propio".
+    const customStudy = stored.customStudy ?? (mode === 'propio' ? study : 25)
+    const customRest = stored.customRest ?? (mode === 'propio' ? rest : 5)
+    return { mode, study, rest, customStudy, customRest }
   })
+  // Los campos son texto mientras se escriben: se puede borrar el número y
+  // escribir otro. Se validan recién al guardar.
+  const [studyText, setStudyText] = useState(String(prefs.customStudy))
+  const [restText, setRestText] = useState(String(prefs.customRest))
+  const [formError, setFormError] = useState<string | null>(null)
+  const [saved, setSaved] = useState<string | null>(null)
   const studyMinutes = prefs.study
   const breakMinutes = prefs.rest
 
@@ -46,9 +72,37 @@ export function PomodoroScreen() {
     setPrefs(next)
   }
 
-  const { phase, secondsLeft, running, paused, completedCycles, start, pause, reset } = usePomodoro(studyMinutes, breakMinutes)
+  const { phase, secondsLeft, phaseSeconds, running, paused, completedCycles, start, pause, reset } = usePomodoro(studyMinutes, breakMinutes)
 
-  const totalSeconds = (phase === 'estudio' ? studyMinutes : breakMinutes) * 60
+  function chooseCustom() {
+    setStudyText(String(prefs.customStudy))
+    setRestText(String(prefs.customRest))
+    setFormError(null)
+    setSaved(null)
+    updatePrefs({ mode: 'propio', study: prefs.customStudy, rest: prefs.customRest })
+  }
+
+  // Guarda los minutos propios y los usa. Si el temporizador está andando no lo
+  // corta: valen desde la próxima fase (usePomodoro).
+  function saveCustom() {
+    const study = parseMinutes(studyText, STUDY_RANGE, 'Estudio')
+    const rest = parseMinutes(restText, REST_RANGE, 'Descanso')
+    const problems = [study, rest].filter((v): v is string => typeof v === 'string')
+    if (problems.length) {
+      setFormError(problems.join(' '))
+      setSaved(null)
+      return
+    }
+    const s = study as number
+    const r = rest as number
+    setFormError(null)
+    setStudyText(String(s))
+    setRestText(String(r))
+    updatePrefs({ mode: 'propio', study: s, rest: r, customStudy: s, customRest: r })
+    setSaved(running || paused ? 'Guardado. Los minutos nuevos valen desde la próxima fase.' : 'Guardado.')
+  }
+
+  const totalSeconds = phaseSeconds
   const progress = totalSeconds > 0 ? 1 - secondsLeft / totalSeconds : 0
   const minutes = Math.floor(secondsLeft / 60)
   const seconds = secondsLeft % 60
@@ -120,35 +174,71 @@ export function PomodoroScreen() {
           ))}
           <ModeOption
             active={prefs.mode === 'propio'}
-            onClick={() => updatePrefs({ mode: 'propio' })}
+            onClick={chooseCustom}
             title="Armar el mío"
             detail="Elegís los minutos"
           />
         </div>
 
         {prefs.mode === 'propio' && (
-          <div className="animate-fade-in mt-4 grid grid-cols-2 gap-3">
-            <div className="min-w-0">
-              <Label>Estudio (min)</Label>
-              <Input
-                type="number"
-                min={5}
-                step={5}
-                value={studyMinutes}
-                onChange={(e) => updatePrefs({ study: Math.max(1, Number(e.target.value)) })}
-              />
+          <form
+            noValidate
+            className="animate-fade-in mt-4"
+            onSubmit={(e) => {
+              e.preventDefault()
+              saveCustom()
+            }}
+          >
+            <div className="grid grid-cols-2 gap-3">
+              <div className="min-w-0">
+                <Label>Estudio (min)</Label>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={STUDY_RANGE.min}
+                  max={STUDY_RANGE.max}
+                  value={studyText}
+                  onChange={(e) => {
+                    setStudyText(e.target.value)
+                    setSaved(null)
+                  }}
+                />
+                <p className="mt-1 text-[11px] text-subtle">
+                  De {STUDY_RANGE.min} a {STUDY_RANGE.max}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <Label>Descanso (min)</Label>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={REST_RANGE.min}
+                  max={REST_RANGE.max}
+                  value={restText}
+                  onChange={(e) => {
+                    setRestText(e.target.value)
+                    setSaved(null)
+                  }}
+                />
+                <p className="mt-1 text-[11px] text-subtle">
+                  De {REST_RANGE.min} a {REST_RANGE.max}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <Label>Descanso (min)</Label>
-              <Input
-                type="number"
-                min={1}
-                step={5}
-                value={breakMinutes}
-                onChange={(e) => updatePrefs({ rest: Math.max(1, Number(e.target.value)) })}
-              />
+            {formError && <p className="mt-2 text-xs text-danger">{formError}</p>}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button type="submit" size="sm">
+                <Save size={14} />
+                Guardar y usar
+              </Button>
+              {saved && (
+                <span className="animate-fade-in flex items-center gap-1 text-xs text-success">
+                  <CheckCircle2 size={14} />
+                  {saved}
+                </span>
+              )}
             </div>
-          </div>
+          </form>
         )}
       </Card>
     </div>
