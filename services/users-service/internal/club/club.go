@@ -24,6 +24,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +196,9 @@ func New(baseURL, apiKey string, logger *slog.Logger) *Client {
 	return c
 }
 
+// uuidPattern es el formato que pide el contrato para X-Correlation-Id.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // BreakerState devuelve el estado del circuit breaker ("closed", "open" o "half-open").
 func (c *Client) BreakerState() string { return c.breaker.State().String() }
 
@@ -365,8 +369,12 @@ func (c *Client) do(ctx context.Context, method, path, idemKey string, payload [
 	if idemKey != "" {
 		req.Header.Set("Idempotency-Key", idemKey)
 	}
+	// El contrato del Club pide un UUID en X-Correlation-Id. Nuestros
+	// correlationId no siempre lo son (el gateway genera otro formato): en ese
+	// caso no se manda, el Club genera uno y lo devuelve, y queda en el log como
+	// clubCorrelationId junto con el nuestro.
 	if c.CorrelationID != nil {
-		if id := c.CorrelationID(ctx); id != "" {
+		if id := c.CorrelationID(ctx); uuidPattern.MatchString(id) {
 			req.Header.Set("X-Correlation-Id", id)
 		}
 	}
