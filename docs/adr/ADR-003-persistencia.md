@@ -189,3 +189,30 @@ Se acepta que, si el usuario cambia su nombre o su mail después, el resumen con
 | notification-service | MongoDB (`notifications`) | Un mail por evento (índice único sobre `eventId`, RN-32) | `repository/mongo_integration_test.go`, `broker/rabbitmq_integration_test.go` |
 
 Las caídas de PostgreSQL y de Solr se provocaron en la jornada de fallas ([POSTMORTEM](../POSTMORTEM.md)): PostgreSQL responde `503` y vuelve solo; con Solr caído, lo aprobado entra al índice al volver, sin reindexar a mano.
+
+## Actualización (2026-11-10): PDF del material
+
+**Contexto.** El material de una materia era sólo texto: tipo, título y contenido. Los estudiantes querían adjuntar el PDF del teórico o del práctico, para tenerlo a mano al estudiar.
+
+**Decisión.** planner-service también usa **MinIO**, con el mismo criterio que forum-service:
+
+| Aspecto | Cómo queda |
+|---|---|
+| Dónde | Bucket **`materials`**, creado por `minio-init` ([`deploy/minio/init-storage.sh`](../../deploy/minio/init-storage.sh)). |
+| Con qué usuario | **`PLANNER_MINIO_ACCESS_KEY`**, propio de planner-service, con permiso **sólo** sobre `materials` (leer, escribir, borrar y listar). No puede ver los PDF del foro, y forum-service no puede ver los del material. |
+| Qué se guarda en PostgreSQL | La referencia al archivo en la tabla `materials`: `file_key`, `file_name` y `file_size` (vacíos si el material es sólo texto). Las columnas se agregan solas al arrancar. |
+| Límites | Un PDF por material, de hasta **10 MB**, verificado por el tipo declarado y por el contenido (`%PDF-`), igual que en el foro (RN-20). |
+| Orden de escritura | Primero el PDF en MinIO y después la fila en PostgreSQL; si la base falla, se intenta borrar el archivo. Así nunca queda un material apuntando a un archivo que no existe. |
+| Descarga | `GET /materials/{id}/file`, sólo del dueño (RN-03): pasa por planner-service, que verifica el estudiante antes de entregarlo. MinIO no se publica. |
+| Borrado | Borrar el material borra su PDF, después de la fila. Si borrar el archivo falla, queda en el bucket sin nada que lo use (nadie lo puede descargar). |
+| Timeouts | Los de forum-service con MinIO: 10 s para subir y 5 s para leer ([ADR-010](ADR-010-resiliencia.md)). El gateway da 20 s a `POST /subjects/{id}/materials` y planner-service lee el cuerpo hasta 25 s. Si MinIO no responde, adjuntar y descargar responden `503`; el resto del plan sigue. |
+
+`POST /subjects/{id}/materials` acepta `multipart/form-data` (`kind`, `title`, `content` y `file`, todos opcionales menos el título) y, sin archivo, sigue aceptando JSON. Sin tipo, el material queda como teórico. El adaptador está en `internal/adapters/minio` y el núcleo sólo conoce el puerto `app.MaterialFiles` ([ADR-002](ADR-002-arquitectura-interna.md)).
+
+**Limitación aceptada.** **El agente de IA no lee el PDF:** le llegan el título y el contenido escrito del material, como antes. Extraer el texto del PDF y mandarlo en el pedido agrandaría mucho el prompt y el tiempo de respuesta. Por eso el formulario pide escribir en *¿Qué tiene?* los temas del material.
+
+**Validación.**
+
+- Tests del servicio (con un almacenamiento en memoria), del handler (multipart, JSON y descarga sólo del dueño) y de integración con MinIO real (`TestSubirLeerYBorrarUnPDF`, y `TestSoloElBucketMaterials`: el usuario de planner-service no puede escribir en `summaries`) y con PostgreSQL real (`TestIntegration_MaterialConArchivo`).
+- Con el sistema levantado, por el gateway: subir un PDF (`201`, con `file`), descargarlo (`200`, el mismo archivo), descargarlo con otro estudiante (`404`), subir algo que no es PDF (`422`), cargar sólo el título por JSON (`201`) y borrarlo (`204`).
+- En el navegador: adjuntar el PDF desde la pestaña *Material* y, desde el formulario del examen, *Subir material*, que queda elegido en el examen.
