@@ -46,7 +46,7 @@ export const WEEKDAY_LABEL = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueve
 
 /**
  * En qué momento está una sesión, para mostrarla y saber qué se puede hacer:
- * - futura: todavía no empezó, no se puede completar (RN-48);
+ * - futura: todavía no empezó (igual se puede completar, RN-48);
  * - en curso: ya empezó y no terminó;
  * - no hecha: terminó y sigue pendiente;
  * - completada o pospuesta.

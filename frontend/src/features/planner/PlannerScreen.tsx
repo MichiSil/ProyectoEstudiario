@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CalendarPlus, CheckCircle2, ChevronDown, ChevronUp, Pencil, Settings, Sparkles } from 'lucide-react'
 import { plannerApi } from '@/api/planner'
@@ -13,7 +13,6 @@ import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { formatDateLong, formatDaysUntil, localDate } from '@/lib/format'
 import { ProposalCard } from './ProposalCard'
 import { SessionCard } from './SessionCard'
-import { sessionPhase } from '@/lib/domain-ui'
 
 /**
  * Plan de estudio: el estudiante pide una propuesta para un examen (RF-08), la
@@ -50,22 +49,28 @@ export function PlannerScreen() {
     [exams, examsWithPlan],
   )
 
-  // Próximas: las que todavía no terminaron (y no se pospusieron), de la más cercana a la más lejana.
-  // Anteriores: las que ya terminaron, completadas o no, y las pospuestas, de la más nueva a la más vieja.
-  const [showPast, setShowPast] = useState(false)
-  const { upcoming, past } = useMemo(() => {
+  // Tres secciones, según el estado de cada sesión (se recalculan al marcarla o desmarcarla):
+  // - próximas: pendientes que todavía no terminaron, de la más cercana a la más lejana;
+  // - expiradas: terminaron sin completarse, y las pospuestas, de la más nueva a la más vieja;
+  // - completadas: todas las que tienen el tick (también las adelantadas, RN-48), de la más nueva a la más vieja.
+  const [showExpired, setShowExpired] = useState(false)
+  const [showCompleted, setShowCompleted] = useState(false)
+  const { upcoming, expired, completed } = useMemo(() => {
     const now = new Date()
     const upcoming: Session[] = []
-    const past: Session[] = []
+    const expired: Session[] = []
+    const completed: Session[] = []
     for (const s of sessions) {
-      if (s.status === 'pospuesta' || new Date(s.end) <= now) past.push(s)
+      if (s.status === 'completada') completed.push(s)
+      else if (s.status === 'pospuesta' || new Date(s.end) <= now) expired.push(s)
       else upcoming.push(s)
     }
     upcoming.sort((a, b) => a.start.localeCompare(b.start))
-    past.sort((a, b) => b.start.localeCompare(a.start))
-    return { upcoming, past }
+    expired.sort((a, b) => b.start.localeCompare(a.start))
+    completed.sort((a, b) => b.start.localeCompare(a.start))
+    return { upcoming, expired, completed }
   }, [sessions])
-  const pastPending = past.filter((s) => sessionPhase(s) === 'no-hecha').length
+  const expiredPending = expired.filter((s) => s.status === 'pendiente').length
 
   async function requestProposal(examId: string) {
     setRequestingId(examId)
@@ -254,7 +259,7 @@ export function PlannerScreen() {
       )}
 
       <section className="mt-6">
-        {!upcoming.length && !past.length ? (
+        {!sessions.length ? (
           !plannableExams.length &&
           !proposal && (
             <EmptyState
@@ -282,31 +287,61 @@ export function PlannerScreen() {
         )}
       </section>
 
-      {!!past.length && (
-        <section className="mt-8">
-          <button
-            onClick={() => setShowPast((v) => !v)}
-            className="flex w-full items-center justify-between rounded-xl border border-border px-4 py-3 text-left hover:bg-surface-raised"
-            aria-expanded={showPast}
-          >
-            <span>
-              <span className="text-sm font-medium text-ink">Sesiones anteriores</span>
-              <span className="ml-2 text-xs text-muted">
-                {past.length} · {past.filter((s) => s.status === 'completada').length} completadas
-                {pastPending > 0 && <span className="text-danger"> · {pastPending} sin marcar</span>}
-              </span>
-            </span>
-            {showPast ? <ChevronUp size={16} className="text-muted" /> : <ChevronDown size={16} className="text-muted" />}
-          </button>
-          {showPast && (
-            <div className="mt-4">
-              <SessionsByDay sessions={past} subjectNameOf={subjectNameOf} />
-            </div>
-          )}
-        </section>
+      {!!expired.length && (
+        <CollapsibleSection
+          title="Expiradas"
+          count={expired.length}
+          detail={expiredPending > 0 && <span className="text-danger">{expiredPending} sin marcar</span>}
+          open={showExpired}
+          onToggle={() => setShowExpired((v) => !v)}
+        >
+          <SessionsByDay sessions={expired} subjectNameOf={subjectNameOf} />
+        </CollapsibleSection>
+      )}
+
+      {!!completed.length && (
+        <CollapsibleSection title="Completadas" count={completed.length} open={showCompleted} onToggle={() => setShowCompleted((v) => !v)}>
+          <SessionsByDay sessions={completed} subjectNameOf={subjectNameOf} />
+        </CollapsibleSection>
       )}
       <ExamDetailSheet exam={detailExam} onClose={() => setDetailExam(null)} />
     </div>
+  )
+}
+
+/** Sección plegable con la cantidad en el título. El botón tiene borde y fondo marcados para que se vea en claro y en oscuro. */
+function CollapsibleSection({
+  title,
+  count,
+  detail,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string
+  count: number
+  detail?: ReactNode
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section className="mt-8">
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center justify-between rounded-xl border-2 border-subtle/60 bg-surface-raised px-4 py-3 text-left text-ink transition-colors hover:border-muted"
+        aria-expanded={open}
+      >
+        <span className="text-sm">
+          <span className="font-semibold">
+            {title} ({count})
+          </span>
+          {detail && <span className="ml-2 text-xs"> · {detail}</span>}
+        </span>
+        {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+      </button>
+      {open && <div className="mt-4">{children}</div>}
+    </section>
   )
 }
 

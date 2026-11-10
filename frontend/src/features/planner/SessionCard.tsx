@@ -12,8 +12,9 @@ import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { formatDateShort, formatMinutes, formatTimeRange, localDate, minutesBetween } from '@/lib/format'
 
 /**
- * Sesión reservada (RF-10, RF-11). El círculo marca la sesión como completada
- * (o la vuelve a pendiente si se marcó por error). Una sesión que ya terminó
+ * Sesión reservada (RF-10, RF-11). El círculo marca la sesión como completada,
+ * aunque todavía no haya empezado (adelantar el estudio, RN-48), o la vuelve a
+ * pendiente si se marcó por error. Una sesión que ya terminó
  * sin completarse se muestra en rojo, con las opciones de marcarla como hecha
  * o posponerla: posponer libera el horario y deja el plan desactualizado para
  * rehacerlo con ese tema (RN-49).
@@ -40,7 +41,7 @@ export function SessionCard({ session, subjectName }: { session: Session; subjec
   }
 
   const toggle = () => void change(phase === 'completada' ? 'pendiente' : 'completada')
-  const canToggle = phase === 'completada' || phase === 'en-curso' || phase === 'no-hecha'
+  const canToggle = phase !== 'pospuesta'
 
   return (
     <Card className={clsx('animate-fade-in', phase === 'no-hecha' && 'border-danger/40', phase === 'pospuesta' && 'opacity-70')}>
@@ -51,7 +52,7 @@ export function SessionCard({ session, subjectName }: { session: Session; subjec
           aria-label={phase === 'completada' ? 'Volver a pendiente' : 'Marcar como completada'}
           title={
             phase === 'futura'
-              ? 'Vas a poder marcarla cuando empiece'
+              ? 'Marcar como completada (la adelantaste)'
               : phase === 'completada'
                 ? 'Completada: tocá para deshacer'
                 : phase === 'pospuesta'
@@ -71,7 +72,7 @@ export function SessionCard({ session, subjectName }: { session: Session; subjec
           ) : phase === 'pospuesta' ? (
             <PauseCircle size={22} className="text-subtle" />
           ) : (
-            <Circle size={22} className={phase === 'en-curso' ? 'text-accent' : 'text-border'} />
+            <Circle size={22} className={phase === 'en-curso' ? 'text-accent' : 'text-subtle'} />
           )}
         </button>
         <div className="min-w-0 flex-1">
