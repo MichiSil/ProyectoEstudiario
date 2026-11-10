@@ -1,6 +1,6 @@
 # Resultados de las pruebas de carga
 
-Scripts (k6): [`plan-flow.js`](plan-flow.js) para planner-service y [`forum-read.js`](forum-read.js) para la caché del foro. Análisis y decisiones: [ADR-013](../../docs/adr/ADR-013-capacidad-y-costos.md) y [ADR-007](../../docs/adr/ADR-007-cache.md).
+Scripts (k6): [`plan-flow.js`](plan-flow.js) para planner-service, [`forum-read.js`](forum-read.js) para la caché del foro y [`sistema-completo.js`](sistema-completo.js) para el sistema completo por el api-gateway. Análisis y decisiones: [ADR-013](../../docs/adr/ADR-013-capacidad-y-costos.md) y [ADR-007](../../docs/adr/ADR-007-cache.md).
 
 ## 2026-10-19: flujo principal de planner-service
 
@@ -129,7 +129,8 @@ Se corrió dos veces seguidas con los mismos datos y la misma carga, cambiando s
 ```bash
 # Sin caché: FORUM_CACHE_PROVIDER=none en el .env
 docker compose up -d --force-recreate forum-service
-docker run --rm -i --network estudiario_default -e BASE_URL=http://forum-service:8083   -e INTERNAL_TOKEN=$(grep ^INTERNAL_TOKEN= .env | cut -d= -f2 | tr -d '')   grafana/k6:0.54.0 run - < tests/load/forum-read.js
+docker run --rm -i --network estudiario_default -e BASE_URL=http://forum-service:8083   -e INTERNAL_TOKEN=$(grep ^INTERNAL_TOKEN= .env | cut -d= -f2 | tr -d '
+')   grafana/k6:0.54.0 run - < tests/load/forum-read.js
 
 # Con caché: FORUM_CACHE_PROVIDER=memcached en el .env, y lo mismo
 docker compose restart memcached
@@ -138,4 +139,90 @@ docker run ... (igual que arriba)
 
 # Aciertos de la corrida
 docker compose logs --since 5m forum-service | grep '"caché del foro"'
+```
+
+## 2026-11-10: sistema completo por el api-gateway
+
+### Entorno
+
+| Componente | Recursos |
+|---|---|
+| Máquina | Notebook con Windows 11, Intel Core i7-1355U (2 núcleos de rendimiento y 8 de eficiencia, 12 hilos) |
+| Docker Desktop | 12 CPU y **2,9 GB de RAM** para todos los contenedores, **sin límites por contenedor** |
+| Sistema | El `docker compose` completo: 22 contenedores, con las dos instancias de forum-service, Memcached, Solr, RabbitMQ, Prometheus, Grafana y Jaeger |
+| Generador de carga | k6 0.54 en otro contenedor de la misma máquina, contra el **api-gateway** por la red de Docker |
+| Generador de planes | Motor de reglas (sin clave de IA en el `.env` local) |
+
+A diferencia de las pruebas anteriores, cada pedido pasa por el gateway: validación del JWT, control de tráfico (subido a 1.000.000 por minuto para la prueba), traza, métricas y, en el foro, balanceo entre las dos instancias. Todo compite por la CPU de una sola notebook, k6 incluido.
+
+### Escenario
+
+[`sistema-completo.js`](sistema-completo.js) corre a la vez dos grupos de usuarios virtuales, cada uno con la rampa de `plan-flow.js` (20 %, 50 % y 100 % de los usuarios en 30 s, 1 min y 1 min, y bajada en 20 s):
+
+- **plan:** el flujo principal de `plan-flow.js` (materia, disponibilidad, examen, propuesta, confirmación y reintento con la misma `Idempotency-Key`), un estudiante nuevo por iteración;
+- **foro:** la mezcla de `forum-read.js` (55 % listado, 42 % detalle, 3 % calificar) sobre 40 resúmenes aprobados, con la caché prendida.
+
+Los JWT los firma el script con el `JWT_SECRET` del `.env`, como `devtoken`, para no medir el registro y el login.
+
+### Resultados
+
+Flujos y pedidos por segundo, promediados sobre los 2 min 50 s de la corrida (como en las pruebas de octubre):
+
+| Usuarios (plan + foro) | Flujos del plan | Pedidos del foro | Pedidos totales | Errores | Confirmar p50 / p95 | Proponer p95 | Listado p95 | Detalle p95 |
+|---|---|---|---|---|---|---|---|---|
+| 10 + 10 | 669 (**3,9/s**) | 70,7/s | 86,0/s | **0 %** | 322 / **726 ms** | 392 ms | 160 ms | 130 ms |
+| 50 + 50 | 1.031 (6,1/s) | 91,8/s | 115,8/s | 0,04 % | 977 / 2.398 ms | 2.362 ms | 696 ms | 615 ms |
+| 100 + 100 | 1.172 (6,9/s) | 111,9/s | 140,5/s | 0 % | 1.679 / 3.565 ms | 4.022 ms | 1.108 ms | 914 ms |
+| Referencia: `plan-flow.js` directo a planner-service, hasta 100 usuarios | 5.929 (34,9/s) | — | 209,5/s | 0 % | 320 / 820 ms | 959 ms | — | — |
+
+Uso de CPU (`docker stats` cada ~20 s) con 100 + 100:
+
+| Contenedor | CPU promedio | CPU máxima |
+|---|---|---|
+| **api-gateway** | **123 %** | 161 % |
+| RabbitMQ | 103 % | 225 % |
+| PostgreSQL | 91 % | 119 % |
+| planner-service | 70 % | 99 % |
+| k6 | 67 % | 104 % |
+| forum-service-1 y forum-service-2 | 61 % y 58 % | 94 % y 92 % |
+| MongoDB | 44 % | 99 % |
+| **Todos los contenedores** | **679 %** | **842 %** |
+
+En la referencia directa a planner-service, PostgreSQL usó 241 % y planner-service 172 %.
+
+**Consistencia después de todas las corridas** (consulta directa a PostgreSQL): **15.456 planes confirmados, 15.456 confirmaciones, 123.648 sesiones (8 por plan) y ningún examen con más de un plan confirmado.** Ningún reintento duplicó sesiones.
+
+### Lectura
+
+- **El límite en esta notebook es la CPU de toda la máquina, no un servicio.** Con 50 + 50 y con 100 + 100 los contenedores suman lo mismo (680 % de promedio, 850 % de pico): de 50 a 100 usuarios el throughput apenas crece (de 116 a 141 pedidos por segundo) y la latencia se duplica. Ningún contenedor llega a su máximo.
+- **Dentro del sistema, el que más CPU usa es el api-gateway** (1,2 a 1,5 CPU): valida un JWT, arma una traza y registra métricas en cada pedido, y es el único componente por el que pasa todo. En el camino del plan sin gateway, el que más usa sigue siendo **PostgreSQL**, como en octubre: la confirmación es la operación más cara (p50 de 320 ms aun con poca carga).
+- **El sistema completo rinde unas 5 veces menos que planner-service solo** en la misma máquina (6,9 contra 34,9 flujos por segundo): el plan comparte la CPU con el gateway y con el foro, que en estas corridas recibió entre 15 y 18 veces más pedidos que flujos tuvo el plan.
+- **Esta notebook es unas 8 veces más lenta que la máquina de octubre** para el mismo `plan-flow.js` (35 contra 273 flujos por segundo, y allá planner y PostgreSQL tenían sólo 1 vCPU cada uno). Los números sirven para comparar corridas entre sí, no como capacidad de la nube.
+- **Contra el objetivo del ADR-013** (4 flujos por segundo con el p95 de confirmar por debajo de 500 ms): con 10 + 10 usuarios se sostuvieron 3,9 flujos por segundo **junto con 71 lecturas del foro por segundo**, sin errores, pero el p95 de confirmar fue de 726 ms. En esta máquina, el objetivo de latencia se cumple con menos carga que la de esa corrida.
+- **Corridas repetidas con la misma carga variaron hasta un 30 %** (por ejemplo, 50 + 50 dio 8,7 flujos por segundo antes del cambio de RabbitMQ de abajo y 6,1 después, sin que el cambio pudiera empeorarlo). Con más de una hora de carga sostenida, la notebook no da números estables: hay que mirar las tendencias.
+
+### Problemas que encontró la prueba (y se corrigieron)
+
+Las primeras tres corridas (50 + 50, 20 + 20 y 100 + 100) se **descartaron**:
+
+| Problema | Qué se vio | Corrección |
+|---|---|---|
+| **Jaeger sin tope de memoria** | Jaeger (`all-in-one`) guarda las trazas en memoria y no tenía límite: llegó a **928 MB** de los 2,9 GB, la VM de Docker usaba **2 GB de swap** (todo el disponible), hubo pausas de **hasta 30 s** y en una corrida falló el DNS interno de Docker (`lookup forum-service on 127.0.0.11:53`): el gateway sacó las dos instancias del foro de la rotación y respondió 1.403 veces `ninguna instancia disponible` (7,5 % de errores). | `MEMORY_MAX_TRACES: 5000` en `docker-compose.yml`: Jaeger quedó en **~145 MB** con la misma carga. Con 20.000 trazas quedaba en ~480 MB. |
+| **Healthcheck de RabbitMQ** | RabbitMQ usaba **2 a 4 CPU sin mensajes**. La mayor parte era su propio healthcheck: `rabbitmq-diagnostics` arranca una VM de Erlang que gasta unos 9 s de CPU, y corría cada 5 s. Era también la causa de que el healthcheck pasara su timeout en la jornada de fallas ([POSTMORTEM](../../docs/POSTMORTEM.md)). | Healthcheck cada 5 s sólo durante el arranque (`start_interval`) y después cada 30 s, y `+sbwt none` para que los schedulers de Erlang no esperen girando. En reposo, RabbitMQ pasó de **~250 % a ~1 %** de CPU. |
+| **Listado del foro con Solr lento** | En la primera corrida, 125 listados respondieron `503 SEARCH_UNAVAILABLE`: con la caché vencida, Solr no contestó en sus 2 s. | No se corrigió acá: es el mismo hallazgo del POSTMORTEM (el listado depende de Solr). Con Jaeger acotado no volvió a pasar. |
+
+### Cómo repetirlo
+
+```bash
+RATE_LIMIT_USER_PER_MIN=1000000 docker compose up -d api-gateway      # que el control de tráfico no frene la prueba
+docker run --rm -i --network estudiario_default \
+  -e JWT_SECRET=$(grep ^JWT_SECRET= .env | cut -d= -f2 | tr -d '\r') \
+  -e PLAN_VUS=50 -e FORO_VUS=50 \
+  grafana/k6:0.54.0 run - < tests/load/sistema-completo.js
+docker compose up -d api-gateway                                       # vuelve el límite del .env
+
+# referencia: el plan solo, directo a planner-service
+docker run --rm -i --network estudiario_default -e BASE_URL=http://planner-service:8082 \
+  -e INTERNAL_TOKEN=$(grep ^INTERNAL_TOKEN= .env | cut -d= -f2 | tr -d '\r') \
+  grafana/k6:0.54.0 run - < tests/load/plan-flow.js
 ```

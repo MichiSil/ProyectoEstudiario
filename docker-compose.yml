@@ -416,16 +416,24 @@ services:
       # web. Cada servicio tiene su propio usuario.
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:?falta RABBITMQ_ADMIN_USER en el .env (copiá de nuevo .env.example a .env)}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?falta RABBITMQ_ADMIN_PASSWORD en el .env (copiá de nuevo .env.example a .env)}
+      # Sin esto, los schedulers de Erlang esperan girando y RabbitMQ usa 2 a 4
+      # CPU aunque no haya mensajes, quitándoselas al resto (ADR-013).
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+sbwt none +sbwtdcpu none +sbwtdio none"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       # Interfaz de administración y shovel, para reinyectar la DLQ desde la interfaz ("Move messages").
       - ./deploy/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    # rabbitmq-diagnostics arranca una VM de Erlang en cada chequeo (unos 9 s
+    # de CPU): cada 5 s eran casi 2 CPU permanentes y, con la máquina cargada,
+    # pasaba su timeout (docs/POSTMORTEM.md). Cada 5 s sólo mientras arranca;
+    # después, cada 30 s.
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 3m
+      start_interval: 5s
     restart: unless-stopped
 
   # Crea los usuarios de forum-service y notification-service y la topología
@@ -478,6 +486,10 @@ services:
       - "4318:4318"   # OTLP HTTP
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      # Guarda las trazas en memoria: sin tope crece con cada pedido (llegó a
+      # casi 1 GB en la prueba de carga, ADR-013). 5.000 trazas ocupan unos
+      # 120 MB y alcanzan para seguir un pedido de las últimas horas de uso.
+      MEMORY_MAX_TRACES: "5000"
     restart: unless-stopped
 
   # Métricas (ADR-011): Prometheus lee el GET /metrics de cada servicio en su
