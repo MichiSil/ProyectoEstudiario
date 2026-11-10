@@ -110,6 +110,16 @@ func (r *memRepo) CreateMaterial(_ context.Context, m domain.Material) error {
 	return nil
 }
 
+func (r *memRepo) GetMaterial(_ context.Context, st, id string) (domain.Material, error) {
+	materialsMu.Lock()
+	defer materialsMu.Unlock()
+	m, ok := r.materials[id]
+	if !ok || m.StudentID != st {
+		return domain.Material{}, domain.ErrNotFound
+	}
+	return m, nil
+}
+
 func (r *memRepo) ListMaterials(_ context.Context, st, subjectID string) ([]domain.Material, error) {
 	materialsMu.Lock()
 	defer materialsMu.Unlock()

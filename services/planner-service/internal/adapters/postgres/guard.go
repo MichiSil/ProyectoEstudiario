@@ -103,6 +103,11 @@ func (g Guarded) CreateMaterial(ctx context.Context, m domain.Material) error {
 	return g.run(ctx, func(ctx context.Context) error { return g.Repo.CreateMaterial(ctx, m) })
 }
 
+func (g Guarded) GetMaterial(ctx context.Context, studentID, id string) (m domain.Material, err error) {
+	err = g.run(ctx, func(ctx context.Context) error { m, err = g.Repo.GetMaterial(ctx, studentID, id); return err })
+	return m, err
+}
+
 func (g Guarded) ListMaterials(ctx context.Context, studentID, subjectID string) (out []domain.Material, err error) {
 	err = g.run(ctx, func(ctx context.Context) error {
 		out, err = g.Repo.ListMaterials(ctx, studentID, subjectID)

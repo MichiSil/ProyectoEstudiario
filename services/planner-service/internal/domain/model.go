@@ -91,8 +91,19 @@ type Material struct {
 	Title     string
 	// Content es lo que tiene adentro: temas, ejercicios, páginas. Opcional;
 	// la IA lo usa para decidir qué hacer en cada sesión.
-	Content   string
+	Content string
+	// File es el PDF adjunto, guardado en MinIO (ADR-003). nil si el material
+	// es sólo texto. La IA no lo lee: le llegan el título y el contenido.
+	File      *MaterialFile
 	CreatedAt time.Time
+}
+
+// MaterialFile es la referencia al PDF de un material.
+type MaterialFile struct {
+	Key         string // clave en el bucket materials
+	FileName    string // nombre sugerido al descargarlo
+	ContentType string
+	SizeBytes   int64
 }
 
 type ExamStatus string

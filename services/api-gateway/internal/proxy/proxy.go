@@ -115,11 +115,15 @@ func trimPrefix(path, prefix string) string {
 
 func stripPrefix(path string) string { return trimPrefix(path, PlannerPrefix) }
 
-// timeoutFor da 12 s a la propuesta de plan (puede esperar a la IA) y 5 s al
-// resto. El agente por MCP también puede pedir una propuesta (proponer_plan),
-// así que /mcp tiene el mismo tiempo.
+// timeoutFor da 12 s a la propuesta de plan (puede esperar a la IA), 20 s a
+// cargar material (puede traer un PDF de 10 MB) y 5 s al resto. El agente por
+// MCP también puede pedir una propuesta (proponer_plan), así que /mcp tiene el
+// mismo tiempo que la propuesta.
 func timeoutFor(r *http.Request) time.Duration {
 	p := stripPrefix(r.URL.Path)
+	if r.Method == http.MethodPost && strings.HasPrefix(p, "/subjects/") && strings.HasSuffix(p, "/materials") {
+		return UploadTimeout
+	}
 	if r.Method == http.MethodPost && strings.HasPrefix(p, "/exams/") && strings.HasSuffix(p, "/proposals") {
 		return ProposalTimeout
 	}

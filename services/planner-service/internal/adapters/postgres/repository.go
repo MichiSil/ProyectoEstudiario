@@ -314,17 +314,48 @@ func (r *Repository) DeleteSubject(ctx context.Context, studentID, id string) er
 }
 
 func (r *Repository) CreateMaterial(ctx context.Context, m domain.Material) error {
+	var key, name string
+	var size int64
+	if m.File != nil {
+		key, name, size = m.File.Key, m.File.FileName, m.File.SizeBytes
+	}
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO materials (id, student_id, subject_id, kind, title, content, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		m.ID, m.StudentID, m.SubjectID, string(m.Kind), m.Title, m.Content, m.CreatedAt)
+		`INSERT INTO materials (id, student_id, subject_id, kind, title, content, file_key, file_name, file_size, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		m.ID, m.StudentID, m.SubjectID, string(m.Kind), m.Title, m.Content, key, name, size, m.CreatedAt)
 	return err
+}
+
+const materialColumns = `id, student_id, subject_id, kind, title, content, file_key, file_name, file_size, created_at`
+
+func scanMaterial(row pgx.Row) (domain.Material, error) {
+	var m domain.Material
+	var kind, key, name string
+	var size int64
+	if err := row.Scan(&m.ID, &m.StudentID, &m.SubjectID, &kind, &m.Title, &m.Content, &key, &name, &size, &m.CreatedAt); err != nil {
+		return domain.Material{}, err
+	}
+	m.Kind = domain.MaterialKind(kind)
+	if key != "" {
+		m.File = &domain.MaterialFile{Key: key, FileName: name, ContentType: "application/pdf", SizeBytes: size}
+	}
+	return m, nil
+}
+
+// GetMaterial devuelve un material propio, o ErrNotFound (RN-03).
+func (r *Repository) GetMaterial(ctx context.Context, studentID, id string) (domain.Material, error) {
+	m, err := scanMaterial(r.pool.QueryRow(ctx, `SELECT `+materialColumns+` FROM materials WHERE id = $1 AND student_id = $2`, id, studentID))
+	if err != nil {
+		return domain.Material{}, notFound(err)
+	}
+	return m, nil
 }
 
 // ListMaterials devuelve el material de una materia: primero los teóricos y
 // después los prácticos, cada grupo en el orden en que se cargó.
 func (r *Repository) ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, student_id, subject_id, kind, title, content, created_at FROM materials
+		SELECT `+materialColumns+` FROM materials
 		WHERE student_id = $1 AND subject_id = $2 ORDER BY kind = 'practico', created_at`, studentID, subjectID)
 	if err != nil {
 		return nil, err
@@ -332,12 +363,10 @@ func (r *Repository) ListMaterials(ctx context.Context, studentID, subjectID str
 	defer rows.Close()
 	out := []domain.Material{}
 	for rows.Next() {
-		var m domain.Material
-		var kind string
-		if err := rows.Scan(&m.ID, &m.StudentID, &m.SubjectID, &kind, &m.Title, &m.Content, &m.CreatedAt); err != nil {
+		m, err := scanMaterial(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.Kind = domain.MaterialKind(kind)
 		out = append(out, m)
 	}
 	return out, rows.Err()

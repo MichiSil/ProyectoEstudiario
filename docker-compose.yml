@@ -80,6 +80,11 @@ services:
       AI_MODEL: ${AI_MODEL:-}
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_TIMEOUT: ${AI_TIMEOUT:-}
+      # PDF del material en el bucket `materials`, con el usuario propio de planner-service (ADR-003).
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${PLANNER_MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${PLANNER_MINIO_SECRET_KEY}
+      MINIO_BUCKET: materials
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
       interval: 10s
@@ -87,6 +92,8 @@ services:
       retries: 5
     depends_on:
       db-init:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
       jaeger:
         condition: service_started
@@ -376,6 +383,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       FORUM_MINIO_ACCESS_KEY: ${FORUM_MINIO_ACCESS_KEY:?falta FORUM_MINIO_ACCESS_KEY en el .env (ver .env.example)}
       FORUM_MINIO_SECRET_KEY: ${FORUM_MINIO_SECRET_KEY:?falta FORUM_MINIO_SECRET_KEY en el .env (ver .env.example)}
+      PLANNER_MINIO_ACCESS_KEY: ${PLANNER_MINIO_ACCESS_KEY:?falta PLANNER_MINIO_ACCESS_KEY en el .env (ver .env.example)}
+      PLANNER_MINIO_SECRET_KEY: ${PLANNER_MINIO_SECRET_KEY:?falta PLANNER_MINIO_SECRET_KEY en el .env (ver .env.example)}
     volumes:
       - ./deploy/minio:/scripts:ro
     entrypoint: ["sh", "/scripts/init-storage.sh"]

@@ -108,6 +108,8 @@ func TestTimeoutSegunLaOperacion(t *testing.T) {
 		{http.MethodPost, "/api/planner/plans/p-1/confirm", DefaultTimeout},
 		{http.MethodGet, "/api/planner/sessions", DefaultTimeout},
 		{http.MethodPost, "/api/planner/mcp", ProposalTimeout},
+		{http.MethodPost, "/api/planner/subjects/s-1/materials", UploadTimeout},
+		{http.MethodGet, "/api/planner/subjects/s-1/materials", DefaultTimeout},
 	}
 	for _, c := range casos {
 		if got := timeoutFor(httptest.NewRequest(c.method, c.path, nil)); got != c.want {
