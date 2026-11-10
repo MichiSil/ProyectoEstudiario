@@ -39,6 +39,9 @@ export const forumApi = {
   rate: (id: string, score: number) =>
     request<Summary>(`${base}/summaries/${encodeURIComponent(id)}/rating`, { method: 'PUT', body: { score } }),
 
+  /** RF-31: el autor elimina su propio resumen, en cualquier estado. */
+  removeOwn: (id: string) => request<void>(`${base}/summaries/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   download: (summary: Summary) => downloadFile(summary.file.downloadPath.replace(/^\/api/, ''), `${summary.title}.pdf`),
 
   // ---------- Moderación (sólo admin) ----------

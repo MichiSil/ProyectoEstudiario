@@ -7,21 +7,23 @@ import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { forumApi } from '@/api/forum'
 import type { Summary } from '@/api/types'
 import { formatDateLong, localDate } from '@/lib/format'
-import { formatSize, RatingSummary, StarPicker, StatusBadge } from './shared'
+import { formatSize, OWN_DELETE_QUESTION, RatingSummary, StarPicker, StatusBadge } from './shared'
 
 /**
  * Detalle de un resumen (RF-21): descripción, descarga del PDF y calificación
- * de 1 a 5 (RF-22). Un admin además puede eliminarlo (RF-18).
+ * de 1 a 5 (RF-22). Su autor puede eliminarlo (RF-31), y un admin, cualquiera (RF-18).
  */
 export function SummaryDetailSheet({
   summary,
   isAdmin,
+  isOwn,
   onClose,
   onChanged,
   onDeleted,
 }: {
   summary: Summary | null
   isAdmin: boolean
+  isOwn: boolean
   onClose: () => void
   onChanged: (s: Summary) => void
   onDeleted: (id: string) => void
@@ -113,10 +115,12 @@ export function SummaryDetailSheet({
         </div>
       )}
 
-      {isAdmin &&
+      {(isOwn || isAdmin) &&
         (confirmDelete ? (
           <div className="mt-5 rounded-xl bg-danger/10 p-3">
-            <p className="mb-3 text-sm text-ink">¿Eliminar este resumen? Deja de aparecer en el foro para todos.</p>
+            <p className="mb-3 text-sm text-ink">
+              {isOwn ? OWN_DELETE_QUESTION : '¿Eliminar este resumen? Deja de aparecer en el foro para todos.'}
+            </p>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={() => setConfirmDelete(false)} disabled={busy !== null}>
                 Volver
@@ -126,7 +130,8 @@ export function SummaryDetailSheet({
                 disabled={busy !== null}
                 onClick={() =>
                   void run('delete', async () => {
-                    await forumApi.remove(current.id)
+                    // El autor usa su propia ruta; un admin, la de moderación.
+                    await (isOwn ? forumApi.removeOwn(current.id) : forumApi.remove(current.id))
                     onDeleted(current.id)
                     onClose()
                   })
@@ -139,7 +144,7 @@ export function SummaryDetailSheet({
         ) : (
           <Button variant="ghost" className="mt-3 w-full text-danger!" onClick={() => setConfirmDelete(true)}>
             <Trash2 size={16} />
-            Eliminar (administración)
+            {isOwn ? 'Eliminar' : 'Eliminar (administración)'}
           </Button>
         ))}
     </Sheet>

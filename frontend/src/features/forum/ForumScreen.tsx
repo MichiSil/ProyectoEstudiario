@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { useSearchParams } from 'react-router-dom'
-import { MessagesSquare, Search, Upload, X } from 'lucide-react'
+import { MessagesSquare, Search, Trash2, Upload, X } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Field'
@@ -12,7 +12,7 @@ import type { Summary } from '@/api/types'
 import { useSession } from '@/app/providers/SessionProvider'
 import { ModerationPanel } from './ModerationPanel'
 import { SummaryDetailSheet } from './SummaryDetailSheet'
-import { SummaryRow } from './shared'
+import { OWN_DELETE_QUESTION, SummaryRow } from './shared'
 import { UploadSummarySheet } from './UploadSummarySheet'
 
 type Tab = 'explorar' | 'mias' | 'moderacion'
@@ -29,8 +29,19 @@ export function ForumScreen() {
   const [refreshKey, setRefreshKey] = useState(0)
   // Calificar no reinicia la pestaña Explorar (perdería los filtros): le avisa
   // que vuelva a leer el listado con la búsqueda que tiene puesta.
-  const [exploreKey, setExploreKey] = useState(0)
   const [ratedSignal, setRatedSignal] = useState(0)
+  // Los ids de mis resúmenes, para ofrecer "Eliminar" también en el detalle
+  // que se abre desde Explorar (RF-31), y los que se eliminaron en esta
+  // pantalla, que se sacan de las listas sin volver a pedirlas.
+  const [mineIds, setMineIds] = useState<ReadonlySet<string>>(new Set())
+  const [deletedIds, setDeletedIds] = useState<ReadonlySet<string>>(new Set())
+
+  useEffect(() => {
+    forumApi
+      .mine()
+      .then((p) => setMineIds(new Set(p.items.map((s) => s.id))))
+      .catch(() => setMineIds(new Set()))
+  }, [refreshKey])
 
   // El número de pendientes en la pestaña, aunque el admin esté en otra.
   useEffect(() => {
@@ -40,6 +51,17 @@ export function ForumScreen() {
       .then((p) => setPendingCount(p.total))
       .catch(() => setPendingCount(null))
   }, [isAdmin, refreshKey])
+
+  function deleted(id: string) {
+    setDeletedIds((prev) => new Set(prev).add(id))
+    setSelected((s) => (s?.id === id ? null : s))
+    if (isAdmin) {
+      forumApi
+        .pending()
+        .then((p) => setPendingCount(p.total))
+        .catch(() => setPendingCount(null))
+    }
+  }
 
   function replace(updated: Summary) {
     setSelected((s) => (s?.id === updated.id ? updated : s))
@@ -83,8 +105,10 @@ export function ForumScreen() {
       </div>
 
       <div className="mt-5">
-        {tab === 'explorar' && <ExploreTab key={exploreKey} onOpen={setSelected} reloadSignal={ratedSignal} />}
-        {tab === 'mias' && <MineTab key={refreshKey} onOpen={setSelected} onUpload={() => setUploadOpen(true)} />}
+        {tab === 'explorar' && <ExploreTab onOpen={setSelected} reloadSignal={ratedSignal} hidden={deletedIds} />}
+        {tab === 'mias' && (
+          <MineTab key={refreshKey} onOpen={setSelected} onUpload={() => setUploadOpen(true)} hidden={deletedIds} onDeleted={deleted} />
+        )}
         {tab === 'moderacion' && isAdmin && <ModerationPanel onCountChange={setPendingCount} />}
       </div>
 
@@ -99,12 +123,10 @@ export function ForumScreen() {
       <SummaryDetailSheet
         summary={selected}
         isAdmin={isAdmin}
+        isOwn={!!selected && mineIds.has(selected.id)}
         onClose={() => setSelected(null)}
         onChanged={replace}
-        onDeleted={() => {
-          setRefreshKey((k) => k + 1)
-          setExploreKey((k) => k + 1)
-        }}
+        onDeleted={deleted}
       />
     </div>
   )
@@ -132,7 +154,15 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 const INDEX_DELAY_MS = 6000
 
 /** Búsqueda de aprobados con texto, materia y orden (RF-19, RF-20). */
-function ExploreTab({ onOpen, reloadSignal }: { onOpen: (s: Summary) => void; reloadSignal: number }) {
+function ExploreTab({
+  onOpen,
+  reloadSignal,
+  hidden,
+}: {
+  onOpen: (s: Summary) => void
+  reloadSignal: number
+  hidden: ReadonlySet<string>
+}) {
   const [text, setText] = useState('')
   const [category, setCategory] = useState('')
   const [sort, setSort] = useState<SummarySort>('relevance')
@@ -202,6 +232,8 @@ function ExploreTab({ onOpen, reloadSignal }: { onOpen: (s: Summary) => void; re
   }
 
   const filtering = !!query.q || !!query.category || query.minRating > 0
+  const visible = items?.filter((s) => !hidden.has(s.id)) ?? null
+  const shownTotal = total - ((items?.length ?? 0) - (visible?.length ?? 0))
 
   return (
     <div>
@@ -256,9 +288,9 @@ function ExploreTab({ onOpen, reloadSignal }: { onOpen: (s: Summary) => void; re
             Actualizando el listado con tu calificación: el filtro la tiene en cuenta en unos segundos.
           </p>
         )}
-        {items === null ? (
+        {visible === null ? (
           <p className="py-8 text-center text-sm text-muted">Cargando resúmenes…</p>
-        ) : !items.length ? (
+        ) : !visible.length ? (
           <EmptyState
             icon={<MessagesSquare size={28} />}
             title={filtering ? 'No encontramos resúmenes con esa búsqueda' : 'Todavía no hay resúmenes publicados'}
@@ -274,12 +306,12 @@ function ExploreTab({ onOpen, reloadSignal }: { onOpen: (s: Summary) => void; re
         ) : (
           <>
             <p className="text-xs text-muted">
-              {total} {total === 1 ? 'resumen' : 'resúmenes'}
+              {shownTotal} {shownTotal === 1 ? 'resumen' : 'resúmenes'}
             </p>
-            {items.map((s) => (
+            {visible.map((s) => (
               <SummaryRow key={s.id} summary={s} onClick={() => onOpen(s)} />
             ))}
-            {items.length < total && (
+            {(items?.length ?? 0) < total && (
               <Button
                 variant="secondary"
                 size="sm"
@@ -300,10 +332,38 @@ function ExploreTab({ onOpen, reloadSignal }: { onOpen: (s: Summary) => void; re
   )
 }
 
-/** Mis publicaciones con su estado y, si fue rechazada, el motivo (RF-15). */
-function MineTab({ onOpen, onUpload }: { onOpen: (s: Summary) => void; onUpload: () => void }) {
+/** Mis publicaciones con su estado y, si fue rechazada, el motivo (RF-15). El
+ * autor puede eliminar cualquiera, en cualquier estado (RF-31). */
+function MineTab({
+  onOpen,
+  onUpload,
+  hidden,
+  onDeleted,
+}: {
+  onOpen: (s: Summary) => void
+  onUpload: () => void
+  hidden: ReadonlySet<string>
+  onDeleted: (id: string) => void
+}) {
   const [items, setItems] = useState<Summary[] | null>(null)
   const [error, setError] = useState<unknown>(null)
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<{ id: string; err: unknown } | null>(null)
+
+  async function remove(id: string) {
+    setDeleting(id)
+    setDeleteError(null)
+    try {
+      await forumApi.removeOwn(id)
+      setConfirming(null)
+      onDeleted(id)
+    } catch (err) {
+      setDeleteError({ id, err })
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   useEffect(() => {
     forumApi
@@ -316,11 +376,12 @@ function MineTab({ onOpen, onUpload }: { onOpen: (s: Summary) => void; onUpload:
   }, [])
 
   if (items === null) return <p className="py-8 text-center text-sm text-muted">Cargando tus resúmenes…</p>
+  const visible = items.filter((s) => !hidden.has(s.id))
 
   return (
     <div className="flex flex-col gap-2">
       {!!error && <ApiErrorNotice error={error} />}
-      {!items.length ? (
+      {!visible.length ? (
         <EmptyState
           icon={<Upload size={28} />}
           title="Todavía no subiste resúmenes"
@@ -333,7 +394,35 @@ function MineTab({ onOpen, onUpload }: { onOpen: (s: Summary) => void; onUpload:
           }
         />
       ) : (
-        items.map((s) => <SummaryRow key={s.id} summary={s} showStatus onClick={() => onOpen(s)} />)
+        visible.map((s) => (
+          <SummaryRow key={s.id} summary={s} showStatus onClick={() => onOpen(s)}>
+            {confirming === s.id ? (
+              <div className="mt-3 rounded-lg bg-danger/10 p-3">
+                <p className="mb-2 text-xs text-ink">{OWN_DELETE_QUESTION}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => setConfirming(null)} disabled={deleting === s.id}>
+                    Volver
+                  </Button>
+                  <Button variant="danger" size="sm" disabled={deleting === s.id} onClick={() => void remove(s.id)}>
+                    {deleting === s.id ? 'Eliminando…' : 'Sí, eliminar'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 flex justify-end">
+                <Button variant="ghost" size="sm" className="text-danger!" onClick={() => setConfirming(s.id)}>
+                  <Trash2 size={15} />
+                  Eliminar
+                </Button>
+              </div>
+            )}
+            {deleteError?.id === s.id && (
+              <div className="mt-3">
+                <ApiErrorNotice error={deleteError.err} />
+              </div>
+            )}
+          </SummaryRow>
+        ))
       )}
     </div>
   )
