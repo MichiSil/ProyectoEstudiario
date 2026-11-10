@@ -195,8 +195,23 @@ Al empezar, el mock respondía `400` a la consulta de saldo: el contrato del Clu
 | 4 | Dos instancias de users-service detrás del gateway, como forum-service, o cargar `CLUB_BASE_URL` sin reiniciar | Grupo | Media |
 | 5 | Healthcheck de RabbitMQ más liviano (`rabbitmq-diagnostics -q ping`) o con más timeout | Grupo | Baja |
 | 6 | Alerta del Club con `max_over_time(users_club_breaker_state[1m]) == 2`, para que el *half-open* no la reinicie; `ConfirmarLento` con un mínimo de confirmaciones | Flor (métricas) | Baja |
-| 7 | Repetir la jornada en la nube, con el Club real | Grupo | Media |
+| 7 | Repetir la jornada en la nube, con el Club real | Mia (despliegue) | 🟡 En parte (10/11): el escenario del Club caído se repitió en la nube (detalle abajo). Las caídas de una instancia del foro, de Solr y de PostgreSQL no se repitieron en la nube: se probaron con `docker compose`, que es el mismo, y tumbar las bases de la VM el día de la presentación era un riesgo que no valía la pena |
 | — | `X-Correlation-Id` del Club sólo si es UUID | Toto | ✅ Hecha (`fix/club-correlation-id`) |
+| 8 | `POST /v1/documents` con un texto que no es UTF-8 válido (un cliente de Windows que manda "Guía" en otra codificación) responde `500 INTERNAL_ERROR`: MongoDB rechaza el texto (`text contains invalid UTF-8`). Tiene que ser `422 VALIDATION_ERROR` antes de guardar. Se vio en la prueba de la nube del 10/11 | Flor (forum-service) | Media |
+| 9 | `setup.sh` no recrea Caddy: si cambia el `Caddyfile`, el contenedor sigue con el archivo viejo (el montaje apunta al archivo reemplazado por `git pull`). El 9/11 hubo que hacer `up -d --force-recreate caddy` a mano | Mia (despliegue) | Baja |
+
+**Acción 7: el Club caído en la nube (10/11/2026, horas UTC).** Con un estudiante de prueba, desde afuera por la URL pública:
+
+| Hora | Qué pasó |
+|---|---|
+| 14:13:26 | `CLUB_BASE_URL=http://club-caido.invalid` en el `.env` de la VM y `up -d users-service` |
+| 14:13:42 | Vincular la cuenta: `202` en 0,6 s con `{"status":"pendiente","warning":"CLUB_UNAVAILABLE"}`. En el log, `WARN falló la llamada al Club` con el `correlationId` y la causa (`no such host`) |
+| 14:13:44 | `cambió el estado del circuit breaker` de `closed` a `open`: desde ahí no se llama más al Club (`durationMs: 0`) |
+| 14:13:46 | Perfil (`GET /me/club`): `200` en 0,3 s con el mismo aviso: Configuración muestra "No pudimos consultar tus puntos". El planner, el foro y la app siguieron respondiendo `200` |
+| 14:14:21 | `CLUB_BASE_URL` de vuelta a la del Club real y `up -d users-service`. Al arrancar: `Club de Beneficios configurado` |
+| 14:14:35 | Perfil: `200`, `sin_vincular` y sin aviso |
+
+Antes de restablecer se borró la vinculación pendiente del estudiante de prueba, para que el barrido no diera de alta en el Club real del Grupo 1 una cuenta con un mail que no existe. Por eso, en la nube no se repitió la acreditación de los puntos pendientes después de la vuelta: quedó probada en local (escenario 2). Con el Club real, una cuenta real se vinculó y quedó `vinculada`, así que la API key de la nube y el flujo de vinculación andan.
 
 **Acciones del antecedente (30/10):**
 
