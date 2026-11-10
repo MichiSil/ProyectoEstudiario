@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { Availability, ConfirmResult, Difficulty, Exam, ExamModality, ExamType, Material, MaterialKind, PlanProposal, Session, Subject } from './types'
+import type { Availability, ConfirmResult, Difficulty, Exam, ExamModality, ExamType, Material, MaterialKind, PlanProposal, Session, SessionStatus, Subject } from './types'
 
 // Endpoints de planner-service publicados en el api-gateway bajo /api/planner.
 
@@ -10,6 +10,14 @@ export const plannerApi = {
 
   createSubject: (input: { name: string; professors: string[]; difficulty: Difficulty }) =>
     request<Subject>(`${base}/subjects`, { method: 'POST', body: input }),
+
+  /** RF-04: sólo se mandan los campos que cambian. No toca los planes ya confirmados (RN-50). */
+  updateSubject: (subjectId: string, changes: { name?: string; professors?: string[]; difficulty?: Difficulty }) =>
+    request<Subject>(`${base}/subjects/${encodeURIComponent(subjectId)}`, { method: 'PATCH', body: changes }),
+
+  /** RF-04: cancela sus exámenes y libera sus sesiones pendientes; las completadas quedan como historial. */
+  deleteSubject: (subjectId: string) =>
+    request<void>(`${base}/subjects/${encodeURIComponent(subjectId)}`, { method: 'DELETE' }),
 
   listMaterials: (subjectId: string) => request<Material[]>(`${base}/subjects/${encodeURIComponent(subjectId)}/materials`),
 
@@ -42,6 +50,9 @@ export const plannerApi = {
   cancelExam: (examId: string) =>
     request<Exam>(`${base}/exams/${encodeURIComponent(examId)}/cancel`, { method: 'POST' }),
 
+  /** RF-07: la disponibilidad guardada. 404 AVAILABILITY_NOT_SET si todavía no la cargó. */
+  getAvailability: () => request<Availability>(`${base}/availability`),
+
   setAvailability: (input: Availability) =>
     request<void>(`${base}/availability`, { method: 'PUT', body: input }),
 
@@ -60,4 +71,15 @@ export const plannerApi = {
     }),
 
   listSessions: () => request<Session[]>(`${base}/sessions`),
+
+  /**
+   * RF-11: completar (desde que empieza, RN-48), posponer (libera el horario y
+   * desactualiza el plan, RN-49) o volver a pendiente una completada.
+   */
+  setSessionStatus: (sessionId: string, status: SessionStatus) =>
+    request<Session>(`${base}/sessions/${encodeURIComponent(sessionId)}`, { method: 'PATCH', body: { status } }),
+
+  /** RF-06: rehacer el plan aunque el examen no haya cambiado: lo deja desactualizado para pedir otro. */
+  replan: (examId: string) =>
+    request<Exam>(`${base}/exams/${encodeURIComponent(examId)}/replan`, { method: 'POST' }),
 }

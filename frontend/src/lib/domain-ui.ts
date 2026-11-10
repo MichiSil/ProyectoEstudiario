@@ -1,4 +1,4 @@
-import type { Difficulty, ExamType, SessionStatus } from '@/api/types'
+import type { Difficulty, ExamType, Session, SessionStatus } from '@/api/types'
 
 export function difficultyColorVar(level: Difficulty): string {
   return {
@@ -43,3 +43,20 @@ export function subjectColor(subjectId: string): string {
 }
 
 export const WEEKDAY_LABEL = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+
+/**
+ * En qué momento está una sesión, para mostrarla y saber qué se puede hacer:
+ * - futura: todavía no empezó, no se puede completar (RN-48);
+ * - en curso: ya empezó y no terminó;
+ * - no hecha: terminó y sigue pendiente;
+ * - completada o pospuesta.
+ */
+export type SessionPhase = 'futura' | 'en-curso' | 'no-hecha' | 'completada' | 'pospuesta'
+
+export function sessionPhase(session: Session, now = new Date()): SessionPhase {
+  if (session.status === 'completada') return 'completada'
+  if (session.status === 'pospuesta') return 'pospuesta'
+  if (new Date(session.start) > now) return 'futura'
+  if (new Date(session.end) > now) return 'en-curso'
+  return 'no-hecha'
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { useSearchParams } from 'react-router-dom'
-import { MessagesSquare, Search, Upload } from 'lucide-react'
+import { MessagesSquare, Search, Upload, X } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Input, Select } from '@/components/ui/Field'
@@ -152,6 +152,22 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
     setQuery({ q: text.trim(), category: category.trim(), sort })
   }
 
+  // La búsqueda se aplica al apretar "Buscar". Si el estudiante vacía los dos
+  // campos, se vuelve solo al listado completo, sin tener que buscar de nuevo.
+  function onTextChange(value: string) {
+    setText(value)
+    if (!value.trim() && !category.trim() && query.q) setQuery((q) => ({ ...q, q: '', category: '' }))
+  }
+  function onCategoryChange(value: string) {
+    setCategory(value)
+    if (!value.trim() && !text.trim() && query.category) setQuery((q) => ({ ...q, q: '', category: '' }))
+  }
+  function clearSearch() {
+    setText('')
+    setCategory('')
+    setQuery((q) => ({ ...q, q: '', category: '' }))
+  }
+
   const filtering = !!query.q || !!query.category
 
   return (
@@ -159,20 +175,34 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
       <form onSubmit={submit} className="flex flex-col gap-2">
         <div className="relative">
           <Search size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-subtle" />
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Buscar por título o tema" className="pl-9" />
+          <Input
+            type="search"
+            value={text}
+            onChange={(e) => onTextChange(e.target.value)}
+            placeholder="Buscar por título o tema"
+            className="pl-9"
+          />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Materia" />
+          <Input value={category} onChange={(e) => onCategoryChange(e.target.value)} placeholder="Materia" />
           <Select value={sort} onChange={(e) => setSort(e.target.value as SummarySort)} aria-label="Ordenar">
             <option value="relevance">Más relevantes</option>
             <option value="rating">Mejor calificados</option>
             <option value="date">Más nuevos</option>
           </Select>
         </div>
-        <Button type="submit" variant="secondary" size="sm" className="self-start">
-          <Search size={14} />
-          Buscar
-        </Button>
+        <div className="flex gap-2">
+          <Button type="submit" variant="secondary" size="sm">
+            <Search size={14} />
+            Buscar
+          </Button>
+          {filtering && (
+            <Button type="button" variant="ghost" size="sm" onClick={clearSearch}>
+              <X size={14} />
+              Limpiar búsqueda
+            </Button>
+          )}
+        </div>
       </form>
 
       <div className="mt-4 flex flex-col gap-2">
@@ -184,6 +214,13 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
             icon={<MessagesSquare size={28} />}
             title={filtering ? 'No encontramos resúmenes con esa búsqueda' : 'Todavía no hay resúmenes publicados'}
             description={filtering ? 'Probá con otras palabras o sin filtrar por materia.' : 'Subí el primero: lo revisa un admin y queda para todos.'}
+            action={
+              filtering ? (
+                <Button size="sm" variant="secondary" onClick={clearSearch}>
+                  Ver todos los resúmenes
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <>

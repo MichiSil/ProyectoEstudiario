@@ -33,6 +33,8 @@ export function ProposalCard({
   const drafts = proposal.sessions ?? []
   const byAI = proposal.generatedBy === 'ia'
   const fellBack = proposal.warnings.includes('AI_FALLBACK')
+  // Poco tiempo antes del examen: el motor juntó temas en menos sesiones (INSUFFICIENT_TIME).
+  const shortOnTime = proposal.warnings.includes('INSUFFICIENT_TIME')
   const violatedIndexes = new Set(
     error instanceof ApiError ? error.violations.filter((v) => v.sessionIndex >= 0).map((v) => v.sessionIndex) : [],
   )
@@ -69,6 +71,14 @@ export function ProposalCard({
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
           El agente de IA no respondió a tiempo, así que armamos el plan con las reglas fijas de anticipación y
           dificultad. Podés confirmarlo igual.
+        </p>
+      )}
+
+      {shortOnTime && (
+        <p className="mt-3 flex items-start gap-2 rounded-xl bg-warning/10 px-3 py-2.5 text-sm text-ink">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
+          No alcanza el tiempo para darle una sesión a cada tema antes del examen, así que algunas sesiones juntan
+          varios temas. Si podés, sumá horarios en tu disponibilidad y pedí otra propuesta.
         </p>
       )}
 

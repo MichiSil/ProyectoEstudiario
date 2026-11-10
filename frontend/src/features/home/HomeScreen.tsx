@@ -2,7 +2,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { addDays, format, formatISO, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { AlertCircle, ArrowRight, CalendarPlus, CheckCircle2, Circle, Clock, LayoutList, NotebookPen, NotebookText, Timer } from 'lucide-react'
+import { AlertCircle, ArrowRight, CalendarPlus, LayoutList, NotebookPen, NotebookText, Timer } from 'lucide-react'
+import { SessionCard } from '@/features/planner/SessionCard'
 import { WeekActivityChart } from './WeekActivityChart'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -11,7 +12,7 @@ import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { EXAM_TYPE_LABEL, type Exam } from '@/api/types'
 import { ExamDetailSheet } from '@/features/calendar/ExamDetailSheet'
 import { examTypeColorVar } from '@/lib/domain-ui'
-import { formatDateLong, formatDaysUntil, formatMinutes, formatTimeRange, localDate, minutesBetween } from '@/lib/format'
+import { formatDateLong, formatDaysUntil, formatMinutes, localDate, minutesBetween } from '@/lib/format'
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.1em] text-subtle">{children}</p>
@@ -114,32 +115,8 @@ export function HomeScreen() {
             {todaySessions.map((session) => {
               const exam = examsById.get(session.examId)
               const subject = exam ? subjectsById.get(exam.subjectId) : undefined
-              return (
-                <Link
-                  key={session.id}
-                  to={subject ? `/materias/${subject.id}/plan` : '/plan'}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-sm)] hover:border-accent/40"
-                >
-                  <span className="shrink-0 text-subtle">
-                    {session.status === 'completada' ? (
-                      <CheckCircle2 size={22} className="text-success" />
-                    ) : (
-                      <Circle size={22} />
-                    )}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-ink">
-                      {subject ? `${subject.name} — ` : ''}
-                      {session.topic}
-                    </p>
-                    <p className="text-xs text-muted">{session.objective || 'Sesión de estudio'}</p>
-                  </div>
-                  <span className="flex shrink-0 items-center gap-1 text-xs text-subtle">
-                    <Clock size={12} />
-                    {formatTimeRange(session.start, session.end)}
-                  </span>
-                </Link>
-              )
+              // La misma tarjeta que en el Plan: se marca como completada desde acá (RF-11).
+              return <SessionCard key={session.id} session={session} subjectName={subject?.name} />
             })}
           </div>
         )}
