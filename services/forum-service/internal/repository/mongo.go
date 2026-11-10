@@ -307,8 +307,11 @@ func (m *Mongo) Rate(ctx context.Context, summaryID, userID string, score int, a
 		if len(out) == 1 {
 			r = out[0]
 		}
+		// updatedAt cambia junto con el promedio: así el indexador (que busca
+		// los cambios por updatedAt cada 5 s) lo pasa a Solr en el próximo ciclo,
+		// y el filtro por calificación mínima lo ve en segundos (ADR-006).
 		_, err = m.summaries.UpdateOne(ctx, bson.D{{Key: "_id", Value: summaryID}},
-			bson.D{{Key: "$set", Value: bson.D{{Key: "rating", Value: r}}}})
+			bson.D{{Key: "$set", Value: bson.D{{Key: "rating", Value: r}, {Key: "updatedAt", Value: at}}}})
 		return err
 	})
 	return r, err

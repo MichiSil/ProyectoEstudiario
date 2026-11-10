@@ -301,3 +301,36 @@ func TestListadoDesdeMongoConSolrCaido(t *testing.T) {
 		}
 	}
 }
+
+// Calificar cambia el updatedAt del resumen junto con el promedio: así el
+// indexador lo pasa a Solr en el próximo ciclo (unos 5 s) y el filtro por
+// calificación mínima lo ve enseguida, sin esperar la reconciliación.
+func TestCalificarAvisaAlIndexador(t *testing.T) {
+	db := newDB(t)
+	repo, ctx := repository.New(db), context.Background()
+	s := newSummary("rating-indice-" + newID())
+	_ = repo.Create(ctx, s)
+	_ = repo.Moderate(ctx, s.ID, model.Moderation{To: model.StatusApproved, By: "a", At: time.Now().UTC(), Event: event(model.EventApproved)})
+
+	since := time.Now().UTC().Add(time.Second).Truncate(time.Millisecond)
+	ratedAt := since.Add(time.Second)
+	if _, err := repo.Rate(ctx, s.ID, "ana", 4, ratedAt); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := repo.ChangedSince(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range changed {
+		if c.ID == s.ID {
+			found = true
+			if c.Rating.Average != 4 || !c.UpdatedAt.Equal(ratedAt) {
+				t.Errorf("cambio = rating %+v, updatedAt %v; se esperaba 4 y %v", c.Rating, c.UpdatedAt, ratedAt)
+			}
+		}
+	}
+	if !found {
+		t.Error("el resumen calificado no aparece en ChangedSince: el indexador no se entera hasta la reconciliación")
+	}
+}

@@ -147,7 +147,7 @@ func (s *Store) Delete(_ context.Context, id, by string, at time.Time, event mod
 	return nil
 }
 
-func (s *Store) Rate(_ context.Context, summaryID, userID string, score int, _ time.Time) (model.Rating, error) {
+func (s *Store) Rate(_ context.Context, summaryID, userID string, score int, at time.Time) (model.Rating, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Err != nil {
@@ -164,7 +164,7 @@ func (s *Store) Rate(_ context.Context, summaryID, userID string, score int, _ t
 	}
 	r.Average /= float64(r.Count)
 	doc := s.summaries[summaryID]
-	doc.Rating = r
+	doc.Rating, doc.UpdatedAt = r, at // como MongoDB: el indexador ve el cambio
 	s.summaries[summaryID] = doc
 	return r, nil
 }
