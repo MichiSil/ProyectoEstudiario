@@ -143,7 +143,7 @@ Un plan sólo se confirma si se cumplen **todas** estas reglas. Si alguna falla,
 stateDiagram-v2
     [*] --> Propuesto: el agente arma la propuesta
     Propuesto --> Confirmado: el estudiante confirma (RN-10 a RN-15)
-    Propuesto --> Descartado: el estudiante la descarta
+    Propuesto --> Descartado: el estudiante pide otra propuesta para el mismo examen
     Confirmado --> Desactualizado: el examen cambia de fecha
     Confirmado --> Cancelado: el examen se cancela
     Desactualizado --> Confirmado: el estudiante confirma una nueva propuesta

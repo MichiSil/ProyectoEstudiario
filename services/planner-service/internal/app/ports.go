@@ -95,6 +95,8 @@ type PlanRepository interface {
 	// sesión actual y devuelve la nueva y si su plan pasa a desactualizado.
 	UpdateSession(ctx context.Context, studentID, sessionID string, apply func(domain.Session) (domain.Session, bool, error)) (domain.Session, error)
 
+	// SaveProposal guarda una propuesta nueva y descarta las anteriores del
+	// mismo examen que no se confirmaron.
 	SaveProposal(ctx context.Context, p domain.Plan) error
 	GetPlan(ctx context.Context, studentID, planID string) (domain.Plan, error)
 

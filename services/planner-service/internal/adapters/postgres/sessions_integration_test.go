@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -72,5 +73,27 @@ func TestIntegration_MarcarSesiones(t *testing.T) {
 		VALUES ($1, $2, $3, $4, $5, $6, 'x', 'x', 'pendiente')`,
 		"libre-"+second.ID, plan.ID, student, examID, second.Start, second.End); err != nil {
 		t.Fatalf("el horario de la sesión pospuesta no quedó libre: %v", err)
+	}
+}
+
+// Sección 6.3 contra PostgreSQL real: otra propuesta descarta la anterior.
+func TestIntegration_OtraPropuestaDescartaLaAnterior(t *testing.T) {
+	svc, pool, ids := newService(t)
+	student, examID := split(ids)
+	ctx := context.Background()
+	first, err := svc.ProposePlan(ctx, student, examID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProposePlan(ctx, student, examID); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	_ = pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, first.ID).Scan(&status)
+	if status != "descartado" {
+		t.Fatalf("la primera quedó %q", status)
+	}
+	if _, err := svc.ConfirmPlan(ctx, student, first.ID, "clave-vieja"); !errors.Is(err, domain.ErrPlanNotProposed) {
+		t.Fatalf("confirmar la descartada: %v", err)
 	}
 }

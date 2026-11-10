@@ -97,6 +97,12 @@ func (r *memRepo) ListBookedSessions(_ context.Context, st string, _ time.Time) 
 func (r *memRepo) SaveProposal(_ context.Context, p domain.Plan) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for id, old := range r.plans {
+		if old.ExamID == p.ExamID && old.StudentID == p.StudentID && old.Status == domain.PlanProposed {
+			old.Status = domain.PlanDiscarded
+			r.plans[id] = old
+		}
+	}
 	r.plans[p.ID] = p
 	return nil
 }

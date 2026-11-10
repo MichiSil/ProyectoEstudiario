@@ -134,3 +134,26 @@ func TestMarcarSesiones(t *testing.T) {
 		t.Errorf("otro estudiante no puede tocarla: %v", err)
 	}
 }
+
+// Sección 6.3: pedir otra propuesta descarta la anterior, que ya no se puede confirmar.
+func TestOtraPropuestaDescartaLaAnterior(t *testing.T) {
+	svc, repo, exam := setup(t)
+	ctx := context.Background()
+	first, err := svc.ProposePlan(ctx, "est-1", exam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.ProposePlan(ctx, "est-1", exam.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.plans[first.ID].Status != domain.PlanDiscarded || repo.plans[second.ID].Status != domain.PlanProposed {
+		t.Fatalf("primera %s, segunda %s", repo.plans[first.ID].Status, repo.plans[second.ID].Status)
+	}
+	if _, err := svc.ConfirmPlan(ctx, "est-1", first.ID, "clave-vieja"); !errors.Is(err, domain.ErrPlanNotProposed) {
+		t.Fatalf("confirmar la descartada: %v", err)
+	}
+	if _, err := svc.ConfirmPlan(ctx, "est-1", second.ID, "clave-nueva"); err != nil {
+		t.Fatalf("confirmar la vigente: %v", err)
+	}
+}
