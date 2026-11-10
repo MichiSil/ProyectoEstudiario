@@ -206,3 +206,20 @@ func TestRegistroPendienteYCompleto(t *testing.T) {
 		t.Fatalf("consulta = %+v, err = %v", r, err)
 	}
 }
+
+func TestCorrelationIdSoloSiEsUUID(t *testing.T) {
+	var got []string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Correlation-Id"))
+		_, _ = io.WriteString(w, `{"externalUserId":"estudiario-u1","balance":10,"updatedAt":"2026-11-09T18:00:00Z"}`)
+	})
+	for _, id := range []string{"herapbdhhae5pg3bjt5f2uf4hj", "3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d"} {
+		c.CorrelationID = func(context.Context) string { return id }
+		if _, err := c.Balance(context.Background(), "estudiario-u1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 2 || got[0] != "" || got[1] != "3c5e7a9b-1d2f-4a6b-8c0d-2e4f6a8b0c1d" {
+		t.Errorf("X-Correlation-Id mandados = %q; se esperaba sólo el UUID", got)
+	}
+}

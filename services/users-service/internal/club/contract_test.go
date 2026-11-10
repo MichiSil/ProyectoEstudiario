@@ -331,3 +331,27 @@ func TestContratoRutasDelCliente(t *testing.T) {
 		t.Errorf("llamadas = %v", paths)
 	}
 }
+
+// El contrato pide un UUID en X-Correlation-Id. Nuestros correlationId no
+// siempre lo son: el adaptador sólo manda los que cumplen el formato (lo
+// encontró la jornada de fallas, docs/POSTMORTEM.md).
+func TestContratoCorrelationIdSoloUUID(t *testing.T) {
+	for name, s := range contracts(t) {
+		t.Run(name, func(t *testing.T) {
+			param := s.node(map[string]any(s), "components", "parameters", "CorrelationId")
+			schema := s.node(param, "schema")
+			if schema == nil {
+				t.Skip("el contrato ya no define X-Correlation-Id")
+			}
+			example, _ := param["example"].(string)
+			if schema["format"] == "uuid" {
+				if !uuidPattern.MatchString(example) {
+					t.Errorf("el adaptador no mandaría el ejemplo del contrato %q", example)
+				}
+				if uuidPattern.MatchString("herapbdhhae5pg3bjt5f2uf4hj") {
+					t.Error("el adaptador mandaría un correlationId que no es UUID")
+				}
+			}
+		})
+	}
+}
