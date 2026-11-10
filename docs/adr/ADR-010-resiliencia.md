@@ -198,5 +198,15 @@ La acción alta del POSTMORTEM se resolvió así:
 | Club de Beneficios, desde el perfil | 4 s por intento y dos llamadas en serie, con 3 s del gateway | El gateway da **10 s** a `/api/users/me/club`; users-service pide saldo y movimientos **en paralelo**, con un tope de **7 s** | Con el Club lento, el perfil responde `200` con `CLUB_UNAVAILABLE`; el corte es de users-service, así que cuenta como falla y abre el *circuit breaker* ([ADR-015](ADR-015-club-de-beneficios.md)) |
 | PostgreSQL (`users`) | 3 s por consulta, igual que el gateway | **2 s** por consulta | Con la base caída, el login responde el `503 SERVICE_UNAVAILABLE` de users-service y no el `504` del gateway |
 
+### Listado sin Solr (2026-11-10)
+
+La otra acción alta del POSTMORTEM se resolvió con un fallback a MongoDB ([ADR-006](ADR-006-busqueda.md#actualización-2026-11-10-listado-sin-solr)). La fila de Apache Solr en la tabla de forum-service queda así:
+
+| Dependencia | Timeout | Si falla | Si responde lento |
+|---|---|---|---|
+| Apache Solr | 2 s por búsqueda | La **búsqueda por texto** responde `503 SEARCH_UNAVAILABLE`. El **listado de aprobados sin texto** (foro y `GET /v1/documents` sin `q`) se lee de MongoDB con los mismos filtros, orden y paginación, y durante los 10 s siguientes no se vuelve a esperar a Solr. El detalle, publicar, moderar y calificar siguen. Como el índice es derivado, cuando Solr vuelve el indexador procesa los cambios pendientes y la reconciliación corrige lo que falte. | Igual que una falla: el listado no espera más de 2 s antes de ir a MongoDB. |
+
+Con Solr apagado, el listado respondió `200` en 4 a 22 ms y la búsqueda por texto `503`. Para el listado hay ahora una alternativa más barata, así que lleva el *circuit breaker* mínimo de 10 s que esta decisión reservaba para ese caso.
+
 Además, un pedido que el gateway ya cortó no se registra como `500 error interno`: responde `499` con un log `WARN`.
 

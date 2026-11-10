@@ -210,3 +210,7 @@ Capturas en [`docs/observabilidad/`](../observabilidad/):
 - Prometheus guarda 7 días de datos en un volumen de Docker. Para el volumen del sistema alcanza; no hay almacenamiento de largo plazo.
 - `users_club_pending_points` hace una consulta a PostgreSQL en cada lectura de Prometheus (cada 5 s). Es una suma sobre un índice parcial y no pesa; si creciera, se calcula aparte.
 - **En la nube:** Prometheus y Grafana publican los puertos 9090 y 3000 en el `docker-compose.yml`. Para que en la nube no queden expuestos hay que resetearlos en `deploy/azure/docker-compose.cloud.yml`, como el resto, y verlos por túnel SSH. Además, el `.env` de la nube necesita `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` (con valores propios): sin ellos `docker compose` no levanta. Se coordina con el despliegue.
+
+## Actualización (2026-11-10): listado sin Solr
+
+Se suma la métrica **`forum_search_list_fallback_total`** (forum-service): listados de aprobados sin texto que se leyeron de MongoDB porque Solr no respondía ([ADR-006](ADR-006-busqueda.md#actualización-2026-11-10-listado-sin-solr)). El tablero la muestra en *Listados sin Solr (última hora)*, al lado de la caché: si es mayor que 0, Solr estuvo caído, la búsqueda por texto respondió `503` y el listado siguió. No tiene alerta propia: la caída de Solr ya se ve en *Última sincronización con Solr* y en los `503` de la búsqueda.

@@ -154,11 +154,13 @@ Lo mismo, en menor medida, con PostgreSQL: users-service espera 3 s a su base, i
 
 **Por qué no lo vimos antes.** El escenario 2 de esta jornada, como la validación del ADR-015, usó un Club que fallaba rápido (un host que no resolvía enseguida), y los tests del adaptador prueban su propio timeout, no el del gateway.
 
-### 2. Con Solr caído también cae el listado del foro *(pendiente)*
+### 2. Con Solr caído también cae el listado del foro *(corregido el 2026-11-10)*
 
 **Qué pasó.** El ADR-010 decía que con Solr caído *"la búsqueda responde 503 y el resto del foro sigue"*. Siguieron el detalle, publicar, aprobar y *mis resúmenes*, pero **el listado de aprobados**, que es la página principal del foro, respondió `503` en el 96 % de los pedidos.
 
 **Causa.** El listado (sin texto) también sale de Solr ([ADR-006](adr/ADR-006-busqueda.md)), y la caché no lo cubre: una página cacheada vence a los 60 s, cada aprobación cambia la generación del listado, y si Solr falla no se sirve la copia vencida.
+
+**Corrección.** Ahora, si Solr no responde, el listado sin texto (el del foro y el de `GET /v1/documents` para el Grupo 4) se lee de MongoDB con los mismos filtros, orden y paginación; sólo la búsqueda por texto responde `503`. Con `docker compose stop solr` el listado respondió `200` en 4 a 22 ms ([ADR-006](adr/ADR-006-busqueda.md#actualización-2026-11-10-listado-sin-solr)).
 
 ### 3. users-service tiene una sola instancia *(pendiente)*
 
@@ -190,7 +192,7 @@ Al empezar, el mock respondía `400` a la consulta de saldo: el contrato del Clu
 | # | Acción | Responsable | Prioridad |
 |---|---|---|---|
 | 1 | Alinear los timeouts con el gateway: en los pedidos del usuario, users-service le da al Club menos de 3 s en total (por ejemplo 2,5 s) para responder el aviso a tiempo, y ese corte cuenta como falla para el *circuit breaker*. Lo mismo con el timeout de la base de users-service. Sumar un test con un Club que tarda. | Isabela (users-service) | ✅ Hecha (`fix/club-timeouts`): gateway 10 s para `/me/club`, saldo y movimientos en paralelo con tope de 7 s, base de users a 2 s, test con un Club que tarda |
-| 2 | Que el listado de aprobados sin texto no dependa de Solr: leerlo de MongoDB si Solr falla, o servir la copia vencida de la caché. Corregir el ADR-010 mientras tanto. | Flor (forum-service) | **Alta** |
+| 2 | Que el listado de aprobados sin texto no dependa de Solr: leerlo de MongoDB si Solr falla, o servir la copia vencida de la caché. Corregir el ADR-010 mientras tanto. | Flor (forum-service) | ✅ Hecha (`fix/listado-sin-solr`): con Solr caído el listado sin texto (foro y `/v1/documents`) sale de MongoDB, con log `WARN` y la métrica `forum_search_list_fallback_total`; la búsqueda por texto sigue en `503` ([ADR-006](adr/ADR-006-busqueda.md#actualización-2026-11-10-listado-sin-solr)) |
 | 3 | No registrar como `500 error interno` un pedido que canceló el gateway | Isabela (users-service) | ✅ Hecha (`fix/club-timeouts`): responde `499` con log `WARN` |
 | 4 | Dos instancias de users-service detrás del gateway, como forum-service, o cargar `CLUB_BASE_URL` sin reiniciar | Grupo | Media |
 | 5 | Healthcheck de RabbitMQ más liviano (`rabbitmq-diagnostics -q ping`) o con más timeout | Grupo | Baja |

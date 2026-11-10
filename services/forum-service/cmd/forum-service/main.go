@@ -151,7 +151,13 @@ func run(logger *slog.Logger) error {
 			logger.Info("índice reconstruido", "documents", n, "durationMs", time.Since(started).Milliseconds())
 			return nil
 		}
-		summarySearch = &search.SolrSearch{Solr: solr, Loader: repo}
+		// Si Solr no está, el listado sin texto se lee de MongoDB (ADR-006):
+		// la página principal del foro no depende del índice.
+		summarySearch = &search.ListFallback{
+			Primary:  &search.SolrSearch{Solr: solr, Loader: repo},
+			Fallback: summarySearch, // la búsqueda sobre MongoDB
+			Logger:   logger,
+		}
 		go indexer.Run(ctx)
 		logger.Info("búsqueda sobre Solr", "url", solrURL)
 	} else if len(os.Args) > 1 && os.Args[1] == "reindex" {
