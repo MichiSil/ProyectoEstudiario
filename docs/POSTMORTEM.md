@@ -171,9 +171,9 @@ Al empezar, el mock respondía `400` a la consulta de saldo: el contrato del Clu
 ### 5. Detalles de operación
 
 - **Healthcheck de RabbitMQ.** Con la máquina cargada, `rabbitmq-diagnostics` a veces pasa los 5 s de su timeout. RabbitMQ funcionaba, pero quedó *unhealthy* un momento y `docker compose start forum-service-2` se negó a arrancar la instancia (02:07). Hubo que repetirlo.
-- **Alerta del Club.** El breaker pasa a `half-open` cada 30 s para probar. Si Prometheus lee justo ese momento, `users_club_breaker_state == 2` deja de cumplirse y el `for: 1m` vuelve a empezar: la alerta tardó 3 min 45 s en dispararse en lugar de 1 min.
+- **Alerta del Club.** El breaker pasa a `half-open` cada 30 s para probar. Si Prometheus lee justo ese momento, `users_club_breaker_state == 2` deja de cumplirse y el `for: 1m` vuelve a empezar: la alerta tardó 3 min 45 s en dispararse en lugar de 1 min. *(Corregido el 2026-11-10: acción 6.)*
 - **Búsquedas sueltas con `503`** aun sin fallas (9 de unas 1.300): Solr superó su timeout de 2 s con la notebook al máximo. Hay que mirarlo en la nube, con una máquina sin la carga de la prueba.
-- **`ConfirmarLento` en *pending*** después del escenario 4: con muy pocas confirmaciones, una sola de 3 s (la que falló) lleva el p95 arriba de 500 ms.
+- **`ConfirmarLento` en *pending*** después del escenario 4: con muy pocas confirmaciones, una sola de 3 s (la que falló) lleva el p95 arriba de 500 ms. *(Corregido el 2026-11-10: acción 6.)*
 
 ## Qué funcionó
 
@@ -194,7 +194,7 @@ Al empezar, el mock respondía `400` a la consulta de saldo: el contrato del Clu
 | 3 | No registrar como `500 error interno` un pedido que canceló el gateway | Isabela (users-service) | ✅ Hecha (`fix/club-timeouts`): responde `499` con log `WARN` |
 | 4 | Dos instancias de users-service detrás del gateway, como forum-service, o cargar `CLUB_BASE_URL` sin reiniciar | Grupo | Media |
 | 5 | Healthcheck de RabbitMQ más liviano (`rabbitmq-diagnostics -q ping`) o con más timeout | Grupo | Baja |
-| 6 | Alerta del Club con `max_over_time(users_club_breaker_state[1m]) == 2`, para que el *half-open* no la reinicie; `ConfirmarLento` con un mínimo de confirmaciones | Flor (métricas) | Baja |
+| 6 | Alerta del Club con `max_over_time(users_club_breaker_state[1m]) == 2`, para que el *half-open* no la reinicie; `ConfirmarLento` con un mínimo de confirmaciones | Flor (métricas) | ✅ Hecha (`fix/alerta-club`): la del Club se disparó 66 s después de abrirse el breaker, aunque pasó por *half-open* en el medio; `ConfirmarLento` sólo se evalúa con al menos 10 confirmaciones en 10 min. Las dos tienen tests con `promtool` ([ADR-011](adr/ADR-011-observabilidad.md)) |
 | 7 | Repetir la jornada en la nube, con el Club real | Mia (despliegue) | 🟡 En parte (10/11): el escenario del Club caído se repitió en la nube (detalle abajo). Las caídas de una instancia del foro, de Solr y de PostgreSQL no se repitieron en la nube: se probaron con `docker compose`, que es el mismo, y tumbar las bases de la VM el día de la presentación era un riesgo que no valía la pena |
 | — | `X-Correlation-Id` del Club sólo si es UUID | Toto | ✅ Hecha (`fix/club-correlation-id`) |
 | 8 | `POST /v1/documents` con un texto que no es UTF-8 válido (un cliente de Windows que manda "Guía" en otra codificación) responde `500 INTERNAL_ERROR`: MongoDB rechaza el texto (`text contains invalid UTF-8`). Tiene que ser `422 VALIDATION_ERROR` antes de guardar. Se vio en la prueba de la nube del 10/11 | Flor (forum-service) | Media |

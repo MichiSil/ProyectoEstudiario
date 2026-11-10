@@ -37,11 +37,15 @@ groups:
           description: "Prometheus no puede leer las métricas de {{ $labels.instance }} ({{ $labels.job }}) hace más de 1 minuto."
 
       # SLO de latencia de la acción principal: p95 de confirmar por debajo de 500 ms.
+      # Sólo se evalúa con al menos 10 confirmaciones en la ventana: con menos, una
+      # sola lenta (por ejemplo, la que falló con la base caída) ya es el p95.
       - alert: ConfirmarLento
         expr: |
           histogram_quantile(0.95, sum by (le) (
             rate(http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm"}[10m])
           )) > 0.5
+          and on ()
+          sum(increase(http_request_duration_seconds_count{job="planner-service", route="/plans/{planId}/confirm"}[10m])) >= 10
         for: 10m
         labels:
           severity: warning
@@ -59,8 +63,10 @@ groups:
           description: "notification-service mandó {{ $value | humanize }} mensajes a la DLQ en los últimos 10 minutos: esos autores no recibieron el mail."
 
       # El Club de Beneficios no responde y el circuit breaker está abierto (ADR-015).
+      # Cada 30 s el breaker pasa a semiabierto para probar: con max_over_time ese
+      # momento no reinicia el "for" y la alerta salta al minuto.
       - alert: ClubDeBeneficiosNoDisponible
-        expr: users_club_breaker_state == 2
+        expr: max_over_time(users_club_breaker_state[1m]) == 2
         for: 1m
         labels:
           severity: warning

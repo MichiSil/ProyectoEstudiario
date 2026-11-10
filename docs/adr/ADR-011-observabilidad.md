@@ -210,3 +210,19 @@ Capturas en [`docs/observabilidad/`](../observabilidad/):
 - Prometheus guarda 7 días de datos en un volumen de Docker. Para el volumen del sistema alcanza; no hay almacenamiento de largo plazo.
 - `users_club_pending_points` hace una consulta a PostgreSQL en cada lectura de Prometheus (cada 5 s). Es una suma sobre un índice parcial y no pesa; si creciera, se calcula aparte.
 - **En la nube:** Prometheus y Grafana publican los puertos 9090 y 3000 en el `docker-compose.yml`. Para que en la nube no queden expuestos hay que resetearlos en `deploy/azure/docker-compose.cloud.yml`, como el resto, y verlos por túnel SSH. Además, el `.env` de la nube necesita `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` (con valores propios): sin ellos `docker compose` no levanta. Se coordina con el despliegue.
+
+## Actualización (2026-11-10): alertas del Club y de confirmar
+
+La jornada de fallas ([`POSTMORTEM.md`](../POSTMORTEM.md), hallazgo 5) mostró dos alertas que no se comportaban como se esperaba. Se cambiaron sus condiciones en [`alerts.yml`](../../deploy/prometheus/alerts.yml):
+
+| Alerta | Antes | Ahora | Por qué |
+|---|---|---|---|
+| `ClubDeBeneficiosNoDisponible` | `users_club_breaker_state == 2` durante 1 min | `max_over_time(users_club_breaker_state[1m]) == 2` durante 1 min | Cada 30 s el breaker pasa a semiabierto para probar el Club. Si Prometheus leía justo ese momento, la condición dejaba de cumplirse y el `for` volvía a empezar: tardó 3 min 45 s en dispararse. Con el máximo del último minuto, la prueba no la reinicia. |
+| `ConfirmarLento` | p95 de confirmar > 500 ms durante 10 min | Lo mismo, **y** al menos 10 confirmaciones en los 10 min | Con muy pocas confirmaciones, una sola lenta (la que falló con la base caída) ya es el p95, y la alerta quedó en *pending* sin que el SLO estuviera en riesgo. |
+
+**Validación.**
+
+- **Club caído** (`CLUB_BASE_URL=http://club-caido.invalid`, entrando al perfil cada 8 s): el breaker se abrió a las 11:18:33, pasó por semiabierto a las 11:19:31 y la alerta se **disparó a las 11:19:39, 66 s después de abrirse**, sin reiniciarse. Al volver users-service a su configuración, se resolvió sola.
+- **Tests de las reglas** con `promtool` ([`alerts_test.yml`](../../deploy/prometheus/alerts_test.yml)), con series simuladas: el breaker alternando entre abierto y semiabierto dispara la alerta a los 2 min 15 s; tres confirmaciones con una lenta no dejan `ConfirmarLento` ni en *pending*; veinte por cada 10 min, todas lentas, sí la disparan. Contra las reglas anteriores, los dos primeros casos fallan.
+
+**Consecuencia.** Como mira el último minuto, la alerta del Club también tarda hasta 1 minuto más en resolverse después de que el breaker se cierra.

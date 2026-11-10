@@ -1,0 +1,75 @@
+# Tests de las alertas (POSTMORTEM, acción 6). Se corren con promtool:
+#
+#   docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/p:ro" -w /p \
+#     prom/prometheus:v2.55.1 test rules alerts_test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # El breaker pasa a semiabierto (1) cada minuto para probar: antes eso
+  # reiniciaba el "for" y la alerta tardó 3 min 45 s; ahora salta al minuto.
+  - interval: 15s
+    input_series:
+      - series: 'users_club_breaker_state{job="users-service", instance="users-service"}'
+        values: '0 0 2 2 2 1 2 2 2 1 2 2 2 1 2 2 2 1'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: ClubDeBeneficiosNoDisponible
+        exp_alerts: []
+      - eval_time: 2m15s
+        alertname: ClubDeBeneficiosNoDisponible
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: users-service
+              instance: users-service
+            exp_annotations:
+              summary: "El circuit breaker del Club de Beneficios está abierto"
+              description: "users-service no llama al Club hace más de 1 minuto; los puntos quedan pendientes y se acreditan cuando vuelva."
+
+  # Pocas confirmaciones, una lenta (como en el escenario 4 de la jornada):
+  # el p95 pasa los 500 ms, pero con menos de 10 en la ventana no se evalúa.
+  - interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="0.1"}'
+        values: '0 1 2 2x30'
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="0.5"}'
+        values: '0 1 2 2x30'
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="5"}'
+        values: '0 1 2 3x30'
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="+Inf"}'
+        values: '0 1 2 3x30'
+      - series: 'http_request_duration_seconds_count{job="planner-service", route="/plans/{planId}/confirm", method="POST"}'
+        values: '0 1 2 3x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ConfirmarLento
+        exp_alerts: []
+    # Tampoco queda en pending (antes quedaba, como en la jornada).
+    promql_expr_test:
+      - expr: ALERTS{alertname="ConfirmarLento"}
+        eval_time: 8m
+        exp_samples: []
+
+  # Muchas confirmaciones lentas: la alerta sí salta.
+  - interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="0.5"}'
+        values: '0x30'
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="1"}'
+        values: '0+2x30'
+      - series: 'http_request_duration_seconds_bucket{job="planner-service", route="/plans/{planId}/confirm", method="POST", le="+Inf"}'
+        values: '0+2x30'
+      - series: 'http_request_duration_seconds_count{job="planner-service", route="/plans/{planId}/confirm", method="POST"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ConfirmarLento
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Confirmar un plan tarda más de 500 ms (p95)"
+              description: "El p95 de POST /plans/{planId}/confirm es 975ms en los últimos 10 minutos (SLO: 500 ms)."
