@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/search"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/service/memory"
 )
@@ -554,5 +556,31 @@ func TestAuthorEmailInvalido(t *testing.T) {
 		if !errors.As(err, &verr) || verr.Fields[0].Field != "authorEmail" {
 			t.Errorf("authorEmail %.30q: err = %v, se esperaba un error de validación en authorEmail", email, err)
 		}
+	}
+}
+
+// ---------- Listado sin Solr (POSTMORTEM, acción 2) ----------
+
+// failingSearch es Solr caído.
+type failingSearch struct{}
+
+func (failingSearch) Search(context.Context, model.SearchQuery) (model.Page, error) {
+	return model.Page{}, errors.Join(model.ErrSearchUnavailable, errors.New("solr: connection refused"))
+}
+
+func TestConSolrCaidoElListadoSaleIgual(t *testing.T) {
+	svc, store, _ := newService()
+	svc.Search = &search.ListFallback{Primary: failingSearch{}, Fallback: store, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	approved := publish(t, svc, student)
+	_ = svc.Approve(ctx, admin, approved.ID)
+	_ = publish(t, svc, student) // pendiente: no aparece
+
+	page, err := svc.SearchApproved(ctx, model.SearchQuery{Category: model.NormalizeKey("Análisis II"), Page: 1, Size: 20})
+	if err != nil || page.Total != 1 || page.Items[0].ID != approved.ID {
+		t.Fatalf("listado con Solr caído = %+v, %v; se esperaba el aprobado", page, err)
+	}
+	// La búsqueda por texto no tiene alternativa: 503.
+	if _, err := svc.SearchApproved(ctx, model.SearchQuery{Text: "integrales", Page: 1, Size: 20}); !errors.Is(err, model.ErrSearchUnavailable) {
+		t.Errorf("búsqueda con texto: err = %v, se esperaba ErrSearchUnavailable", err)
 	}
 }

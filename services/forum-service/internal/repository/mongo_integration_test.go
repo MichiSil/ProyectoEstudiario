@@ -14,7 +14,10 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +29,7 @@ import (
 
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/model"
 	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/repository"
+	"github.com/MichiSil/ProyectoEstudiario/services/forum-service/internal/search"
 )
 
 func newDB(t *testing.T) *mongo.Database {
@@ -232,5 +236,68 @@ func TestIdempotenciaReservaUnaSolaVez(t *testing.T) {
 	existing, _, _ = repo.ReserveIdempotency(ctx, rec)
 	if !existing.Done || existing.DocumentID != "doc-1" {
 		t.Errorf("después de completar: %+v", existing)
+	}
+}
+
+// solrCaido es Solr sin responder, para probar el listado desde MongoDB.
+type solrCaido struct{}
+
+func (solrCaido) Search(context.Context, model.SearchQuery) (model.Page, error) {
+	return model.Page{}, errors.Join(model.ErrSearchUnavailable, errors.New("solr no responde"))
+}
+
+// POSTMORTEM, acción 2: con Solr caído, el listado sin texto sale de MongoDB
+// con los mismos filtros, orden y paginación (ADR-006).
+func TestListadoDesdeMongoConSolrCaido(t *testing.T) {
+	db := newDB(t)
+	repo, ctx := repository.New(db), context.Background()
+	list := &search.ListFallback{Primary: solrCaido{}, Fallback: repository.NewSearch(db), Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	category := "Física " + newID()
+
+	approve := func(title string, tags []string, score int, publishedAt time.Time) model.Summary {
+		s := newSummary(category)
+		s.Title, s.Tags, s.TagKeys = title, tags, tags
+		if err := repo.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Moderate(ctx, s.ID, model.Moderation{To: model.StatusApproved, By: "a", At: publishedAt, Event: event(model.EventApproved)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Rate(ctx, s.ID, "u-"+newID(), score, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	viejo := approve("Cinemática", []string{"parcial"}, 5, t0.Add(-2*time.Hour))
+	medio := approve("Dinámica", []string{"final"}, 2, t0.Add(-time.Hour))
+	nuevo := approve("Energía", []string{"parcial"}, 4, t0)
+	pendiente := newSummary(category)
+	_ = repo.Create(ctx, pendiente)
+
+	ids := func(p model.Page) []string {
+		out := []string{}
+		for _, s := range p.Items {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+	key := model.NormalizeKey(category)
+	for _, c := range []struct {
+		name  string
+		q     model.SearchQuery
+		total int
+		want  []string
+	}{
+		{"por fecha", model.SearchQuery{Category: key, Sort: model.SortDate, Page: 1, Size: 10}, 3, []string{nuevo.ID, medio.ID, viejo.ID}},
+		{"por calificación", model.SearchQuery{Category: key, Sort: model.SortRating, Page: 1, Size: 10}, 3, []string{viejo.ID, nuevo.ID, medio.ID}},
+		{"segunda página", model.SearchQuery{Category: key, Sort: model.SortDate, Page: 2, Size: 2}, 3, []string{viejo.ID}},
+		{"etiqueta", model.SearchQuery{Category: key, Tags: []string{"parcial"}, Sort: model.SortDate, Page: 1, Size: 10}, 2, []string{nuevo.ID, viejo.ID}},
+		{"calificación mínima", model.SearchQuery{Category: key, MinRating: 4, Sort: model.SortDate, Page: 1, Size: 10}, 2, []string{nuevo.ID, viejo.ID}},
+	} {
+		page, err := list.Search(ctx, c.q)
+		if err != nil || page.Total != c.total || !slices.Equal(ids(page), c.want) {
+			t.Errorf("%s: total %d, ids %v, err %v; se esperaban total %d e ids %v", c.name, page.Total, ids(page), err, c.total, c.want)
+		}
 	}
 }
