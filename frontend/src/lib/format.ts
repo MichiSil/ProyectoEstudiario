@@ -19,6 +19,11 @@ export function formatDateLong(isoDate: string): string {
   return format(new Date(`${isoDate}T00:00:00`), "d 'de' MMMM", { locale: es })
 }
 
+/** "martes 10 de noviembre": el título de un día en el plan. */
+export function formatWeekdayLong(isoDate: string): string {
+  return format(new Date(`${isoDate}T00:00:00`), "EEEE d 'de' MMMM", { locale: es })
+}
+
 export function formatDateShort(isoDate: string): string {
   return format(new Date(`${isoDate}T00:00:00`), 'd MMM', { locale: es })
 }

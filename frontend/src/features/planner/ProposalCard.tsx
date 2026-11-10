@@ -5,13 +5,16 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
 import { ApiError } from '@/api/client'
-import { EXAM_TYPE_LABEL, type Exam, type PlanProposal, type Subject } from '@/api/types'
-import { formatDateLong, formatMinutes, formatTimeRange, localDate } from '@/lib/format'
+import { EXAM_TYPE_LABEL, type Exam, type PlanProposal, type SessionDraft, type Subject } from '@/api/types'
+import { formatDateLong, formatMinutes, formatTimeRange, formatWeekdayLong, localDate } from '@/lib/format'
 
 /**
  * Propuesta de plan (RF-08). Es sólo una sugerencia hasta que el estudiante la
- * confirma (RN-08). Si la confirmación incumple reglas, se marcan las sesiones
- * afectadas con el identificador de la regla.
+ * confirma (RN-08). Las sesiones se agrupan por día, numeradas en orden (1 y 2
+ * el mismo día, 3 el siguiente…), igual que en el plan. Si la confirmación
+ * incumple reglas, se marcan las sesiones afectadas con el identificador de la
+ * regla: el aviso llega con el índice de la sesión en la propuesta y se
+ * traduce al número que se ve en pantalla.
  */
 export function ProposalCard({
   proposal,
@@ -39,6 +42,9 @@ export function ProposalCard({
     error instanceof ApiError ? error.violations.filter((v) => v.sessionIndex >= 0).map((v) => v.sessionIndex) : [],
   )
   const totalMinutes = drafts.reduce((sum, d) => sum + d.durationMinutes, 0)
+  const days = draftsByDay(drafts)
+  // Número que se ve de cada sesión (por su índice en la propuesta).
+  const numberOf = new Map(days.flatMap((d) => d.items).map((item, position) => [item.index, position + 1]))
 
   return (
     <Card className="animate-fade-in border-accent/40 p-5">
@@ -88,35 +94,42 @@ export function ProposalCard({
           propuesta.
         </p>
       ) : (
-        <ol className="mt-4 flex flex-col gap-2">
-          {drafts.map((d, i) => (
-            <li
-              key={`${d.start}-${i}`}
-              className={clsx(
-                'rounded-xl border px-4 py-3',
-                violatedIndexes.has(i) ? 'border-danger/50 bg-danger/5' : 'border-border bg-paper',
-              )}
-            >
-              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <p className="text-sm font-medium text-ink">
-                  <span className="mr-1.5 text-subtle">{i + 1}.</span>
-                  {d.objective || d.topic}
-                </p>
-                <span className="flex items-center gap-1 text-xs capitalize text-subtle">
-                  <Clock size={12} />
-                  {formatDateLong(localDate(d.start))} · {formatTimeRange(d.start, d.end)}
-                </span>
-              </div>
-              {d.objective && <p className="mt-0.5 text-xs font-medium text-muted">{d.topic}</p>}
-              {d.reasoning && <p className="mt-1 text-xs text-muted">{d.reasoning}</p>}
-            </li>
+        <div className="mt-4 flex flex-col gap-4">
+          {days.map(({ date, items }) => (
+            <div key={date}>
+              <h3 className="mb-2 text-sm font-medium first-letter:uppercase text-ink">{formatWeekdayLong(date)}</h3>
+              <ol className="flex flex-col gap-2">
+                {items.map(({ draft: d, index: i }) => (
+                  <li
+                    key={`${d.start}-${i}`}
+                    className={clsx(
+                      'rounded-xl border px-4 py-3',
+                      violatedIndexes.has(i) ? 'border-danger/50 bg-danger/5' : 'border-border bg-paper',
+                    )}
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <p className="text-sm font-medium text-ink">
+                        <span className="mr-1.5 text-subtle">{numberOf.get(i)}.</span>
+                        {d.objective || d.topic}
+                      </p>
+                      <span className="flex items-center gap-1 text-xs text-subtle">
+                        <Clock size={12} />
+                        {formatTimeRange(d.start, d.end)}
+                      </span>
+                    </div>
+                    {d.objective && <p className="mt-0.5 text-xs font-medium text-muted">{d.topic}</p>}
+                    {d.reasoning && <p className="mt-1 text-xs text-muted">{d.reasoning}</p>}
+                  </li>
+                ))}
+              </ol>
+            </div>
           ))}
-        </ol>
+        </div>
       )}
 
       {!!error && (
         <div className="mt-4">
-          <ApiErrorNotice error={error} sessionLabel={(i) => `Sesión ${i + 1}`} />
+          <ApiErrorNotice error={error} sessionLabel={(i) => `Sesión ${numberOf.get(i) ?? i + 1}`} />
         </div>
       )}
 
@@ -134,4 +147,20 @@ export function ProposalCard({
       </p>
     </Card>
   )
+}
+
+/**
+ * Agrupa las sesiones de la propuesta por día, en orden. Cada una conserva su
+ * índice en la propuesta, que es con el que llegan los avisos de las reglas
+ * incumplidas (sessionIndex).
+ */
+function draftsByDay(drafts: SessionDraft[]): { date: string; items: { draft: SessionDraft; index: number }[] }[] {
+  const sorted = drafts.map((draft, index) => ({ draft, index })).sort((a, b) => a.draft.start.localeCompare(b.draft.start))
+  const days: { date: string; items: { draft: SessionDraft; index: number }[] }[] = []
+  for (const item of sorted) {
+    const date = localDate(item.draft.start)
+    if (days.at(-1)?.date !== date) days.push({ date, items: [] })
+    days.at(-1)!.items.push(item)
+  }
+  return days
 }
