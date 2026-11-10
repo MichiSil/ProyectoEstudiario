@@ -94,15 +94,13 @@ func TestMarcarSesiones(t *testing.T) {
 	res := confirmPlan(t, svc, exam.ID, "clave-1")
 	first, second := res.Sessions[0], res.Sessions[1]
 
-	// Antes de que empiece no se puede completar.
-	if _, err := svc.SetSessionStatus(ctx, "est-1", first.ID, domain.SessionCompleted); rule(err) != "RN-48" {
-		t.Fatalf("completar antes de tiempo: %v", err)
+	// RN-48: se puede completar antes de que empiece (adelantar el estudio).
+	if now.After(first.Start) {
+		t.Fatal("la sesión del test tiene que ser futura")
 	}
-
-	svc.Clock = fixedClock{first.Start}
 	got, err := svc.SetSessionStatus(ctx, "est-1", first.ID, domain.SessionCompleted)
 	if err != nil || got.Status != domain.SessionCompleted {
-		t.Fatalf("completar: %+v, %v", got, err)
+		t.Fatalf("completar una sesión futura: %+v, %v", got, err)
 	}
 	if _, err := svc.SetSessionStatus(ctx, "est-1", first.ID, domain.SessionCompleted); err != nil {
 		t.Fatalf("repetir completar tiene que ser idempotente: %v", err)

@@ -73,7 +73,7 @@ export const plannerApi = {
   listSessions: () => request<Session[]>(`${base}/sessions`),
 
   /**
-   * RF-11: completar (desde que empieza, RN-48), posponer (libera el horario y
+   * RF-11: completar (aunque todavía no haya empezado, RN-48), posponer (libera el horario y
    * desactualiza el plan, RN-49) o volver a pendiente una completada.
    */
   setSessionStatus: (sessionId: string, status: SessionStatus) =>

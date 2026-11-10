@@ -1,19 +1,18 @@
 package domain
 
-import "time"
-
 // ChangeStatus aplica RF-11: el estudiante marca una sesión reservada como
 // completada o pospuesta, o deshace una que marcó como completada por error.
 // Devuelve la sesión con el estado nuevo y si el plan queda desactualizado.
 //
-//   - completada: sólo una sesión pendiente que ya empezó (RN-48);
+//   - completada: cualquier sesión pendiente, haya empezado o no: el
+//     estudiante puede adelantar el estudio (RN-48);
 //   - pendiente: sólo para deshacer una completada;
 //   - pospuesta: sólo una pendiente. Libera su horario, y el plan del examen
 //     queda desactualizado para que el tema vuelva a considerarse al rehacerlo
 //     (sección 6.3, RN-49). No se puede deshacer: el horario ya quedó libre.
 //
 // Pedir el estado que ya tiene no cambia nada (es idempotente).
-func (s Session) ChangeStatus(to SessionStatus, now time.Time) (next Session, outdatePlan bool, err error) {
+func (s Session) ChangeStatus(to SessionStatus) (next Session, outdatePlan bool, err error) {
 	if to == s.Status {
 		return s, false, nil
 	}
@@ -24,9 +23,6 @@ func (s Session) ChangeStatus(to SessionStatus, now time.Time) (next Session, ou
 	case SessionCompleted:
 		if s.Status != SessionPending {
 			return fail("RF-11", "sólo se puede completar una sesión pendiente")
-		}
-		if now.Before(s.Start) {
-			return fail("RN-48", "la sesión todavía no empezó: se puede marcar como completada desde su hora de inicio")
 		}
 	case SessionPending:
 		if s.Status != SessionCompleted {
