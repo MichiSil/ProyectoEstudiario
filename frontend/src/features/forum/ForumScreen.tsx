@@ -124,7 +124,7 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
   const [text, setText] = useState('')
   const [category, setCategory] = useState('')
   const [sort, setSort] = useState<SummarySort>('relevance')
-  const [query, setQuery] = useState({ q: '', category: '', sort: 'relevance' as SummarySort })
+  const [query, setQuery] = useState({ q: '', category: '', sort: 'relevance' as SummarySort, minRating: 0 })
   const [items, setItems] = useState<Summary[] | null>(null)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -133,7 +133,7 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
   const load = useCallback(async (q: typeof query, p: number) => {
     setError(null)
     try {
-      const res = await forumApi.search({ q: q.q, category: q.category, sort: q.sort, page: p })
+      const res = await forumApi.search({ q: q.q, category: q.category, sort: q.sort, minRating: q.minRating || undefined, page: p })
       setItems((prev) => (p === 1 || !prev ? res.items : [...prev, ...res.items]))
       setTotal(res.total)
     } catch (err) {
@@ -149,7 +149,7 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    setQuery({ q: text.trim(), category: category.trim(), sort })
+    setQuery((prev) => ({ ...prev, q: text.trim(), category: category.trim(), sort }))
   }
 
   // La búsqueda se aplica al apretar "Buscar". Si el estudiante vacía los dos
@@ -165,10 +165,10 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
   function clearSearch() {
     setText('')
     setCategory('')
-    setQuery((q) => ({ ...q, q: '', category: '' }))
+    setQuery((q) => ({ ...q, q: '', category: '', minRating: 0 }))
   }
 
-  const filtering = !!query.q || !!query.category
+  const filtering = !!query.q || !!query.category || query.minRating > 0
 
   return (
     <div>
@@ -183,8 +183,19 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
             className="pl-9"
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <Input value={category} onChange={(e) => onCategoryChange(e.target.value)} placeholder="Materia" />
+          {/* RF-20: calificación mínima. Se aplica al elegirla, sin apretar "Buscar". */}
+          <Select
+            value={query.minRating}
+            onChange={(e) => setQuery((q) => ({ ...q, minRating: Number(e.target.value) }))}
+            aria-label="Calificación mínima"
+          >
+            <option value={0}>Cualquier calificación</option>
+            <option value={3}>3 ★ o más</option>
+            <option value={4}>4 ★ o más</option>
+            <option value={4.5}>4,5 ★ o más</option>
+          </Select>
           <Select value={sort} onChange={(e) => setSort(e.target.value as SummarySort)} aria-label="Ordenar">
             <option value="relevance">Más relevantes</option>
             <option value="rating">Mejor calificados</option>
@@ -213,7 +224,7 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
           <EmptyState
             icon={<MessagesSquare size={28} />}
             title={filtering ? 'No encontramos resúmenes con esa búsqueda' : 'Todavía no hay resúmenes publicados'}
-            description={filtering ? 'Probá con otras palabras o sin filtrar por materia.' : 'Subí el primero: lo revisa un admin y queda para todos.'}
+            description={filtering ? 'Probá con otras palabras, sin filtrar por materia o con una calificación mínima más baja.' : 'Subí el primero: lo revisa un admin y queda para todos.'}
             action={
               filtering ? (
                 <Button size="sm" variant="secondary" onClick={clearSearch}>
