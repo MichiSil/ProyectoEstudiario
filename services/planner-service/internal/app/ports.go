@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/domain"
@@ -83,6 +84,7 @@ type PlanRepository interface {
 	DeleteSubject(ctx context.Context, studentID, subjectID string) error
 
 	CreateMaterial(ctx context.Context, m domain.Material) error
+	GetMaterial(ctx context.Context, studentID, materialID string) (domain.Material, error)
 	ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error)
 	DeleteMaterial(ctx context.Context, studentID, materialID string) error
 
@@ -120,6 +122,14 @@ type Clock interface{ Now() time.Time }
 
 // IDGenerator genera identificadores únicos.
 type IDGenerator interface{ NewID() string }
+
+// MaterialFiles guarda los PDF del material en MinIO, en el bucket materials
+// (ADR-003). La implementa el adaptador internal/adapters/minio.
+type MaterialFiles interface {
+	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
+	Delete(ctx context.Context, key string) error
+}
 
 // Resultados de una confirmación en las métricas.
 const (

@@ -9,6 +9,8 @@
 #   forum-service entrega sin autenticación (ADR-014). El bucket no es público
 #   en MinIO: MinIO no se publica a internet y los archivos salen sólo a
 #   través de forum-service.
+# - materials: los PDF del material de las materias, con un usuario aparte de
+#   planner-service que sólo puede usar ese bucket.
 #
 # Es idempotente: lo corre el contenedor minio-init en cada
 # `docker compose up`.
@@ -18,11 +20,17 @@ set -eu
 : "${MINIO_ROOT_PASSWORD:?falta MINIO_ROOT_PASSWORD}"
 : "${FORUM_MINIO_ACCESS_KEY:?falta FORUM_MINIO_ACCESS_KEY}"
 : "${FORUM_MINIO_SECRET_KEY:?falta FORUM_MINIO_SECRET_KEY}"
+: "${PLANNER_MINIO_ACCESS_KEY:?falta PLANNER_MINIO_ACCESS_KEY}"
+: "${PLANNER_MINIO_SECRET_KEY:?falta PLANNER_MINIO_SECRET_KEY}"
 
 BUCKET=summaries
 PUBLIC_BUCKET=public-documents
 POLICY=forum-summaries
 
+if [ "$PLANNER_MINIO_ACCESS_KEY" = "$MINIO_ROOT_USER" ] || [ "$PLANNER_MINIO_ACCESS_KEY" = "$FORUM_MINIO_ACCESS_KEY" ]; then
+	echo "PLANNER_MINIO_ACCESS_KEY tiene que ser un usuario propio de planner-service." >&2
+	exit 1
+fi
 if [ "$FORUM_MINIO_ACCESS_KEY" = "$MINIO_ROOT_USER" ]; then
 	echo "FORUM_MINIO_ACCESS_KEY no puede ser el administrador del contenedor." >&2
 	exit 1
@@ -75,3 +83,30 @@ mc admin user add local "$FORUM_MINIO_ACCESS_KEY" "$FORUM_MINIO_SECRET_KEY" >/de
 mc admin policy attach local "$POLICY" --user "$FORUM_MINIO_ACCESS_KEY" >/dev/null 2>&1 || true
 
 echo "buckets $BUCKET y $PUBLIC_BUCKET listos (usuario $FORUM_MINIO_ACCESS_KEY, sólo sobre esos buckets)"
+
+# Bucket materials y usuario de planner-service, sólo sobre ese bucket.
+MATERIALS_BUCKET=materials
+PLANNER_POLICY=planner-materials
+mc mb --ignore-existing "local/$MATERIALS_BUCKET"
+cat > /tmp/planner-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::$MATERIALS_BUCKET/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::$MATERIALS_BUCKET"]
+    }
+  ]
+}
+EOF
+mc admin policy create local "$PLANNER_POLICY" /tmp/planner-policy.json >/dev/null
+mc admin user add local "$PLANNER_MINIO_ACCESS_KEY" "$PLANNER_MINIO_SECRET_KEY" >/dev/null
+mc admin policy attach local "$PLANNER_POLICY" --user "$PLANNER_MINIO_ACCESS_KEY" >/dev/null 2>&1 || true
+
+echo "bucket $MATERIALS_BUCKET listo (usuario $PLANNER_MINIO_ACCESS_KEY, sólo sobre ese bucket)"

@@ -154,7 +154,7 @@ docker compose down         # agregar -v para borrar también los datos locales
 | **Mock de la capacidad (Prism)** | http://localhost:4010 | Registro y consulta de documentos: contrato de [`docs/contracts/`](docs/contracts/) con respuestas de ejemplo |
 | MongoDB (bases `forum` y `notifications`) | Sin puerto publicado | Sólo lo usan forum-service, notification-service y `mongo-init`, por la red interna de Docker. Cada servicio entra con su usuario (`FORUM_DB_*`, `NOTIFICATION_DB_*`), que sólo lee y escribe su base; el administrador (`MONGO_ROOT_*`) sólo lo usa `mongo-init` |
 | Solr (core `summaries`) | http://localhost:8983/solr | Índice de búsqueda de los resúmenes aprobados. El panel de administración sirve para ver el esquema y probar consultas |
-| MinIO (buckets `summaries` y `public-documents`) | Consola web en http://localhost:9001 | PDF de los resúmenes (`summaries`, privados) y de los documentos registrados por otros sistemas (`public-documents`, que forum-service entrega sin autenticación, [ADR-014](docs/adr/ADR-014-contrato-documentos.md)). La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar esos dos buckets. La consola se abre con `MINIO_ROOT_*` |
+| MinIO (buckets `summaries`, `public-documents` y `materials`) | Consola web en http://localhost:9001 | PDF de los resúmenes (`summaries`, privados) y de los documentos registrados por otros sistemas (`public-documents`, que forum-service entrega sin autenticación, [ADR-014](docs/adr/ADR-014-contrato-documentos.md)). La API S3 no se publica: forum-service la usa por la red interna de Docker con su propio usuario (`FORUM_MINIO_*`), que sólo puede usar esos dos buckets. El bucket `materials` guarda los PDF del material de las materias, con un usuario propio de planner-service (`PLANNER_MINIO_*`) que sólo puede usar ese bucket. La consola se abre con `MINIO_ROOT_*` |
 | PostgreSQL (bases `planner` y `users`) | `localhost:5432` | Usuario y contraseña de cada base: variables `PLANNER_DB_*` y `USERS_DB_*` del `.env`. Cada usuario entra sólo a su base; el administrador (`POSTGRES_ADMIN_*`) sólo lo usa el contenedor `db-init` |
 
 Cada servicio responde `GET /health`. Por ejemplo:
@@ -260,18 +260,23 @@ Editar, cancelar, borrar una materia y confirmar un plan bloquean la fila del es
 
 ### Material de cada materia
 
-Cada materia tiene su **material**: los teóricos (apuntes, unidades, capítulos) y los prácticos (trabajos prácticos, guías, parciales viejos) que el estudiante tiene para estudiar, con un título y, opcional, lo que tiene adentro. Cada examen indica su **modalidad** (teórico, práctico o mixto) y qué material entra.
+Cada materia tiene su **material**: los teóricos (apuntes, unidades, capítulos) y los prácticos (trabajos prácticos, guías, parciales viejos) que el estudiante tiene para estudiar. **Sólo el título es obligatorio** (sin tipo, es un teórico); opcionalmente, lo que tiene adentro y **un PDF de hasta 10 MB**, que se guarda en MinIO, en el bucket `materials` ([ADR-003](docs/adr/ADR-003-persistencia.md#actualización-2026-11-10-pdf-del-material)). Cada examen indica su **modalidad** (teórico, práctico o mixto) y qué material entra.
 
 ```bash
 G=http://localhost:8080/api/planner
 curl -H "Authorization: Bearer $TOKEN" -X POST $G/subjects/<id de la materia>/materials \
   -H "Content-Type: application/json" -d '{"kind":"practico","title":"TP 5 — Ondas estacionarias","content":"Ejercicios 1 a 10"}'
-curl -H "Authorization: Bearer $TOKEN" $G/subjects/<id de la materia>/materials
+curl -H "Authorization: Bearer $TOKEN" -X POST $G/subjects/<id de la materia>/materials \
+  -F "title=TP 4" -F "kind=practico" -F "file=@tp4.pdf;type=application/pdf"          # con PDF: multipart
+curl -H "Authorization: Bearer $TOKEN" $G/subjects/<id de la materia>/materials       # cada uno con su file (o null)
+curl -H "Authorization: Bearer $TOKEN" -o tp4.pdf $G/materials/<id del material>/file # sólo el dueño (RN-03)
 curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/exams/<id del examen> \
   -H "Content-Type: application/json" -d '{"modality":"practico","materialIds":["<id del material>"]}'
 ```
 
-**El plan se arma con ese material real.** El agente de IA recibe la lista con el contenido de cada material y la instrucción de no mencionar nada que no esté cargado; el motor de reglas arma las sesiones con los títulos ("Estudiar Unidad 4", "Resolver TP 5") según la modalidad. Si no hay material, se usan los temas del examen y, si tampoco se sabe la modalidad, el plan no supone si hay que leer teoría o hacer ejercicios. Sin material elegido en el examen, entra todo el de la materia.
+**El plan se arma con ese material real.** El agente de IA recibe la lista con el contenido de cada material y la instrucción de no mencionar nada que no esté cargado; el motor de reglas arma las sesiones con los títulos ("Estudiar Unidad 4", "Resolver TP 5") según la modalidad. Si no hay material, se usan los temas del examen y, si tampoco se sabe la modalidad, el plan no supone si hay que leer teoría o hacer ejercicios. Sin material elegido en el examen, entra todo el de la materia. **El agente no lee el PDF:** le llegan el título y el texto de *¿Qué tiene?*, así que conviene escribir ahí los temas. Borrar un material borra su PDF.
+
+En el frontend, el PDF se adjunta y se descarga desde la pestaña *Material* de la materia, y el formulario del examen tiene **Subir material**, que lo crea en la materia (con o sin PDF) y lo deja elegido.
 
 ### Agente por MCP
 

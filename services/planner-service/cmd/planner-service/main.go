@@ -23,6 +23,7 @@ import (
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/ai"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/httpapi"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/metrics"
+	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/minio"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/postgres"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/rules"
 	"github.com/MichiSil/ProyectoEstudiario/services/planner-service/internal/adapters/system"
@@ -84,6 +85,25 @@ func run(logger *slog.Logger) error {
 	guarded := postgres.Guarded{Repo: repo, Timeout: postgres.DefaultTimeout}
 
 	svc := &app.Service{Repo: guarded, Generator: generator, Clock: system.Clock{}, IDs: system.IDs{}, Metrics: metrics.Prometheus{}}
+
+	// PDF del material, en MinIO (bucket materials, ADR-003), con el usuario
+	// propio de planner-service. Sin MINIO_ENDPOINT el material es sólo texto.
+	if endpoint := os.Getenv("MINIO_ENDPOINT"); endpoint != "" {
+		files, err := minio.New(endpoint, os.Getenv("MINIO_ACCESS_KEY"), os.Getenv("MINIO_SECRET_KEY"),
+			env("MINIO_BUCKET", "materials"), os.Getenv("MINIO_SECURE") == "true")
+		if err != nil {
+			return err
+		}
+		// Si MinIO no responde al arrancar, el servicio arranca igual: adjuntar y
+		// descargar PDF responden 503 hasta que vuelva (ADR-010).
+		if err := files.Ping(ctx); err != nil {
+			logger.Warn("MinIO no disponible al arrancar: los PDF del material no van a funcionar hasta que vuelva", "error", err.Error())
+		}
+		svc.Files = files
+		logger.Info("PDF del material en MinIO", "endpoint", endpoint, "bucket", env("MINIO_BUCKET", "materials"))
+	} else {
+		logger.Warn("sin MINIO_ENDPOINT: el material no puede tener PDF")
+	}
 	// Secreto compartido con el api-gateway: sin él, cualquiera podría llamar
 	// directo al puerto de planner-service con el X-User-Id de otro estudiante.
 	internalToken := os.Getenv("INTERNAL_TOKEN")
@@ -98,9 +118,10 @@ func run(logger *slog.Logger) error {
 		Addr:              ":" + env("PORT", "8082"),
 		Handler:           httpapi.Observe(h.Routes(), logger),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// Subir el PDF de un material (10 MB) puede tardar más que un pedido común (ADR-005: 20 s en el gateway).
+		ReadTimeout:  25 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

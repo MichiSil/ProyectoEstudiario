@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { BookOpen, PenLine, Plus, Trash2 } from 'lucide-react'
+import { BookOpen, Download, FileText, PenLine, Plus, Trash2 } from 'lucide-react'
 import { useSubjectContext } from '../context'
 import { plannerApi } from '@/api/planner'
 import type { Material, MaterialKind } from '@/api/types'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { FieldGroup, Input, Label, Textarea } from '@/components/ui/Field'
 import { Sheet } from '@/components/ui/Sheet'
 import { ApiErrorNotice } from '@/components/ApiErrorNotice'
+import { formatSize } from '@/features/forum/shared'
+import { MaterialForm } from '../MaterialForm'
 
 const KIND_LABEL: Record<MaterialKind, string> = { teorico: 'Teóricos', practico: 'Prácticos' }
 const KIND_HINT: Record<MaterialKind, string> = {
@@ -26,6 +27,7 @@ export function SubjectMaterialTab() {
   const [error, setError] = useState<unknown>(null)
   const [adding, setAdding] = useState<MaterialKind | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState<string | null>(null)
 
   useEffect(() => {
     plannerApi
@@ -47,6 +49,18 @@ export function SubjectMaterialTab() {
       setError(err)
     } finally {
       setDeleting(null)
+    }
+  }
+
+  async function download(m: Material) {
+    setDownloading(m.id)
+    setError(null)
+    try {
+      await plannerApi.downloadMaterial(m)
+    } catch (err) {
+      setError(err)
+    } finally {
+      setDownloading(null)
     }
   }
 
@@ -87,6 +101,17 @@ export function SubjectMaterialTab() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-ink">{m.title}</p>
                       {m.content && <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-muted">{m.content}</p>}
+                      {m.file && (
+                        <button
+                          onClick={() => void download(m)}
+                          disabled={downloading === m.id}
+                          className="mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-lg bg-accent-soft px-2 py-1 text-xs text-accent-ink hover:bg-accent/15 disabled:opacity-60"
+                        >
+                          {downloading === m.id ? <Download size={13} /> : <FileText size={13} />}
+                          <span className="truncate">{downloading === m.id ? 'Descargando…' : m.file.fileName}</span>
+                          <span className="shrink-0 text-accent-ink/70">· {formatSize(m.file.sizeBytes)}</span>
+                        </button>
+                      )}
                     </div>
                     <button
                       onClick={() => void remove(m.id)}
@@ -125,68 +150,18 @@ function MaterialFormSheet({
   onClose: () => void
   onCreated: (m: Material) => void
 }) {
-  const [title, setTitle] = useState('')
-  const [content, setContent] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<unknown>(null)
-
-  useEffect(() => {
-    setTitle('')
-    setContent('')
-    setError(null)
-  }, [kind])
-
   if (!kind) return null
-  const current = kind
-
-  async function save() {
-    if (!title.trim()) return
-    setSaving(true)
-    setError(null)
-    try {
-      onCreated(await plannerApi.createMaterial(subjectId, { kind: current, title: title.trim(), content: content.trim() }))
-      onClose()
-    } catch (err) {
-      setError(err)
-    } finally {
-      setSaving(false)
-    }
-  }
-
   return (
-    <Sheet open onClose={onClose} title={current === 'teorico' ? 'Agregar teórico' : 'Agregar práctico'}>
-      <FieldGroup>
-        <Label>Título</Label>
-        <Input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={current === 'teorico' ? 'Unidad 2 — Ondas' : 'TP 3 — Movimiento ondulatorio'}
-          maxLength={200}
-          autoFocus
-        />
-      </FieldGroup>
-      <FieldGroup>
-        <Label>¿Qué tiene? (opcional)</Label>
-        <Textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder={
-            current === 'teorico'
-              ? 'Temas que cubre: ondas transversales, ecuación de onda, interferencia…'
-              : 'Ejercicios 1 a 12: velocidad de propagación, ondas estacionarias…'
-          }
-          maxLength={5000}
-        />
-        <p className="mt-1 text-xs text-subtle">Cuanto más detalle, mejor arma las sesiones el agente.</p>
-      </FieldGroup>
-      {!!error && (
-        <div className="mb-4">
-          <ApiErrorNotice error={error} />
-        </div>
-      )}
-      <Button className="w-full" disabled={saving || !title.trim()} onClick={() => void save()}>
-        {saving ? 'Guardando…' : 'Guardar'}
-      </Button>
+    <Sheet open onClose={onClose} title={kind === 'teorico' ? 'Agregar teórico' : 'Agregar práctico'}>
+      <MaterialForm
+        key={kind}
+        subjectId={subjectId}
+        kind={kind}
+        onCreated={(m) => {
+          onCreated(m)
+          onClose()
+        }}
+      />
     </Sheet>
   )
 }

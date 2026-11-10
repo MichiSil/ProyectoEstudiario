@@ -12,9 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +54,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /subjects/{subjectId}/materials", h.withStudent(h.listMaterials))
 	mux.HandleFunc("POST /subjects/{subjectId}/materials", h.withStudent(h.addMaterial))
 	mux.HandleFunc("DELETE /materials/{materialId}", h.withStudent(h.deleteMaterial))
+	mux.HandleFunc("GET /materials/{materialId}/file", h.withStudent(h.downloadMaterial))
 	mux.HandleFunc("POST /exams", h.withStudent(h.createExam))
 	mux.HandleFunc("GET /exams", h.withStudent(h.listExams))
 	mux.HandleFunc("PATCH /exams/{examId}", h.withStudent(h.updateExam))
@@ -164,16 +168,28 @@ func toExamDTO(e domain.Exam) examDTO {
 }
 
 type materialDTO struct {
-	ID        string    `json:"id"`
-	SubjectID string    `json:"subjectId"`
-	Kind      string    `json:"kind"` // "teorico" o "practico"
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string `json:"id"`
+	SubjectID string `json:"subjectId"`
+	Kind      string `json:"kind"` // "teorico" o "practico"
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	// File es el PDF adjunto, o null si el material es sólo texto.
+	File      *materialFileDTO `json:"file"`
+	CreatedAt time.Time        `json:"createdAt"`
+}
+
+type materialFileDTO struct {
+	FileName     string `json:"fileName"`
+	SizeBytes    int64  `json:"sizeBytes"`
+	DownloadPath string `json:"downloadPath"` // relativa a planner-service (en el frontend, /api/planner + esta ruta)
 }
 
 func toMaterialDTO(m domain.Material) materialDTO {
-	return materialDTO{m.ID, m.SubjectID, string(m.Kind), m.Title, m.Content, m.CreatedAt.UTC()}
+	dto := materialDTO{ID: m.ID, SubjectID: m.SubjectID, Kind: string(m.Kind), Title: m.Title, Content: m.Content, CreatedAt: m.CreatedAt.UTC()}
+	if m.File != nil {
+		dto.File = &materialFileDTO{FileName: m.File.FileName, SizeBytes: m.File.SizeBytes, DownloadPath: "/materials/" + m.ID + "/file"}
+	}
+	return dto
 }
 
 // examChangesDTO es el cuerpo de PATCH /exams/{examId}: sólo cambian los
@@ -354,22 +370,96 @@ func (h *Handler) listMaterials(w http.ResponseWriter, r *http.Request, student 
 	writeJSON(w, http.StatusOK, out)
 }
 
+// addMaterial acepta JSON (kind, title, content) o, para adjuntar un PDF,
+// multipart/form-data con los mismos campos y el archivo en "file". Sólo el
+// título es obligatorio.
 func (h *Handler) addMaterial(w http.ResponseWriter, r *http.Request, student string) {
 	var in struct {
 		Kind    string `json:"kind"`
 		Title   string `json:"title"`
 		Content string `json:"content"`
 	}
-	if !h.decode(w, r, &in) {
+	var file *app.UploadedFile
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "multipart/form-data" {
+		fields, f, ok := h.readMaterialForm(w, r)
+		if !ok {
+			return
+		}
+		in.Kind, in.Title, in.Content, file = fields["kind"], fields["title"], fields["content"], f
+	} else if !h.decode(w, r, &in) {
 		return
 	}
-	m, err := h.Svc.AddMaterial(r.Context(), domain.Material{StudentID: student, SubjectID: r.PathValue("subjectId"),
-		Kind: domain.MaterialKind(in.Kind), Title: in.Title, Content: in.Content})
+	m, err := h.Svc.AddMaterialWithFile(r.Context(), domain.Material{StudentID: student, SubjectID: r.PathValue("subjectId"),
+		Kind: domain.MaterialKind(in.Kind), Title: in.Title, Content: in.Content}, file)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toMaterialDTO(m))
+}
+
+// materialFields son los campos de texto del formulario, con su largo máximo en bytes.
+var materialFields = map[string]int64{"kind": 50, "title": 1000, "content": 25000}
+
+// readMaterialForm lee el multipart sin cargar en memoria más de 10 MB + 1 del
+// archivo. Si el cuerpo no se puede leer, responde 400 y devuelve ok = false.
+func (h *Handler) readMaterialForm(w http.ResponseWriter, r *http.Request) (fields map[string]string, file *app.UploadedFile, ok bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, app.MaxMaterialFileSize+1<<20)
+	mr, err := r.MultipartReader()
+	if err != nil {
+		h.problem(w, r, http.StatusBadRequest, "MALFORMED_REQUEST", "no se pudo leer el formulario: "+err.Error(), nil)
+		return nil, nil, false
+	}
+	fields = map[string]string{}
+	for {
+		part, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			h.problem(w, r, http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "el archivo pesa más de 10 MB", nil)
+			return nil, nil, false
+		}
+		if err != nil {
+			h.problem(w, r, http.StatusBadRequest, "MALFORMED_REQUEST", "no se pudo leer el formulario: "+err.Error(), nil)
+			return nil, nil, false
+		}
+		name := part.FormName()
+		switch {
+		case name == "file" && part.FileName() != "":
+			data, err := io.ReadAll(io.LimitReader(part, app.MaxMaterialFileSize+1))
+			if err != nil {
+				h.problem(w, r, http.StatusBadRequest, "MALFORMED_REQUEST", "no se pudo leer el archivo", nil)
+				return nil, nil, false
+			}
+			file = &app.UploadedFile{Name: part.FileName(), ContentType: part.Header.Get("Content-Type"), Data: data}
+		case materialFields[name] > 0:
+			b, err := io.ReadAll(io.LimitReader(part, materialFields[name]))
+			if err != nil {
+				h.problem(w, r, http.StatusBadRequest, "MALFORMED_REQUEST", "no se pudo leer el formulario", nil)
+				return nil, nil, false
+			}
+			fields[name] = string(b)
+		}
+		_ = part.Close()
+	}
+	return fields, file, true
+}
+
+// downloadMaterial descarga el PDF de un material propio (RN-03).
+func (h *Handler) downloadMaterial(w http.ResponseWriter, r *http.Request, student string) {
+	m, body, err := h.Svc.MaterialFile(r.Context(), student, r.PathValue("materialId"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	defer body.Close()
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Length", strconv.FormatInt(m.File.SizeBytes, 10))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": m.File.FileName}))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
 }
 
 func (h *Handler) deleteMaterial(w http.ResponseWriter, r *http.Request, student string) {

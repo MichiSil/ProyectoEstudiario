@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -17,7 +19,8 @@ type Service struct {
 	Generator PlanGenerator
 	Clock     Clock
 	IDs       IDGenerator
-	Metrics   Metrics // opcional
+	Metrics   Metrics       // opcional
+	Files     MaterialFiles // opcional: sin él, el material no puede tener PDF
 }
 
 func (s *Service) CreateSubject(ctx context.Context, sub domain.Subject) (domain.Subject, error) {
@@ -140,14 +143,36 @@ func (s *Service) checkExamMaterial(ctx context.Context, e domain.Exam, verr *do
 	return nil
 }
 
-// AddMaterial carga un teórico o un práctico en una materia propia.
+// MaxMaterialFileSize es el tamaño máximo del PDF de un material.
+const MaxMaterialFileSize = 10 << 20
+
+// UploadedFile es el PDF que se adjunta a un material, ya leído (como máximo
+// MaxMaterialFileSize + 1 bytes).
+type UploadedFile struct {
+	Name        string
+	ContentType string
+	Data        []byte
+}
+
+// AddMaterial carga un teórico o un práctico, sólo con texto, en una materia propia.
 func (s *Service) AddMaterial(ctx context.Context, m domain.Material) (domain.Material, error) {
+	return s.AddMaterialWithFile(ctx, m, nil)
+}
+
+// AddMaterialWithFile carga un material en una materia propia, con un PDF
+// opcional de hasta 10 MB. Sólo el título es obligatorio: sin tipo, es un
+// teórico. Primero sube el PDF a MinIO y después crea el material: si la base
+// falla, se intenta borrar el archivo.
+func (s *Service) AddMaterialWithFile(ctx context.Context, m domain.Material, file *UploadedFile) (domain.Material, error) {
 	if _, err := s.Repo.GetSubject(ctx, m.StudentID, m.SubjectID); err != nil {
 		return domain.Material{}, err // RN-03: sólo en materias propias
 	}
 	verr := &domain.ValidationError{}
 	m.Title = strings.TrimSpace(m.Title)
 	m.Content = strings.TrimSpace(m.Content)
+	if m.Kind == "" {
+		m.Kind = domain.MaterialTheory
+	}
 	if !m.Kind.Valid() {
 		verr.Violations = append(verr.Violations, domain.RuleViolation{Rule: "RF-04", Message: "el material tiene que ser teórico o práctico", SessionIndex: -1})
 	}
@@ -157,12 +182,79 @@ func (s *Service) AddMaterial(ctx context.Context, m domain.Material) (domain.Ma
 	if len([]rune(m.Content)) > 5000 {
 		verr.Violations = append(verr.Violations, domain.RuleViolation{Rule: "RF-04", Message: "el contenido tiene como máximo 5000 caracteres", SessionIndex: -1})
 	}
+	if file != nil {
+		switch {
+		case s.Files == nil:
+			return domain.Material{}, domain.ErrUnavailable
+		case len(file.Data) > MaxMaterialFileSize:
+			verr.Violations = append(verr.Violations, domain.RuleViolation{Rule: "RF-04", Message: "el archivo pesa más de 10 MB", SessionIndex: -1})
+		case !isPDF(file):
+			verr.Violations = append(verr.Violations, domain.RuleViolation{Rule: "RF-04", Message: "el archivo tiene que ser un PDF", SessionIndex: -1})
+		}
+	}
 	if len(verr.Violations) > 0 {
 		return domain.Material{}, verr
 	}
 	m.ID = s.IDs.NewID()
 	m.CreatedAt = s.Clock.Now()
-	return m, s.Repo.CreateMaterial(ctx, m)
+	m.File = nil
+	if file != nil {
+		m.File = &domain.MaterialFile{Key: m.ID + ".pdf", FileName: pdfName(file.Name, m.Title), ContentType: "application/pdf", SizeBytes: int64(len(file.Data))}
+		if err := s.Files.Put(ctx, m.File.Key, bytes.NewReader(file.Data), m.File.SizeBytes, m.File.ContentType); err != nil {
+			return domain.Material{}, err
+		}
+	}
+	if err := s.Repo.CreateMaterial(ctx, m); err != nil {
+		if m.File != nil {
+			_ = s.Files.Delete(context.WithoutCancel(ctx), m.File.Key)
+		}
+		return domain.Material{}, err
+	}
+	return m, nil
+}
+
+// isPDF verifica el tipo declarado y el contenido (un PDF empieza con
+// "%PDF-"), para que no alcance con cambiarle la extensión a otro archivo.
+func isPDF(f *UploadedFile) bool {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(f.ContentType, ";")[0]))
+	return ct == "application/pdf" && bytes.HasPrefix(f.Data, []byte("%PDF-"))
+}
+
+// pdfName es el nombre sugerido al descargarlo: el del archivo subido o, si no
+// vino, el título.
+func pdfName(uploaded, title string) string {
+	name := strings.TrimSpace(uploaded)
+	if name == "" {
+		name = title
+	}
+	name = strings.Map(func(r rune) rune {
+		if r == '"' || r == '\\' || r == '/' || r < 32 {
+			return '-'
+		}
+		return r
+	}, name)
+	if !strings.HasSuffix(strings.ToLower(name), ".pdf") {
+		name += ".pdf"
+	}
+	return name
+}
+
+// MaterialFile abre el PDF de un material propio (RN-03). Si el material no
+// existe, es de otro estudiante o no tiene archivo, devuelve ErrNotFound.
+// Quien lo llama tiene que cerrar el archivo.
+func (s *Service) MaterialFile(ctx context.Context, studentID, materialID string) (domain.Material, io.ReadCloser, error) {
+	m, err := s.Repo.GetMaterial(ctx, studentID, materialID)
+	if err != nil {
+		return domain.Material{}, nil, err
+	}
+	if m.File == nil || s.Files == nil {
+		return domain.Material{}, nil, domain.ErrNotFound
+	}
+	r, err := s.Files.Get(ctx, m.File.Key)
+	if err != nil {
+		return domain.Material{}, nil, err
+	}
+	return m, r, nil
 }
 
 func (s *Service) ListMaterials(ctx context.Context, studentID, subjectID string) ([]domain.Material, error) {
@@ -172,8 +264,21 @@ func (s *Service) ListMaterials(ctx context.Context, studentID, subjectID string
 	return s.Repo.ListMaterials(ctx, studentID, subjectID)
 }
 
+// DeleteMaterial borra un material propio y su PDF. El archivo se borra después
+// del material: si eso falla, queda en el bucket sin nada que lo use, pero
+// nadie puede descargarlo.
 func (s *Service) DeleteMaterial(ctx context.Context, studentID, materialID string) error {
-	return s.Repo.DeleteMaterial(ctx, studentID, materialID)
+	m, err := s.Repo.GetMaterial(ctx, studentID, materialID)
+	if err != nil {
+		return err
+	}
+	if err := s.Repo.DeleteMaterial(ctx, studentID, materialID); err != nil {
+		return err
+	}
+	if m.File != nil && s.Files != nil {
+		_ = s.Files.Delete(context.WithoutCancel(ctx), m.File.Key)
+	}
+	return nil
 }
 
 // examMaterials es el material que entra en el examen: el elegido o, si no

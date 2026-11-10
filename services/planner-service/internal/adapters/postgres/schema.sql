@@ -104,3 +104,8 @@ ALTER TABLE exams ADD COLUMN IF NOT EXISTS modality TEXT NOT NULL DEFAULT '';
 -- sesiones; la fila queda porque sus sesiones completadas la referencian.
 ALTER TABLE subjects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE exams ADD COLUMN IF NOT EXISTS material_ids TEXT[] NOT NULL DEFAULT '{}';
+-- PDF opcional del material, guardado en MinIO (bucket materials, ADR-003).
+-- file_key vacío: el material es sólo texto.
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS file_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS file_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0;
