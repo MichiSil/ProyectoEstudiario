@@ -6,7 +6,9 @@ Estudiario corre en una máquina virtual de Azure con el mismo `docker compose` 
 |---|---|
 | `setup.sh` | Prepara la VM (swap, Docker), clona el repo, genera un `.env` con secretos nuevos y levanta todo |
 | `docker-compose.cloud.yml` | Agrega Caddy y cierra los puertos de los demás servicios |
-| `Caddyfile` | `/v1/*` va a forum-service (capacidad para el Grupo 4); el resto, al frontend |
+| `Caddyfile` | `/v1/*` y `/health` van a forum-service (capacidad para el Grupo 4); el resto, al frontend |
+
+**Despliegue actual:** https://estudiario-ucc.chilecentral.cloudapp.azure.com (VM `estudiario-vm`, región Chile Central).
 
 ## 1. Crear la VM (una sola vez)
 
@@ -35,11 +37,18 @@ curl -fsSL https://raw.githubusercontent.com/MichiSil/ProyectoEstudiario/main/de
 bash setup.sh
 ```
 
-El script pregunta el dominio, el mail del administrador del foro y la API key de Groq (opcional), y genera contraseñas y secretos nuevos al azar para todas las bases y el JWT. La primera vez tarda unos 10 minutos en compilar las imágenes. Al terminar, la app queda en `https://estudiario.<región>.cloudapp.azure.com`.
+El script pregunta el dominio, el mail del administrador del foro, la API key de Groq (opcional) y la del Club de Beneficios (opcional), y arma el `.env` a partir de `.env.example`:
+
+- Genera contraseñas y secretos nuevos al azar para todas las bases, RabbitMQ, MinIO, Grafana, el JWT y el token interno. Ningún valor de desarrollo queda en la nube.
+- `APP_URL` pasa a ser `https://<dominio>`: es el link que reciben por mail los autores de la agencia.
+- **API key del Grupo 4.** Genera una clave nueva, guarda en el `.env` sólo su hash (`FORUM_API_KEYS=agencia_de_viajes:<sha256>`) y deja la clave en `~/clave-grupo4.txt`. Pasásela por privado a quien se la entrega al Grupo 4 y después borrá el archivo (`rm ~/clave-grupo4.txt`). La clave de prueba de `.env.example` no sirve en la nube.
+- `CLUB_API_KEY` es la que entregó el Grupo 1 (la tiene Isabela). Si la dejás vacía, el perfil muestra que el Club no está disponible y los puntos quedan pendientes; se puede cargar después en el `.env` y reiniciar users-service.
+
+La primera vez tarda unos 10 minutos en compilar las imágenes. Al terminar, la app queda en `https://estudiario.<región>.cloudapp.azure.com`.
 
 ## 3. Actualizar después de un merge a main
 
-Volvé a correr el script dentro de la VM. Actualiza el código y reconstruye sin tocar el `.env` ni los datos:
+Volvé a correr el script dentro de la VM. Actualiza el código y reconstruye sin perder los datos. Al `.env` sólo le agrega las variables nuevas de `.env.example`, con secretos al azar, y cambia las que hayan quedado con el valor de desarrollo; si el consumidor del Grupo 4 todavía se llamaba `grupo4`, lo renombra a `agencia_de_viajes` y su clave sigue andando:
 
 ```bash
 bash setup.sh
@@ -69,7 +78,28 @@ ssh -i ruta/a/tu-clave.pem -L 16686:localhost:16686 azureuser@estudiario.<regió
 sudo docker stop tunel-jaeger
 ```
 
-Lo mismo sirve para la consola de MinIO (`minio:9001`), Solr (`solr:8983`), la interfaz de RabbitMQ (`rabbitmq:15672`) o Mailpit (`mailpit:8025`), cambiando el nombre y el puerto.
+Lo mismo sirve para Grafana (`grafana:3000`, usuario y contraseña en `GRAFANA_ADMIN_USER` y `GRAFANA_ADMIN_PASSWORD` del `.env`), Prometheus (`prometheus:9090`), la consola de MinIO (`minio:9001`), Solr (`solr:8983`), la interfaz de RabbitMQ (`rabbitmq:15672`) o Mailpit (`mailpit:8025`), cambiando el nombre y el puerto. El `GET /metrics` de cada servicio tampoco se publica: sólo lo lee Prometheus dentro de la red de docker.
+
+**Probar desde afuera** (desde cualquier compu, con la clave del Grupo 4 en `CLAVE`):
+
+```bash
+URL=https://estudiario-ucc.chilecentral.cloudapp.azure.com
+curl -s -o /dev/null -w '%{http_code}
+' $URL/health         # forum-service: 200
+curl -s -o /dev/null -w '%{http_code}
+' $URL/               # la app: 200
+curl -s -H "X-API-Key: $CLAVE" "$URL/v1/documents?limit=1"    # capacidad del Grupo 4: 200
+curl -s -o /dev/null -w '%{http_code}
+' $URL/v1/documents    # sin clave: 401
+curl -s -o x.pdf -w '%{http_code}
+' $URL/v1/public/documents/<id>/file   # PDF público de un documento de la agencia: 200
+```
+
+## Limitaciones conocidas
+
+- **Los mails no salen a internet.** En la nube los mails (resumen publicado o rechazado, cuenta nueva de un autor de la agencia) los recibe Mailpit, igual que en local: se ven por el túnel de arriba (`mailpit:8025`). Mandarlos de verdad requiere un proveedor SMTP con dominio verificado y credenciales, que no tenemos.
+- **Una sola VM.** Todo corre en una máquina: si se cae, se cae todo. Las dos instancias de forum-service protegen de la caída de un contenedor, no de la máquina.
+- **Grafana, Prometheus y Jaeger sólo por túnel SSH.** No se publican para no exponer paneles internos.
 
 **Apagar para ahorrar crédito.** En el portal, **Detener** la VM deja de cobrar el cómputo (el disco sigue costando unos centavos). Al volver a iniciarla, los contenedores arrancan solos.
 

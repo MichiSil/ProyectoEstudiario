@@ -4,7 +4,7 @@
 #
 # - Caddy es lo único publicado (80 y 443, con HTTPS automático).
 # - Ningún otro servicio publica puertos: bases de datos, paneles de MinIO,
-#   Solr, Jaeger, RabbitMQ y Mailpit quedan sólo en la red interna de docker.
+#   Solr, Jaeger, RabbitMQ, Mailpit, Prometheus y Grafana quedan sólo en la red interna de docker.
 #   Para verlos, un túnel SSH (ver deploy/azure/README.md).
 
 services:
@@ -38,6 +38,8 @@ services:
     ports: !reset []
   contract-mock:
     ports: !reset []
+  club-mock:
+    ports: !reset []
   postgres:
     ports: !reset []
   minio:
@@ -49,6 +51,10 @@ services:
   rabbitmq:
     ports: !reset []
   mailpit:
+    ports: !reset []
+  prometheus:
+    ports: !reset []
+  grafana:
     ports: !reset []
 
 volumes:

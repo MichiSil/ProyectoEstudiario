@@ -6,12 +6,15 @@
 #   entre sus dos instancias con los mismos criterios que el gateway (ADR-012):
 #   round robin, chequeo de GET /health cada 5 s y, si una instancia no responde,
 #   se reintenta en la otra.
+# - /health es el de forum-service, como dice el contrato: el Grupo 4 lo usa
+#   para saber si la capacidad está arriba.
 # - Todo lo demás es el frontend; su nginx reenvía /api al api-gateway.
 
 {$DOMAIN} {
 	encode gzip
 
-	handle /v1/* {
+	@capacidad path /v1/* /health
+	handle @capacidad {
 		reverse_proxy forum-service:8083 forum-service-2:8083 {
 			lb_policy round_robin
 			lb_try_duration 2s
