@@ -46,6 +46,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("POST /subjects", h.withStudent(h.createSubject))
 	mux.HandleFunc("GET /subjects", h.withStudent(h.listSubjects))
+	mux.HandleFunc("PATCH /subjects/{subjectId}", h.withStudent(h.updateSubject))
 	mux.HandleFunc("DELETE /subjects/{subjectId}", h.withStudent(h.deleteSubject))
 	mux.HandleFunc("GET /subjects/{subjectId}/materials", h.withStudent(h.listMaterials))
 	mux.HandleFunc("POST /subjects/{subjectId}/materials", h.withStudent(h.addMaterial))
@@ -60,6 +61,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /exams/{examId}/proposals", h.withStudent(h.propose))
 	mux.HandleFunc("POST /plans/{planId}/confirm", h.withStudent(h.confirm))
 	mux.HandleFunc("GET /sessions", h.withStudent(h.listSessions))
+	mux.HandleFunc("PATCH /sessions/{sessionId}", h.withStudent(h.updateSession))
 	// Agente por MCP (SPEC 10.1): mismas reglas y misma identidad que la API REST.
 	mux.HandleFunc("/mcp", h.withStudent(func(w http.ResponseWriter, r *http.Request, student string) {
 		mcpserver.Handler(h.Svc, student).ServeHTTP(w, r)
@@ -118,6 +120,18 @@ type subjectDTO struct {
 	Name       string   `json:"name"`
 	Professors []string `json:"professors"`
 	Difficulty int      `json:"difficulty"`
+}
+
+// subjectPatchDTO es el cuerpo de PATCH /subjects/{id}: sólo cambian los
+// campos que vienen.
+type subjectPatchDTO struct {
+	Name       *string   `json:"name"`
+	Professors *[]string `json:"professors"`
+	Difficulty *int      `json:"difficulty"`
+}
+
+type sessionPatchDTO struct {
+	Status string `json:"status"`
 }
 
 type examDTO struct {
@@ -414,6 +428,39 @@ func (h *Handler) replan(w http.ResponseWriter, r *http.Request, student string)
 
 // deleteSubject borra una materia con sus exámenes: 204, o 404 si no existe
 // o ya estaba borrada.
+func (h *Handler) updateSubject(w http.ResponseWriter, r *http.Request, student string) {
+	var in subjectPatchDTO
+	if !h.decode(w, r, &in) {
+		return
+	}
+	patch := app.SubjectPatch{Name: in.Name, Professors: in.Professors}
+	if in.Difficulty != nil {
+		d := domain.Difficulty(*in.Difficulty)
+		patch.Difficulty = &d
+	}
+	s, err := h.Svc.UpdateSubject(r.Context(), student, r.PathValue("subjectId"), patch)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, subjectDTO{s.ID, s.Name, s.Professors, int(s.Difficulty)})
+}
+
+// updateSession marca una sesión como completada o pospuesta, o deshace una
+// completada (RF-11). Devuelve la sesión con su estado nuevo.
+func (h *Handler) updateSession(w http.ResponseWriter, r *http.Request, student string) {
+	var in sessionPatchDTO
+	if !h.decode(w, r, &in) {
+		return
+	}
+	s, err := h.Svc.SetSessionStatus(r.Context(), student, r.PathValue("sessionId"), domain.SessionStatus(in.Status))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toSessionDTOs([]domain.Session{s})[0])
+}
+
 func (h *Handler) deleteSubject(w http.ResponseWriter, r *http.Request, student string) {
 	if err := h.Svc.DeleteSubject(r.Context(), student, r.PathValue("subjectId")); err != nil {
 		h.fail(w, r, err)

@@ -217,6 +217,26 @@ cd ../..
 
 **Control de tráfico.** El api-gateway limita los pedidos a **120 por minuto por usuario** en las rutas con token y a **20 por minuto por IP** al registrarse e iniciar sesión. Al superarlos responde `429 RATE_LIMITED` con `Retry-After` ([ADR-005](docs/adr/ADR-005-comunicacion.md#actualización-2026-11-09-control-de-tráfico-en-el-api-gateway)). Para una prueba de carga, subí `RATE_LIMIT_USER_PER_MIN` y `RATE_LIMIT_PUBLIC_PER_MIN` en el `.env`.
 
+### Editar materias y marcar sesiones
+
+Una materia se edita con `PATCH` (RF-04); sólo cambian los campos que vienen. Editarla no toca los planes ya confirmados (RN-50):
+
+```bash
+G=http://localhost:8080/api/planner
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/subjects/<id de la materia> \
+  -H "Content-Type: application/json" -d '{"name":"Análisis Matemático II","professors":["Dra. Pérez"],"difficulty":3}'
+```
+
+Una sesión reservada se marca como completada o pospuesta, o se vuelve a pendiente si se marcó por error (RF-11):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/sessions/<id de la sesión> \
+  -H "Content-Type: application/json" -d '{"status":"completada"}'   # o "pospuesta", o "pendiente" para deshacer
+```
+
+- Sólo se puede completar desde la hora de inicio de la sesión (RN-48); antes responde `422` con la regla incumplida.
+- Posponer libera el horario y deja el plan del examen *desactualizado*, para rehacerlo con ese tema (RN-49). Una pospuesta no vuelve a pendiente.
+
 ### Editar y cancelar exámenes
 
 El estudiante puede listar sus exámenes, editarlos y cancelarlos (RF-06), con el JWT de la sección anterior:

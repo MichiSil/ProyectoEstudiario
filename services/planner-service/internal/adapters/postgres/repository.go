@@ -92,6 +92,38 @@ func (r *Repository) ListSubjects(ctx context.Context, studentID string) ([]doma
 	return out, rows.Err()
 }
 
+// UpdateSubject edita una materia propia y no borrada (RF-04).
+func (r *Repository) UpdateSubject(ctx context.Context, studentID, id string, apply func(domain.Subject) (domain.Subject, error)) (domain.Subject, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return domain.Subject{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	var cur domain.Subject
+	var diff int
+	err = tx.QueryRow(ctx,
+		`SELECT id, student_id, name, professors, difficulty FROM subjects
+		 WHERE id = $1 AND student_id = $2 AND deleted_at IS NULL FOR UPDATE`, id, studentID).
+		Scan(&cur.ID, &cur.StudentID, &cur.Name, &cur.Professors, &diff)
+	if err != nil {
+		return domain.Subject{}, notFound(err)
+	}
+	cur.Difficulty = domain.Difficulty(diff)
+	next, err := apply(cur)
+	if err != nil {
+		return domain.Subject{}, err
+	}
+	if next.Professors == nil {
+		next.Professors = []string{}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE subjects SET name = $1, professors = $2, difficulty = $3 WHERE id = $4`,
+		next.Name, next.Professors, int(next.Difficulty), id); err != nil {
+		return domain.Subject{}, err
+	}
+	return next, tx.Commit(ctx)
+}
+
 func (r *Repository) CreateExam(ctx context.Context, e domain.Exam) error {
 	topics := e.Topics
 	if topics == nil {
@@ -419,6 +451,46 @@ func listSessions(ctx context.Context, q interface {
 
 func (r *Repository) ListBookedSessions(ctx context.Context, studentID string, from time.Time) ([]domain.Session, error) {
 	return listSessions(ctx, r.pool, studentID, from)
+}
+
+// UpdateSession cambia el estado de una sesión (RF-11). Bloquea al estudiante,
+// como la confirmación, así no cambia una sesión mientras se confirma o se
+// replanifica otro plan suyo. Si posponer desactualiza el plan, se marca en la
+// misma transacción.
+func (r *Repository) UpdateSession(ctx context.Context, studentID, id string, apply func(domain.Session) (domain.Session, bool, error)) (domain.Session, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return domain.Session{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+
+	if err := lockStudent(ctx, tx, studentID); err != nil {
+		return domain.Session{}, err
+	}
+	cur, err := scanSession(tx.QueryRow(ctx,
+		`SELECT s.id, s.plan_id, s.student_id, s.exam_id, s.starts_at, s.ends_at, s.topic, s.objective, s.status,
+			p.status = 'desactualizado'
+		FROM sessions s JOIN plans p ON p.id = s.plan_id
+		WHERE s.id = $1 AND s.student_id = $2
+			AND EXISTS (SELECT 1 FROM exams e WHERE e.id = s.exam_id AND `+liveSubjectSQL+`)
+		FOR UPDATE OF s`, id, studentID))
+	if err != nil {
+		return domain.Session{}, notFound(err)
+	}
+	next, outdate, err := apply(cur)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sessions SET status = $1 WHERE id = $2`, string(next.Status), id); err != nil {
+		return domain.Session{}, err
+	}
+	if outdate {
+		if _, err := tx.Exec(ctx, `UPDATE plans SET status = 'desactualizado' WHERE id = $1 AND status = 'confirmado'`, next.PlanID); err != nil {
+			return domain.Session{}, err
+		}
+		next.Outdated = true
+	}
+	return next, tx.Commit(ctx)
 }
 
 func (r *Repository) SaveProposal(ctx context.Context, p domain.Plan) error {
