@@ -1,6 +1,6 @@
 # ADR-005: Comunicación entre servicios
 
-- **Estado:** Aceptada (validada parcialmente en la Entrega 2: comunicación síncrona de planner-service)
+- **Estado:** Aceptada (síncrona y asíncrona validadas el 2026-11-10; ver *Validación final*)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D5
 - **Reemplaza a:** —
@@ -242,14 +242,14 @@ Queda una ventana mínima en la que el mail se envió pero el proceso se cayó a
 
 **Agregado.** Al arrancar, planner-service reintenta la conexión a PostgreSQL con espera exponencial (1, 2, 4, 8 y 16 s), como en la demo de la clase 4, para no fallar si la base todavía está iniciando.
 
-### Diferencias detectadas que hay que corregir
+### Diferencias detectadas que hay que corregir *(corregidas: ver Validación final)*
 
 - Los servidores HTTP tienen que configurar también `IdleTimeout` (2.3). planner-service configura `ReadHeaderTimeout`, `ReadTimeout` y `WriteTimeout`, pero todavía no `IdleTimeout`.
 - El [ADR-010](ADR-010-resiliencia.md) fija 3 s por consulta a PostgreSQL y `503 SERVICE_UNAVAILABLE` si la base no responde. Hoy las consultas usan el contexto del pedido, sin un límite propio, y una base caída se informa como `500`.
 - La IA está implementada pero todavía no está conectada en el arranque del servicio (`cmd/planner-service/main.go`).
 - Los timeouts del api-gateway hacia los servicios (5 s y 12 s para la propuesta) dependen de la rama de observabilidad del gateway.
 
-### Pendiente
+### Pendiente *(implementado: ver Validación final)*
 
 La comunicación asíncrona (sección 3: *outbox* en forum-service, RabbitMQ, consumidor idempotente en notification-service y *dead letter queues*) se implementa con el foro y las notificaciones, para la presentación final.
 
@@ -295,3 +295,26 @@ El enunciado pide para la presentación final un **punto de entrada único con a
 
 **Validación** (sistema levantado): 12 logins seguidos desde la misma IP dan 10 respuestas `401` (contraseña incorrecta) y después `429` con `Retry-After: 3`. Un usuario logueado que manda 70 pedidos seguidos recibe 61 `200` y 9 `429`. Los tests del gateway comprueban que el pedido rechazado no llega al servicio y que otra IP u otro usuario no se ven afectados.
 
+## Validación final (2026-11-10)
+
+**Resultado: la comunicación síncrona y la asíncrona están implementadas como se decidió.**
+
+**Diferencias de la Entrega 2, corregidas:**
+
+| Diferencia | Cómo quedó |
+|---|---|
+| Faltaba `IdleTimeout` en los servidores HTTP | Los cinco servicios configuran `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout` e `IdleTimeout`. |
+| PostgreSQL sin timeout propio y `500` con la base caída | 3 s por consulta en planner-service (2 s en users-service, alineado con el gateway) y `503 SERVICE_UNAVAILABLE`; probado en la jornada de fallas. |
+| La IA no estaba conectada en el arranque | `cmd/planner-service/main.go` arma el adaptador de Groq con *fallback* al motor de reglas. |
+| Timeouts del gateway pendientes | 3 s a users-service (10 s a `/me/club`), 5 s a planner y forum, 12 s a la propuesta y 20 s a la subida de un PDF. |
+
+**Comunicación asíncrona (sección 3):**
+
+| Decisión | Implementación |
+|---|---|
+| *Outbox* en forum-service | El evento se guarda en el mismo documento que el cambio de estado y un *relay* lo publica en `forum.events`. |
+| Consumidores idempotentes | notification-service registra el `eventId` antes de mandar el mail; users-service guarda los puntos con clave por resumen y los eventos procesados. Con dos instancias del foro un evento llegó dos veces y no tuvo efecto. |
+| Reintentos con espera y DLQ | Cada cola tiene su cola de reintentos (TTL por mensaje: 5 s, 15 s, 45 s, 2 min 15 s, 6 min 45 s) y su DLQ: `notifications.*`, `users.benefits.*`, `users.external-authors.*`. |
+| Un usuario de RabbitMQ por servicio | Ninguno puede declarar colas; cada uno sólo publica o lee lo suyo (`deploy/rabbitmq/init-broker.sh`). |
+
+La comunicación con el proveedor de otro grupo quedó en el [ADR-015](ADR-015-club-de-beneficios.md), y el control de tráfico del gateway, en la actualización del 2026-11-09 de este ADR.

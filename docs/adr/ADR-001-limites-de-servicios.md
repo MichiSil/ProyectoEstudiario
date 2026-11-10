@@ -1,6 +1,6 @@
 # ADR-001: Límites de los servicios
 
-- **Estado:** Aceptada (acordada por el grupo; se valida en la Entrega 2)
+- **Estado:** Aceptada (validada con el sistema completo el 2026-11-10; ver *Validación final*)
 - **Fecha:** 2026-10-07
 - **Decisión del enunciado:** D1
 - **Reemplaza a:** —
@@ -107,3 +107,17 @@ flowchart LR
 - **Capacidad para otro grupo.** Por indicación de la cátedra, su implementación se pospone. En esta entrega están el contrato y el mock ([ADR-008](ADR-008-contrato-propio.md)).
 
 **Queda por validar** con users-service, forum-service y notification-service operativos: la comunicación por eventos entre el foro y las notificaciones, y el consumo de la capacidad de otro grupo (ADR-009).
+
+## Validación final (2026-11-10)
+
+**Resultado: la decisión se mantiene con los cinco componentes operativos.** Lo que había quedado por validar en la Entrega 2 se comprobó así:
+
+| Lo que decía este ADR | Evidencia |
+|---|---|
+| Cada servicio es dueño de sus datos y ninguno accede a la base de otro. | Cada servicio entra con su propio usuario a cada almacenamiento: `PLANNER_DB_*` y `USERS_DB_*` en PostgreSQL, `FORUM_DB_*` y `NOTIFICATION_DB_*` en MongoDB, usuario propio de forum-service en MinIO, y `FORUM_RABBITMQ_*`, `NOTIFICATION_RABBITMQ_*` y `USERS_RABBITMQ_*` en RabbitMQ, cada uno con permiso sólo sobre lo suyo ([ADR-003](ADR-003-persistencia.md)). |
+| No hay llamadas síncronas entre servicios propios. | Las únicas llamadas HTTP salientes del código son a Solr (forum-service), al proveedor de IA (planner-service) y al Club de Beneficios (users-service). Entre servicios propios, sólo eventos por RabbitMQ. |
+| El foro y las notificaciones se comunican por eventos. | `summary.approved` y `summary.rejected` con *outbox*, consumidos por notification-service (mail) y users-service (puntos), con consumidores idempotentes y DLQ ([ADR-005](ADR-005-comunicacion.md)). |
+| La identidad viaja en el JWT y los servicios no consultan a users-service en cada pedido. | El api-gateway completa `X-User-Id`, rol, nombre y mail desde el token; forum-service copia el autor al publicar. |
+| La capacidad publicada y la consumida viven en el servicio dueño de cada una. | Publicada: registro y consulta de documentos en forum-service ([ADR-014](ADR-014-contrato-documentos.md)). Consumida: el Club de Beneficios en users-service, dueño de la cuenta del usuario ([ADR-015](ADR-015-club-de-beneficios.md)). |
+
+Los "desvíos temporales" de la Entrega 2 se resolvieron: users-service emite el JWT y la capacidad para el Grupo 4 está implementada y desplegada en la nube.
