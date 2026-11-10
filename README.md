@@ -715,6 +715,21 @@ El sistema se despliega en una máquina virtual de Azure con el mismo `docker co
 
 Grafana, Prometheus, Jaeger y los paneles de las bases no se publican: se ven por un túnel SSH ([cómo](deploy/azure/README.md#operación)). En la nube los mails no salen a internet: los recibe Mailpit, igual que en local ([limitaciones](deploy/azure/README.md#limitaciones-conocidas)).
 
+**Último despliegue: 10/11/2026**, con `main` hasta el PR #55 (`070e5b5`). Todos los contenedores quedaron `healthy` y el `.env` de la VM tiene todas las variables de `.env.example`, con contraseñas propias de la nube. Lo que se probó desde afuera, desde una compu cualquiera, ese mismo día:
+
+| Prueba | Resultado |
+|---|---|
+| La app abre con HTTPS | ✅ `200` |
+| Registrarse, iniciar sesión y armar un plan | ✅ Plan propuesto por la IA (`generatedBy: "ia"`), confirmado, con sus 7 sesiones en el calendario |
+| Configuración → Club de Beneficios | ✅ `sin_vincular`, sin aviso. Una cuenta real se vinculó con el Club del Grupo 1 y quedó `vinculada`: la API key del Club anda |
+| `GET /v1/documents` sin clave / con la clave de prueba local / con la clave real del Grupo 4 | ✅ `401` / `401` / `200` |
+| Registrar una guía por `POST /v1/documents` con la clave real | ✅ `202`, `pendiente`, `source: agencia_de_viajes` y `file.publicUrl` |
+| Abrir ese `publicUrl` sin login ni clave | ✅ `200 application/pdf`, el mismo archivo que se subió |
+| PDF de un resumen de un estudiante por la ruta pública | ✅ `404` |
+| `GET /health` | ✅ `200`, responde forum-service |
+| `/metrics`, Grafana (`:3000`), Prometheus (`:9090`) y el puerto de métricas (`:9100`) desde afuera | ✅ No abren: `/metrics` devuelve la app y los puertos no responden |
+| Club de Beneficios caído en la nube | ✅ Ver la acción 7 del [POSTMORTEM](docs/POSTMORTEM.md#acciones) |
+
 **Integración con otros grupos** (asignada por la cátedra):
 
 | Dirección | Grupo | Capacidad | Dónde |
