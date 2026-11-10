@@ -73,6 +73,32 @@ func (s *Service) Delete(ctx context.Context, v Viewer, id string) error {
 	if !doc.Visible() {
 		return model.ErrNotFound
 	}
+	return s.remove(ctx, v, doc)
+}
+
+// DeleteOwn elimina un resumen de su autor, en cualquier estado (RF-31): por
+// ejemplo, si se equivocó de archivo. Es la misma eliminación que la del
+// administrador: el mismo summary.deleted en el outbox, que lo saca del índice
+// de Solr (RN-26) y de la caché, sin mail (RN-35) y sin descontar los puntos
+// del Club (RN-44). Si no es suyo, ErrNotAuthor.
+func (s *Service) DeleteOwn(ctx context.Context, v Viewer, id string) error {
+	doc, err := s.Repo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !doc.Visible() {
+		return model.ErrNotFound
+	}
+	if v.UserID == "" || doc.Source != model.SourceEstudiario || doc.Author.UserID != v.UserID {
+		return model.ErrNotAuthor
+	}
+	return s.remove(ctx, v, doc)
+}
+
+// remove marca el documento como eliminado y guarda summary.deleted en el
+// outbox, en la misma actualización.
+func (s *Service) remove(ctx context.Context, v Viewer, doc model.Summary) error {
+	id := doc.ID
 	at := s.now()
 	return s.Repo.Delete(ctx, id, v.UserID, at, s.event(ctx, model.EventDeleted, at, map[string]any{
 		"summaryId": doc.ID,

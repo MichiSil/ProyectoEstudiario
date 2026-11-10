@@ -139,6 +139,8 @@ var (
 	ErrOwnSummary = errors.New("no podés calificar tu propio resumen")
 	// ErrForbidden: la operación es sólo para administradores.
 	ErrForbidden = errors.New("la operación es sólo para administradores")
+	// ErrNotAuthor: un estudiante quiso eliminar un resumen que no es suyo (RF-31).
+	ErrNotAuthor = errors.New("sólo el autor puede eliminar su resumen")
 	// ErrFileTooLarge y ErrUnsupportedFileType: el archivo no cumple RN-20.
 	ErrFileTooLarge        = errors.New("el archivo pesa más de 10 MB")
 	ErrUnsupportedFileType = errors.New("el archivo tiene que ser PDF")

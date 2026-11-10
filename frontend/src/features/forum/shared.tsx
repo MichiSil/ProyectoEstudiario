@@ -64,6 +64,9 @@ export function StarPicker({ value, onChange, disabled }: { value: number; onCha
 }
 
 /** Fila de un resumen en las listas del foro. */
+/** Lo que se le pregunta al autor antes de eliminar su resumen (RF-31, RN-44). */
+export const OWN_DELETE_QUESTION = '¿Eliminar este resumen? Deja de verse en el foro. Los puntos que ganaste no se pierden.'
+
 export function SummaryRow({
   summary,
   onClick,

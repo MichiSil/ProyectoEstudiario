@@ -162,11 +162,12 @@ Una **sesión** confirmada puede estar *pendiente*, *completada* o *pospuesta*. 
 | RF-15 | El estudiante puede ver el estado de sus propias publicaciones (pendiente, aprobada o rechazada) y, si fue rechazada, el motivo. |
 | RF-16 | El administrador puede ver la lista de publicaciones pendientes, ordenadas de la más antigua a la más reciente. |
 | RF-17 | El administrador puede aprobar o rechazar una publicación pendiente. Al rechazarla, indica el motivo. |
-| RF-18 | El administrador puede eliminar cualquier publicación, esté en el estado que esté. |
+| RF-18 | El administrador puede eliminar cualquier publicación, de cualquier autor y esté en el estado que esté. *(El autor elimina las suyas, RF-31.)* |
 | RF-19 | Cualquier estudiante puede buscar resúmenes aprobados por texto (título y descripción), con resultados paginados. |
 | RF-20 | La búsqueda permite filtrar por materia y por calificación mínima, y ordenar por relevancia, calificación promedio o fecha de publicación. |
 | RF-21 | Cualquier estudiante puede ver el detalle de un resumen aprobado y descargar su archivo. |
 | RF-22 | El estudiante puede calificar un resumen aprobado con un puntaje de 1 a 5. |
+| RF-31 | El autor puede eliminar sus propios resúmenes, en cualquier estado (pendiente, aprobado o rechazado). No puede eliminar los de otros. *(Agregado el 2026-11-10.)* |
 
 ### 7.2 Reglas de negocio
 
@@ -205,9 +206,9 @@ stateDiagram-v2
     [*] --> Pendiente: el estudiante sube el resumen
     Pendiente --> Aprobada: el admin la aprueba
     Pendiente --> Rechazada: el admin la rechaza (con motivo)
-    Aprobada --> Eliminada: el admin la elimina
-    Rechazada --> Eliminada: el admin la elimina
-    Pendiente --> Eliminada: el admin la elimina
+    Aprobada --> Eliminada: el admin o el autor la elimina
+    Rechazada --> Eliminada: el admin o el autor la elimina
+    Pendiente --> Eliminada: el admin o el autor la elimina
 ```
 
 ## 8. Notificaciones
@@ -272,6 +273,7 @@ Cada criterio indica entre paréntesis las reglas o requisitos que verifica. Los
 | CA-21 | **Dado** varios resúmenes aprobados de distintas materias, **cuando** un estudiante busca filtrando por una materia y ordenando por calificación, **entonces** sólo ve resúmenes de esa materia, del mejor al peor calificado, paginados. *(RF-19, RF-20)* |
 | CA-22 | **Dado** un resumen aprobado que el estudiante ya calificó con 2, **cuando** lo califica con 5, **entonces** el promedio considera sólo el 5 y la cantidad de calificaciones no cambia. *(RN-30, RN-31)* |
 | CA-23 | **Dado** un estudiante, **cuando** intenta calificar su propio resumen, **entonces** el sistema rechaza la calificación. *(RN-29)* |
+| CA-40 | **Dado** un estudiante con un resumen propio, pendiente o aprobado, **cuando** lo elimina, **entonces** deja de verse en el foro y, si estaba aprobado, en 1 minuto como máximo deja de aparecer en la búsqueda, sin generar mail ni descontar los puntos ganados; y si otro estudiante intenta eliminarlo, el sistema lo rechaza. *(RF-31, RN-24, RN-26, RN-35, RN-44)* |
 
 ### 9.4 Notificaciones
 

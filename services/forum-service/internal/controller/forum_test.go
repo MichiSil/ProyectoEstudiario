@@ -126,3 +126,26 @@ func TestSubirYModerarPorLaAPIDelForo(t *testing.T) {
 		t.Errorf("listado de aprobados: %d %v", code, out["total"])
 	}
 }
+
+func TestElAutorEliminaSuResumenPorLaAPIDelForo(t *testing.T) {
+	h := forumHandler()
+	body, ct := uploadBody(t)
+	_, doc := forumReq(t, h, "POST", "/summaries", body, ct, "ana", "estudiante", true)
+	id := doc["id"].(string)
+
+	if code, out := forumReq(t, h, "DELETE", "/summaries/"+id, nil, "", "beto", "estudiante", true); code != 403 || out["code"] != "FORBIDDEN" {
+		t.Errorf("otro estudiante: %d %v", code, out["code"])
+	}
+	if code, _ := forumReq(t, h, "DELETE", "/summaries/"+id, nil, "", "ana", "estudiante", false); code != 401 {
+		t.Errorf("sin pasar por el gateway: %d", code)
+	}
+	if code, _ := forumReq(t, h, "DELETE", "/summaries/"+id, nil, "", "ana", "estudiante", true); code != 204 {
+		t.Errorf("la autora: %d, se esperaba 204", code)
+	}
+	if code, out := forumReq(t, h, "DELETE", "/summaries/"+id, nil, "", "ana", "estudiante", true); code != 404 || out["code"] != "NOT_FOUND" {
+		t.Errorf("dos veces: %d %v", code, out["code"])
+	}
+	if code, out := forumReq(t, h, "GET", "/summaries/mine", nil, "", "ana", "estudiante", true); code != 200 || out["total"] != float64(0) {
+		t.Errorf("mis resúmenes después de eliminar: %d %v", code, out["total"])
+	}
+}
