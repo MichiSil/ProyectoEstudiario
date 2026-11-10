@@ -634,9 +634,9 @@ Cada servicio expone sus métricas de Prometheus en `GET /metrics`, en el **puer
 | `ErroresAltos` | Más del 5 % de respuestas `5xx` de un servicio durante 5 minutos (SLO: 99 % sin `5xx`) |
 | `InstanciaDelForoFueraDeRotacion` | El api-gateway tiene una instancia de forum-service fuera de la rotación hace más de 1 minuto |
 | `ServicioSinResponder` | Prometheus no puede leer las métricas de un servicio hace más de 1 minuto |
-| `ConfirmarLento` | El p95 de confirmar un plan supera los 500 ms durante 10 minutos |
+| `ConfirmarLento` | El p95 de confirmar un plan supera los 500 ms durante 10 minutos, con al menos 10 confirmaciones en la ventana |
 | `MensajesEnLaDLQ` | notification-service mandó algún mensaje a `notifications.dlq` en los últimos 10 minutos |
-| `ClubDeBeneficiosNoDisponible` | El circuit breaker del Club está abierto hace más de 1 minuto |
+| `ClubDeBeneficiosNoDisponible` | El circuit breaker del Club está abierto hace más de 1 minuto (las pruebas de *half-open* cada 30 s no la reinician) |
 
 **Probar la caída de una instancia del foro:** con tráfico (por ejemplo, abriendo el foro en el frontend), apagá la segunda instancia:
 
@@ -654,6 +654,12 @@ Si Grafana aparece sin el tablero o Prometheus sin alertas después de cambiar d
 
 ```bash
 docker compose up -d --force-recreate prometheus grafana
+```
+
+Las alertas tienen tests con `promtool` ([`alerts_test.yml`](deploy/prometheus/alerts_test.yml)), que reproducen con series simuladas el *half-open* del Club y una confirmación lenta entre pocas:
+
+```bash
+docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/p:ro" -w /p prom/prometheus:v2.55.1 test rules alerts_test.yml
 ```
 
 Para ver las métricas crudas de un servicio sin Prometheus, desde la red de Docker:
