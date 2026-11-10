@@ -240,3 +240,34 @@ Con el sistema completo levantado con `docker compose`:
 | Volumen de Solr borrado + `forum-service reindex` | Índice reconstruido, con el esquema aplicado de nuevo |
 
 El test de integración `internal/search/solr_integration_test.go` repite estas pruebas contra un Solr real: análisis en español, filtros, los tres órdenes, paginación, sincronización, reconciliación y reconstrucción. El retraso de cada sincronización queda en el log `índice sincronizado` (`lagMs`), para llevarlo al tablero del [ADR-011](ADR-011-observabilidad.md).
+
+## Actualización (2026-11-10): listado sin Solr
+
+En la jornada de fallas ([`POSTMORTEM.md`](../POSTMORTEM.md), hallazgo 2) se vio que con Solr caído **también caía el listado de aprobados**, que es la página principal del foro: sale de Solr, como la búsqueda, y la caché del [ADR-007](ADR-007-cache.md) sólo lo cubre hasta que vence la página (60 s) o cambia la generación. Respondió `503` en el 96 % de los pedidos.
+
+### Decisión
+
+El **listado sin texto** (`GET /api/forum/summaries` y `GET /v1/documents` sin `q`) ya no depende de Solr. Se descartó servir la copia vencida de la caché: sólo sirve para las páginas que alguien pidió hace poco, y lo aprobado durante la caída no aparecería.
+
+- **Si Solr no responde** (no conecta, timeout de 2 s o `5xx`), el listado se lee de **MongoDB**, la fuente de verdad, con la búsqueda sobre MongoDB que ya existía para correr sin Solr: los mismos filtros (materia, etiquetas, calificación mínima), el mismo orden (fecha, o calificación y cantidad de votos) y la misma paginación. Usa los índices `status + publishedAt` y `categoryKey` de la colección.
+- **Durante los 10 s siguientes**, los listados van directo a MongoDB, sin volver a esperar a Solr. Pasado ese tiempo, el próximo listado prueba Solr otra vez y, si volvió, lo usa. Es un *circuit breaker* mínimo: el [ADR-010](ADR-010-resiliencia.md) lo reservaba para las dependencias con una alternativa más barata, y para el listado ahora la hay.
+- **La búsqueda por texto sigue dependiendo de Solr**: el análisis en español, la relevancia y la tolerancia a tildes y plurales sólo están en el índice. Con Solr caído responde `503 SEARCH_UNAVAILABLE`, como antes.
+- Cada listado leído de MongoDB suma `forum_search_list_fallback_total` ([ADR-011](ADR-011-observabilidad.md)), y la primera falla deja un log `WARN` con el error de Solr. El tablero lo muestra en *Listados sin Solr (última hora)*.
+- La página leída de MongoDB se guarda en la caché igual que una de Solr: es el dato correcto.
+
+Está en `internal/search/fallback.go` (`ListFallback`), un envoltorio de la búsqueda que arma `main.go` delante de Solr. El service y los controladores no cambian.
+
+### Validación
+
+| Prueba | Resultado |
+|---|---|
+| Test unitario de `ListFallback` y del service con una búsqueda que falla | El listado sale de MongoDB; la búsqueda con texto responde `ErrSearchUnavailable`; no se espera a Solr durante 10 s; con Solr de vuelta se usa Solr |
+| Test de integración con MongoDB real (`TestListadoDesdeMongoConSolrCaido`) | Por fecha, por calificación, segunda página, por etiqueta y por calificación mínima, con los aprobados y en el orden esperado |
+| `docker compose stop solr` con el sistema levantado | Listado del foro y `GET /v1/documents` sin `q`: `200`, en 4 a 22 ms, con páginas que no estaban en la caché. Búsqueda con texto: `503 SEARCH_UNAVAILABLE`. Log `WARN` en las dos instancias y la métrica en 2 en cada una |
+| `docker compose start solr` | Los listados vuelven a salir de Solr (la métrica deja de subir) |
+
+### Consecuencias
+
+- La página principal del foro y la capacidad del Grupo 4 siguen andando con Solr caído; lo único que se pierde es la búsqueda por texto.
+- Con Solr caído, el listado pesa sobre MongoDB (un `count` y un `find` por página que no esté en la caché). Para el volumen del sistema alcanza.
+- Si Solr está desactualizado (por ejemplo, con un resumen que ya no existe en MongoDB), el total de una página de Solr y el de MongoDB pueden diferir hasta la reconciliación. Se vio en la prueba: dos documentos de un test de integración, borrados de MongoDB a mano, que la reconciliación sacó del índice a los 5 minutos.

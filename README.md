@@ -341,7 +341,7 @@ Sólo se califican resúmenes aprobados (RN-28), nunca el propio (RN-29), y cali
 
 - **Qué busca:** texto en título, materia y descripción, sin importar tildes ni plurales ("analisis integral" encuentra "Análisis… Integrales"). Filtra por materia, etiquetas y calificación mínima, y ordena por relevancia, calificación o fecha.
 - **Cómo se mantiene al día:** el indexador corre dentro de forum-service y cada 5 s pasa a Solr los resúmenes que cambiaron en MongoDB. Un aprobado aparece y un eliminado desaparece en menos de 10 s (el SPEC pide 1 minuto). Cada 5 minutos, además, compara todo MongoDB con el índice y corrige diferencias, incluidas las calificaciones.
-- **Si Solr se cae:** la búsqueda responde `503 SEARCH_UNAVAILABLE` y el resto del foro sigue funcionando. Al volver, el índice se pone al día solo.
+- **Si Solr se cae:** la búsqueda **por texto** responde `503 SEARCH_UNAVAILABLE`, pero el **listado de aprobados sin texto** (la página principal del foro y `GET /v1/documents` sin `q`) se lee de MongoDB, con los mismos filtros, orden y paginación, y deja un log `WARN` *"Solr no disponible: el listado se lee de MongoDB"*. Durante los 10 s siguientes los listados van directo a MongoDB, sin esperar a Solr. El resto del foro sigue funcionando y, al volver, el índice se pone al día solo ([ADR-006](docs/adr/ADR-006-busqueda.md#actualización-2026-11-10-listado-sin-solr)).
 - **Si se pierde el índice** (por ejemplo, con `docker compose down -v`) o cambia el esquema, se reconstruye desde MongoDB:
 
 ```bash
@@ -630,6 +630,12 @@ En unos 10 s el tablero la muestra *fuera de la rotación* y todo el tráfico pa
 docker compose start forum-service-2
 ```
 
+Si Grafana aparece sin el tablero o Prometheus sin alertas después de cambiar de rama, es que Docker quedó montando la carpeta vieja de `deploy/` (git la borra y la vuelve a crear). Se arregla recreando los dos:
+
+```bash
+docker compose up -d --force-recreate prometheus grafana
+```
+
 Para ver las métricas crudas de un servicio sin Prometheus, desde la red de Docker:
 
 ```bash
@@ -644,7 +650,7 @@ El 10/11 se provocaron, con tráfico constante, cuatro caídas: una instancia de
 docker compose stop forum-service-2 ; docker compose start forum-service-2   # el foro sigue con la otra instancia
 CLUB_BASE_URL=http://club-mock:9 docker compose up -d users-service          # Club caído: aviso en Configuración y puntos pendientes
 docker compose up -d users-service                                           # vuelve el Club: se acreditan solos
-docker compose stop solr ; docker compose start solr                         # búsqueda y listado 503; el resto sigue
+docker compose stop solr ; docker compose start solr                         # búsqueda por texto 503; el listado sale de MongoDB
 docker compose stop postgres ; docker compose start postgres                 # plan 503 y vuelve solo
 ```
 
