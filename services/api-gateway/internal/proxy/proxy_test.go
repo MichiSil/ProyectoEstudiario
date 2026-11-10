@@ -176,3 +176,17 @@ func TestForumReenviaSinElPrefijoYDa20sALaSubida(t *testing.T) {
 		t.Errorf("listar: timeout = %v, se esperaba %v", got, DefaultTimeout)
 	}
 }
+
+func TestTimeoutDeUsersYDelClub(t *testing.T) {
+	cases := map[string]time.Duration{
+		"/api/users/me":          UsersTimeout,
+		"/api/users/login":       UsersTimeout,
+		"/api/users/me/club":     ClubTimeout,
+		"/api/users/me/password": UsersTimeout,
+	}
+	for path, want := range cases {
+		if got := usersTimeout(httptest.NewRequest(http.MethodGet, path, nil)); got != want {
+			t.Errorf("%s: %v, quería %v", path, got, want)
+		}
+	}
+}

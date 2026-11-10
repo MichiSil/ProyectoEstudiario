@@ -30,6 +30,11 @@ const (
 	ProposalTimeout = 12 * time.Second
 	UsersTimeout    = 3 * time.Second
 	UploadTimeout   = 20 * time.Second
+	// ClubTimeout es para /api/users/me/club: users-service consulta al Club
+	// de Beneficios del Grupo 1, que tarda hasta ~3 s por llamada con su
+	// despliegue frío, y tiene su propio tope de 7 s para responder con el
+	// aviso CLUB_UNAVAILABLE antes de este corte (ADR-015).
+	ClubTimeout = 10 * time.Second
 )
 
 // Planner devuelve un reverse proxy hacia planner-service: /api/planner/<ruta>
@@ -40,9 +45,16 @@ func Planner(target *url.URL, logger *slog.Logger) http.Handler {
 }
 
 // Users devuelve un reverse proxy hacia users-service: /api/users/<ruta> se
-// reenvía como /<ruta>, con un timeout de 3 s.
+// reenvía como /<ruta>, con un timeout de 3 s, y 10 s en las rutas del Club.
 func Users(target *url.URL, logger *slog.Logger) http.Handler {
-	return newProxy("users-service", UsersPrefix, target, func(*http.Request) time.Duration { return UsersTimeout }, logger)
+	return newProxy("users-service", UsersPrefix, target, usersTimeout, logger)
+}
+
+func usersTimeout(r *http.Request) time.Duration {
+	if strings.HasPrefix(trimPrefix(r.URL.Path, UsersPrefix), "/me/club") {
+		return ClubTimeout
+	}
+	return UsersTimeout
 }
 
 // Forum devuelve un reverse proxy hacia forum-service: /api/forum/<ruta> se

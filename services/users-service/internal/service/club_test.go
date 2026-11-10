@@ -139,6 +139,7 @@ func (r *memClubRepo) SetClubCreditResult(_ context.Context, eventID, status, mo
 type fakeClub struct {
 	mu         sync.Mutex
 	down       bool
+	delay      time.Duration // demora de las lecturas (saldo y movimientos)
 	autoLink   bool // las vinculaciones se completan al instante
 	registered map[string]bool
 	completed  map[string]bool
@@ -203,7 +204,20 @@ func (f *fakeClub) total() int {
 	return n
 }
 
-func (f *fakeClub) Balance(_ context.Context, _ string) (club.Balance, error) {
+// wait simula un Club lento: espera delay o hasta que venza ctx.
+func (f *fakeClub) wait(ctx context.Context) error {
+	select {
+	case <-time.After(f.delay):
+		return nil
+	case <-ctx.Done():
+		return &club.Error{Kind: club.Unavailable, Err: ctx.Err()}
+	}
+}
+
+func (f *fakeClub) Balance(ctx context.Context, _ string) (club.Balance, error) {
+	if err := f.wait(ctx); err != nil {
+		return club.Balance{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.fail(); err != nil {
@@ -216,7 +230,10 @@ func (f *fakeClub) Balance(_ context.Context, _ string) (club.Balance, error) {
 	return club.Balance{Points: n}, nil
 }
 
-func (f *fakeClub) Movements(_ context.Context, _ string, _ int) ([]club.Movement, error) {
+func (f *fakeClub) Movements(ctx context.Context, _ string, _ int) ([]club.Movement, error) {
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.fail(); err != nil {
@@ -342,5 +359,37 @@ func TestAutorInexistenteEsNoEncontrado(t *testing.T) {
 	err := newClub(newMemClubRepo(), newFakeClub()).AwardApprovedSummary(context.Background(), ApprovedSummary{SummaryID: "s1", AuthorID: "nadie"})
 	if !errors.Is(err, model.ErrNotFound) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Con el Club lento, el perfil responde dentro de su tope con el aviso, y el
+// saldo y los movimientos se piden a la vez (no se suman las dos demoras).
+func TestClubLentoRespondeATiempoConAviso(t *testing.T) {
+	repo, provider := newMemClubRepo(ana), newFakeClub()
+	provider.autoLink = true
+	c, ctx := newClub(repo, provider), context.Background()
+	if _, err := c.Link(ctx, ana.ID); err != nil {
+		t.Fatal(err)
+	}
+	c.StatusBudget = 150 * time.Millisecond
+
+	provider.delay = 100 * time.Millisecond // cada llamada entra en el tope, las dos juntas no
+	started := time.Now()
+	st, err := c.Status(ctx, ana.ID)
+	if err != nil || st.Warning != "" || st.Balance == nil {
+		t.Fatalf("estado = %+v, err = %v: las dos lecturas tenían que ir en paralelo", st, err)
+	}
+	if time.Since(started) > 140*time.Millisecond {
+		t.Errorf("tardó %v: las lecturas no fueron en paralelo", time.Since(started))
+	}
+
+	provider.delay = time.Second
+	started = time.Now()
+	st, err = c.Status(ctx, ana.ID)
+	if err != nil || st.Warning != WarningClubUnavailable {
+		t.Fatalf("estado = %+v, err = %v", st, err)
+	}
+	if time.Since(started) > 300*time.Millisecond {
+		t.Errorf("tardó %v: no respetó el tope", time.Since(started))
 	}
 }

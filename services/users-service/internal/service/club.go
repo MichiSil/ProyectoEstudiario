@@ -16,6 +16,10 @@ const (
 	approvedSummaryReason    = "Resumen aprobado en Estudiario"
 	movementsShown           = 10
 	sweepBatch               = 50
+	// statusBudget es lo máximo que el perfil espera al Club. Queda por debajo
+	// de los 10 s del api-gateway para /api/users/me/club: si el Club tarda
+	// más, se responde con el aviso CLUB_UNAVAILABLE en lugar de un 504.
+	statusBudget = 7 * time.Second
 )
 
 // Avisos de GET /me/club para el frontend.
@@ -61,6 +65,15 @@ type Club struct {
 	Provider ClubProvider
 	Logger   *slog.Logger
 	Now      func() time.Time
+	// StatusBudget reemplaza a statusBudget (los tests usan uno corto).
+	StatusBudget time.Duration
+}
+
+func (c *Club) statusBudget() time.Duration {
+	if c.StatusBudget > 0 {
+		return c.StatusBudget
+	}
+	return statusBudget
 }
 
 func (c *Club) now() time.Time {
@@ -134,7 +147,9 @@ func (c *Club) Status(ctx context.Context, userID string) (ClubStatus, error) {
 		return ClubStatus{}, err
 	}
 	if link.Status == model.ClubLinkPending {
-		done, err := c.refresh(ctx, link)
+		refreshCtx, cancel := context.WithTimeout(ctx, c.statusBudget())
+		done, err := c.refresh(refreshCtx, link)
+		cancel()
 		if err != nil {
 			return c.withPending(ctx, userID, ClubStatus{Status: link.Status, Warning: WarningClubUnavailable})
 		}
@@ -143,14 +158,26 @@ func (c *Club) Status(ctx context.Context, userID string) (ClubStatus, error) {
 		}
 	}
 	st := ClubStatus{Status: model.ClubLinkActive}
-	bal, err := c.Provider.Balance(ctx, link.ExternalUserID)
+	// El saldo y los movimientos se piden a la vez y con un tope: con el Club
+	// lento, el perfil responde a tiempo con el aviso.
+	clubCtx, cancel := context.WithTimeout(ctx, c.statusBudget())
+	defer cancel()
+	var moves []club.Movement
+	var movesErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		moves, movesErr = c.Provider.Movements(clubCtx, link.ExternalUserID, movementsShown)
+	}()
+	bal, err := c.Provider.Balance(clubCtx, link.ExternalUserID)
+	<-done
 	if err != nil {
 		c.Logger.WarnContext(ctx, "no se pudo consultar el saldo del Club", "error", err.Error())
 		st.Warning = WarningClubUnavailable
 		return c.withPending(ctx, userID, st)
 	}
 	st.Balance = &bal.Points
-	if moves, err := c.Provider.Movements(ctx, link.ExternalUserID, movementsShown); err == nil {
+	if movesErr == nil {
 		st.Movements = moves
 	} else {
 		st.Warning = WarningClubUnavailable
