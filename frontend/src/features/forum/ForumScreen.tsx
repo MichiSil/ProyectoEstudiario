@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { useSearchParams } from 'react-router-dom'
 import { MessagesSquare, Search, Upload, X } from 'lucide-react'
@@ -27,6 +27,10 @@ export function ForumScreen() {
   const [selected, setSelected] = useState<Summary | null>(null)
   const [pendingCount, setPendingCount] = useState<number | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  // Calificar no reinicia la pestaña Explorar (perdería los filtros): le avisa
+  // que vuelva a leer el listado con la búsqueda que tiene puesta.
+  const [exploreKey, setExploreKey] = useState(0)
+  const [ratedSignal, setRatedSignal] = useState(0)
 
   // El número de pendientes en la pestaña, aunque el admin esté en otra.
   useEffect(() => {
@@ -40,6 +44,7 @@ export function ForumScreen() {
   function replace(updated: Summary) {
     setSelected((s) => (s?.id === updated.id ? updated : s))
     setRefreshKey((k) => k + 1)
+    setRatedSignal((k) => k + 1)
   }
 
   return (
@@ -78,7 +83,7 @@ export function ForumScreen() {
       </div>
 
       <div className="mt-5">
-        {tab === 'explorar' && <ExploreTab key={refreshKey} onOpen={setSelected} />}
+        {tab === 'explorar' && <ExploreTab key={exploreKey} onOpen={setSelected} reloadSignal={ratedSignal} />}
         {tab === 'mias' && <MineTab key={refreshKey} onOpen={setSelected} onUpload={() => setUploadOpen(true)} />}
         {tab === 'moderacion' && isAdmin && <ModerationPanel onCountChange={setPendingCount} />}
       </div>
@@ -96,7 +101,10 @@ export function ForumScreen() {
         isAdmin={isAdmin}
         onClose={() => setSelected(null)}
         onChanged={replace}
-        onDeleted={() => setRefreshKey((k) => k + 1)}
+        onDeleted={() => {
+          setRefreshKey((k) => k + 1)
+          setExploreKey((k) => k + 1)
+        }}
       />
     </div>
   )
@@ -119,8 +127,12 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
+/** Cuánto se espera para releer el listado después de calificar: el indexador
+ * pasa la calificación a Solr cada 5 s (ADR-006). */
+const INDEX_DELAY_MS = 6000
+
 /** Búsqueda de aprobados con texto, materia y orden (RF-19, RF-20). */
-function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
+function ExploreTab({ onOpen, reloadSignal }: { onOpen: (s: Summary) => void; reloadSignal: number }) {
   const [text, setText] = useState('')
   const [category, setCategory] = useState('')
   const [sort, setSort] = useState<SummarySort>('relevance')
@@ -146,6 +158,27 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
     setPage(1)
     void load(query, 1)
   }, [query, load])
+
+  // Después de calificar se relee el listado con los mismos filtros: enseguida
+  // (el promedio del resumen) y otra vez cuando la calificación ya llegó a
+  // Solr, para que el filtro por calificación mínima la tenga en cuenta.
+  // Se lee la búsqueda puesta en ese momento: si el estudiante cambia el
+  // filtro mientras tanto, se relee con el filtro nuevo.
+  const [indexing, setIndexing] = useState(false)
+  const queryRef = useRef(query)
+  queryRef.current = query
+  useEffect(() => {
+    if (!reloadSignal) return
+    setPage(1)
+    void load(queryRef.current, 1)
+    setIndexing(true)
+    const timer = setTimeout(() => {
+      setIndexing(false)
+      setPage(1)
+      void load(queryRef.current, 1)
+    }, INDEX_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [reloadSignal, load])
 
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -218,6 +251,11 @@ function ExploreTab({ onOpen }: { onOpen: (s: Summary) => void }) {
 
       <div className="mt-4 flex flex-col gap-2">
         {!!error && <ApiErrorNotice error={error} />}
+        {indexing && query.minRating > 0 && (
+          <p className="animate-fade-in rounded-lg bg-accent-soft px-3 py-2 text-xs text-accent-ink">
+            Actualizando el listado con tu calificación: el filtro la tiene en cuenta en unos segundos.
+          </p>
+        )}
         {items === null ? (
           <p className="py-8 text-center text-sm text-muted">Cargando resúmenes…</p>
         ) : !items.length ? (
