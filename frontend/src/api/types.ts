@@ -68,6 +68,8 @@ export interface Material {
   title: string
   /** Qué tiene adentro (temas, ejercicios, páginas). Opcional. */
   content: string
+  /** PDF adjunto, o null si es sólo texto. downloadPath es relativa a planner-service. */
+  file: { fileName: string; sizeBytes: number; downloadPath: string } | null
   createdAt: string
 }
 

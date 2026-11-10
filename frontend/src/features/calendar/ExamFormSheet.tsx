@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Upload } from 'lucide-react'
 import { Sheet } from '@/components/ui/Sheet'
 import { Button } from '@/components/ui/Button'
 import { FieldGroup, Input, Label, Select } from '@/components/ui/Field'
@@ -10,6 +10,7 @@ import { plannerApi } from '@/api/planner'
 import { EXAM_TYPE_LABEL, MODALITY_LABEL, type Exam, type ExamModality, type ExamType, type Material } from '@/api/types'
 import { usePlannerData } from '@/app/providers/PlannerDataProvider'
 import { formatTime, localDate, toRfc3339 } from '@/lib/format'
+import { MaterialForm } from '@/features/subjects/MaterialForm'
 
 const EXAM_TYPES = Object.keys(EXAM_TYPE_LABEL) as ExamType[]
 
@@ -44,6 +45,8 @@ export function ExamFormSheet({
   const [modality, setModality] = useState<ExamModality>('')
   const [materialIds, setMaterialIds] = useState<string[]>([])
   const [materials, setMaterials] = useState<Material[]>([])
+  // "Subir material": crea el material en la materia (con o sin PDF) y lo deja elegido.
+  const [uploading, setUploading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
@@ -81,6 +84,8 @@ export function ExamFormSheet({
       cancelled = true
     }
   }, [open, subjectId])
+
+  useEffect(() => setUploading(false), [open, subjectId])
 
   function toggleMaterial(id: string) {
     setMaterialIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -194,8 +199,8 @@ export function ExamFormSheet({
         <Label>Material que entra</Label>
         {!materials.length ? (
           <p className="rounded-xl bg-paper px-3 py-2.5 text-xs text-muted">
-            Esta materia no tiene material cargado. Podés agregar teóricos y prácticos en Materias → la materia → Material; mientras
-            tanto, el plan se arma con los temas.
+            Esta materia no tiene material cargado. Subilo acá o en Materias → la materia → Material; mientras tanto, el plan
+            se arma con los temas.
           </p>
         ) : (
           <>
@@ -218,6 +223,26 @@ export function ExamFormSheet({
             <p className="mt-1 text-xs text-subtle">Si no marcás ninguno, entra todo el material de la materia.</p>
           </>
         )}
+        {subjectId &&
+          (uploading ? (
+            <div className="mt-2 rounded-xl border border-border bg-surface p-3">
+              <MaterialForm
+                subjectId={subjectId}
+                submitLabel="Subir y elegir"
+                onCancel={() => setUploading(false)}
+                onCreated={(m) => {
+                  setMaterials((prev) => [...prev, m])
+                  setMaterialIds((prev) => [...prev, m.id])
+                  setUploading(false)
+                }}
+              />
+            </div>
+          ) : (
+            <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={() => setUploading(true)}>
+              <Upload size={14} />
+              Subir material
+            </Button>
+          ))}
       </FieldGroup>
 
       <FieldGroup>

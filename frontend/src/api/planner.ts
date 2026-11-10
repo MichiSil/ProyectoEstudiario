@@ -1,4 +1,4 @@
-import { request } from './client'
+import { downloadFile, request } from './client'
 import type { Availability, ConfirmResult, Difficulty, Exam, ExamModality, ExamType, Material, MaterialKind, PlanProposal, Session, SessionStatus, Subject } from './types'
 
 // Endpoints de planner-service publicados en el api-gateway bajo /api/planner.
@@ -21,8 +21,21 @@ export const plannerApi = {
 
   listMaterials: (subjectId: string) => request<Material[]>(`${base}/subjects/${encodeURIComponent(subjectId)}/materials`),
 
-  createMaterial: (subjectId: string, input: { kind: MaterialKind; title: string; content: string }) =>
-    request<Material>(`${base}/subjects/${encodeURIComponent(subjectId)}/materials`, { method: 'POST', body: input }),
+  /** Sólo el título es obligatorio. Con un PDF (hasta 10 MB) va como multipart; sin archivo, como JSON. */
+  createMaterial: (subjectId: string, input: { kind: MaterialKind; title: string; content: string }, file?: File | null) => {
+    const path = `${base}/subjects/${encodeURIComponent(subjectId)}/materials`
+    if (!file) return request<Material>(path, { method: 'POST', body: input })
+    const form = new FormData()
+    form.set('kind', input.kind)
+    form.set('title', input.title)
+    form.set('content', input.content)
+    form.set('file', file)
+    return request<Material>(path, { method: 'POST', body: form })
+  },
+
+  /** Descarga el PDF de un material propio (RN-03). */
+  downloadMaterial: (material: Material) =>
+    material.file ? downloadFile(`${base}${material.file.downloadPath}`, material.file.fileName) : Promise.resolve(),
 
   deleteMaterial: (materialId: string) =>
     request<void>(`${base}/materials/${encodeURIComponent(materialId)}`, { method: 'DELETE' }),
