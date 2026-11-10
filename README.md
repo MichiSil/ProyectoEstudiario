@@ -636,6 +636,18 @@ Para ver las métricas crudas de un servicio sin Prometheus, desde la red de Doc
 docker compose exec prometheus wget -qO- http://forum-service:9100/metrics | grep ^forum_
 ```
 
+### Jornada de fallas
+
+El 10/11 se provocaron, con tráfico constante, cuatro caídas: una instancia de forum-service, el Club de Beneficios, Solr y PostgreSQL. Qué pasó, el impacto y las acciones: [`docs/POSTMORTEM.md`](docs/POSTMORTEM.md). Para repetirla, [`tests/fallas/sonda.js`](tests/fallas/sonda.js) hace de estudiante (10 pedidos por segundo por el gateway) y anota cada respuesta; los comandos están al final del POSTMORTEM. Lo principal:
+
+```bash
+docker compose stop forum-service-2 ; docker compose start forum-service-2   # el foro sigue con la otra instancia
+CLUB_BASE_URL=http://club-mock:9 docker compose up -d users-service          # Club caído: aviso en Configuración y puntos pendientes
+docker compose up -d users-service                                           # vuelve el Club: se acreditan solos
+docker compose stop solr ; docker compose start solr                         # búsqueda y listado 503; el resto sigue
+docker compose stop postgres ; docker compose start postgres                 # plan 503 y vuelve solo
+```
+
 ### Agente de IA
 
 planner-service arma las propuestas de plan con un agente de IA sobre [Groq](https://console.groq.com) y, si la IA falla, con el motor de reglas (RN-09, [ADR-010](docs/adr/ADR-010-resiliencia.md)). Se configura en el `.env` local:
@@ -720,7 +732,7 @@ El contrato que exportamos y su **mock** (Prism, puerto `4010`) ya están dispon
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Arquitectura general, servicios, datos, comunicaciones y diagramas |
 | [`docs/adr/`](docs/adr/) | Registro de decisiones arquitectónicas (ADR) |
 | [`docs/contracts/`](docs/contracts/) | Contrato versionado de la capacidad publicada para otros grupos |
-| [`docs/POSTMORTEM.md`](docs/POSTMORTEM.md) | Informe de la caída controlada |
+| [`docs/POSTMORTEM.md`](docs/POSTMORTEM.md) | Jornada de fallas controladas: impacto, línea temporal, detección, causas y acciones |
 
 ## Forma de trabajo
 

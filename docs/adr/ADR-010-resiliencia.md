@@ -1,6 +1,6 @@
 # ADR-010: Resiliencia
 
-- **Estado:** Propuesta (se valida con la caída provocada)
+- **Estado:** Aceptada (validada en la jornada de fallas del 2026-11-10, ver [Actualización](#actualización-2026-11-10-jornada-de-fallas))
 - **Fecha:** 2026-10-19
 - **Decisión del enunciado:** D10
 - **Reemplaza a:** —
@@ -166,3 +166,25 @@ La demostración se hace con el sistema levantado con `docker compose`, y cada e
 - Medir la latencia real de Groq y confirmar que 6 s por intento y 8 s en total alcanzan en condiciones normales.
 - Confirmar que 3 fallas seguidas y 30 s de circuito abierto son buenos valores: que el circuito no se abra por fallas aisladas ni tarde demasiado en volver a probar la IA.
 - Medir cuánto tarda un mail en llegar después de que vuelven RabbitMQ o el servidor de mail.
+
+## Actualización (2026-11-10): jornada de fallas
+
+Se hizo la jornada de fallas controladas con el sistema completo en `docker compose`, con tráfico constante por el api-gateway (10 pedidos por segundo durante 43 minutos) y el tablero y las alertas del [ADR-011](ADR-011-observabilidad.md). El informe completo, con la línea de tiempo, el impacto pedido por pedido y las capturas, está en [`docs/POSTMORTEM.md`](../POSTMORTEM.md).
+
+### Qué se comprobó
+
+| Dependencia caída | Lo que decía este ADR | Resultado |
+|---|---|---|
+| Una instancia de forum-service | El gateway la saca del balanceo y la otra atiende todo | **Se cumple.** Salió de la rotación en 10 s, 0 errores en el foro, alertas disparadas y resueltas solas. |
+| Club de Beneficios del Grupo 1 ([ADR-015](ADR-015-club-de-beneficios.md)) | La aprobación no espera al Club; el perfil avisa; los puntos se acreditan al volver | **Se cumple cuando el Club falla rápido:** aprobación `200` en 0,37 s, aviso `CLUB_UNAVAILABLE`, *circuit breaker* abierto y puntos acreditados 1 s después de que volvió, una sola vez. **No se cumple cuando el Club tarda:** ver abajo. |
+| Apache Solr | La búsqueda responde `503 SEARCH_UNAVAILABLE` y el resto del foro sigue | **Se cumple en parte.** Detalle, publicar, aprobar y *mis resúmenes* siguieron, y el índice se puso al día solo al volver. Pero **el listado de aprobados también respondió `503`**: sale de Solr, y la caché sólo lo cubre hasta que vence la página (60 s) o cambia la generación. |
+| PostgreSQL | `503 SERVICE_UNAVAILABLE`, la confirmación es todo o nada y se reintenta con la misma clave sin duplicar | **Se cumple.** `503` durante la caída, vuelta sola 4 s después de que la base estuvo lista, y la confirmación que falló se reintentó después sin duplicar (10 sesiones y 1 confirmación en la base). Cada pedido esperó el timeout de 3 s, porque con `docker compose stop` el nombre `postgres` deja de resolver. |
+
+La degradación de la IA al motor de reglas (escenario principal de la sección 3) no se repitió en la jornada porque el `.env` local no tiene clave de Groq: la cubre el test end-to-end `TestPropuestaConIANoDisponible` y la Entrega 2. Memcached, RabbitMQ y el servidor de mail se probaron antes ([`tests/load/RESULTADOS.md`](../../tests/load/RESULTADOS.md) y la demostración de CA-26 del README).
+
+### Lo que la jornada cambió de este ADR
+
+- **Los timeouts tienen que estar alineados con el del gateway.** El gateway espera 3 s a users-service, pero users-service espera al Club hasta 4 s por intento y a su base 3 s. Si el Club **tarda** (en lugar de rechazar), el gateway corta antes y el estudiante ve `504` en vez del aviso; y como un pedido cancelado no cuenta como falla, el *circuit breaker* no se abre nunca. Regla que se agrega: **dentro de un pedido del usuario, la espera a una dependencia tiene que ser menor que el timeout del gateway hacia ese servicio**, para que la respuesta degradada llegue a tiempo y la falla cuente para el breaker. Queda como acción alta del POSTMORTEM.
+- **Solr no es sólo la búsqueda.** La tabla de forum-service queda así para Solr: *"La búsqueda y el listado de aprobados responden `503 SEARCH_UNAVAILABLE`; el detalle, publicar, moderar y calificar siguen."* La corrección (leer el listado sin texto de MongoDB o servir la copia vencida de la caché si Solr falla) queda como acción alta del POSTMORTEM.
+- **users-service tiene una sola instancia:** reiniciarlo deja sin login ni perfil entre 15 y 65 s. Se acepta para la entrega y queda como acción.
+- **Se corrigió** el encabezado `X-Correlation-Id` que users-service le manda al Club: el contrato pide un UUID y el mock rechazaba los pedidos.
