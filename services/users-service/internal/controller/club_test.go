@@ -107,3 +107,19 @@ func TestCambiarContraseñaPorHTTP(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 }
+
+// Si el gateway cortó el pedido, no se registra como 500 (POSTMORTEM, acción 3).
+func TestPedidoCanceladoNoEsErrorInterno(t *testing.T) {
+	h := newHandler(&memRepo{err: context.Canceled}) // la base corta porque se canceló el pedido
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/me", nil).WithContext(ctx)
+	for k, v := range fromGateway {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 499 {
+		t.Fatalf("status = %d, quería 499 (no 500): %s", rec.Code, rec.Body)
+	}
+}

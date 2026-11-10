@@ -137,7 +137,7 @@ Los logs dieron la causa de cada error sin entrar a los contenedores: `dependenc
 
 ## Hallazgos
 
-### 1. Si el Club tarda, el estudiante ve un error y el breaker no se abre *(pendiente, el más importante)*
+### 1. Si el Club tarda, el estudiante ve un error y el breaker no se abre *(corregido el 2026-11-10)*
 
 **Qué pasó.** En tres momentos el Club **tardó** en lugar de rechazar: el mock recién arrancado (01:50), el mock con la máquina al máximo durante el `start` del escenario 1 (02:09:30), y el DNS de `club-caido.invalid` cuando se repitió la caída para ver el frontend (02:34). En los tres, la pantalla de *Configuración* mostró **"El servidor no respondió a tiempo"** en lugar de *"No pudimos consultar tus puntos"*:
 
@@ -189,9 +189,9 @@ Al empezar, el mock respondía `400` a la consulta de saldo: el contrato del Clu
 
 | # | Acción | Responsable | Prioridad |
 |---|---|---|---|
-| 1 | Alinear los timeouts con el gateway: en los pedidos del usuario, users-service le da al Club menos de 3 s en total (por ejemplo 2,5 s) para responder el aviso a tiempo, y ese corte cuenta como falla para el *circuit breaker*. Lo mismo con el timeout de la base de users-service. Sumar un test con un Club que tarda. | Isabela (users-service) | **Alta** |
+| 1 | Alinear los timeouts con el gateway: en los pedidos del usuario, users-service le da al Club menos de 3 s en total (por ejemplo 2,5 s) para responder el aviso a tiempo, y ese corte cuenta como falla para el *circuit breaker*. Lo mismo con el timeout de la base de users-service. Sumar un test con un Club que tarda. | Isabela (users-service) | ✅ Hecha (`fix/club-timeouts`): gateway 10 s para `/me/club`, saldo y movimientos en paralelo con tope de 7 s, base de users a 2 s, test con un Club que tarda |
 | 2 | Que el listado de aprobados sin texto no dependa de Solr: leerlo de MongoDB si Solr falla, o servir la copia vencida de la caché. Corregir el ADR-010 mientras tanto. | Flor (forum-service) | **Alta** |
-| 3 | No registrar como `500 error interno` un pedido que canceló el gateway | Isabela (users-service) | Media |
+| 3 | No registrar como `500 error interno` un pedido que canceló el gateway | Isabela (users-service) | ✅ Hecha (`fix/club-timeouts`): responde `499` con log `WARN` |
 | 4 | Dos instancias de users-service detrás del gateway, como forum-service, o cargar `CLUB_BASE_URL` sin reiniciar | Grupo | Media |
 | 5 | Healthcheck de RabbitMQ más liviano (`rabbitmq-diagnostics -q ping`) o con más timeout | Grupo | Baja |
 | 6 | Alerta del Club con `max_over_time(users_club_breaker_state[1m]) == 2`, para que el *half-open* no la reinicie; `ConfirmarLento` con un mínimo de confirmaciones | Flor (métricas) | Baja |

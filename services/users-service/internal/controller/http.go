@@ -291,6 +291,12 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		h.Logger.ErrorContext(r.Context(), "dependencia no disponible", "error", err.Error())
 		w.Header().Set("Retry-After", "5")
 		h.problem(w, r, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "el servicio no está disponible en este momento, probá de nuevo en unos segundos", nil)
+	case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
+		// Cortó quien hizo el pedido (el gateway por su timeout, o el cliente):
+		// nadie va a leer la respuesta y no es un error del servicio, así que
+		// no se cuenta como 500 (POSTMORTEM del 2026-11-10, acción 3).
+		h.Logger.WarnContext(r.Context(), "el pedido se canceló antes de terminar", "error", err.Error())
+		w.WriteHeader(499) // convención de nginx: el cliente cerró el pedido
 	default:
 		h.Logger.ErrorContext(r.Context(), "error interno", "error", err.Error())
 		h.problem(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "error interno", nil)

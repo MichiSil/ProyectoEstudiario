@@ -22,7 +22,10 @@ import (
 var schema string
 
 // DefaultTimeout es el tiempo máximo de cada consulta a PostgreSQL (ADR-010).
-const DefaultTimeout = 3 * time.Second
+// Es menor que los 3 s que el api-gateway espera a users-service, así con la
+// base caída el usuario recibe el 503 de acá y no el 504 del gateway
+// (POSTMORTEM del 2026-11-10, acción 1).
+const DefaultTimeout = 2 * time.Second
 
 // Postgres guarda los usuarios en la base `users`. Cada consulta tiene un
 // tiempo máximo y, si la base no responde, devuelve model.ErrUnavailable, que
