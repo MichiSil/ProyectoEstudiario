@@ -431,9 +431,8 @@ func (s *Service) confirmPlan(ctx context.Context, studentID, planID, idempotenc
 // una completada (RF-11, RN-48, RN-49). Posponer deja el plan del examen
 // desactualizado, para que el estudiante lo rehaga con ese tema.
 func (s *Service) SetSessionStatus(ctx context.Context, studentID, sessionID string, to domain.SessionStatus) (domain.Session, error) {
-	now := s.Clock.Now()
 	return s.Repo.UpdateSession(ctx, studentID, sessionID, func(cur domain.Session) (domain.Session, bool, error) {
-		return cur.ChangeStatus(to, now)
+		return cur.ChangeStatus(to)
 	})
 }
 

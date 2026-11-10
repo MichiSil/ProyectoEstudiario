@@ -52,9 +52,9 @@ func TestIntegration_MarcarSesiones(t *testing.T) {
 	}
 	first, second := res.Sessions[0], res.Sessions[1]
 
-	svc.Clock = fixedClock{first.Start.Add(time.Minute)}
+	// RN-48: una sesión que todavía no empezó también se puede completar.
 	if s, err := svc.SetSessionStatus(ctx, student, first.ID, domain.SessionCompleted); err != nil || s.Status != domain.SessionCompleted {
-		t.Fatalf("completar: %+v, %v", s, err)
+		t.Fatalf("completar una sesión futura: %+v, %v", s, err)
 	}
 	if s, err := svc.SetSessionStatus(ctx, student, first.ID, domain.SessionPending); err != nil || s.Status != domain.SessionPending {
 		t.Fatalf("deshacer: %+v, %v", s, err)

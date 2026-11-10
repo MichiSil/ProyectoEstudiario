@@ -234,7 +234,7 @@ curl -H "Authorization: Bearer $TOKEN" -X PATCH $G/sessions/<id de la sesión> \
   -H "Content-Type: application/json" -d '{"status":"completada"}'   # o "pospuesta", o "pendiente" para deshacer
 ```
 
-- Sólo se puede completar desde la hora de inicio de la sesión (RN-48); antes responde `422` con la regla incumplida.
+- Una sesión pendiente se puede completar aunque todavía no haya empezado, para registrar que el estudio se adelantó (RN-48).
 - Posponer libera el horario y deja el plan del examen *desactualizado*, para rehacerlo con ese tema (RN-49). Una pospuesta no vuelve a pendiente.
 
 ### Editar y cancelar exámenes
