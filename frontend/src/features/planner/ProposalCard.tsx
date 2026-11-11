@@ -75,8 +75,8 @@ export function ProposalCard({
       {fellBack && (
         <p className="mt-3 flex items-start gap-2 rounded-xl bg-warning/10 px-3 py-2.5 text-sm text-ink">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
-          El agente de IA no respondió a tiempo, así que armamos el plan con las reglas fijas de anticipación y
-          dificultad. Podés confirmarlo igual.
+          Esta vez el agente de IA no pudo armar un plan válido, así que lo armamos con las reglas fijas de
+          anticipación y dificultad. Podés confirmarlo igual.
         </p>
       )}
 
