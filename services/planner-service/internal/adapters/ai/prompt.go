@@ -101,17 +101,12 @@ func userPrompt(in app.ProposalInput) string {
 	}
 
 	// Las fechas concretas evitan que el modelo tenga que calcular qué día de
-	// la semana cae cada fecha, que es donde más se equivoca.
+	// la semana cae cada fecha, que es donde más se equivoca. Cada franja va
+	// recortada a lo que todavía se puede usar (studyRanges).
 	b.WriteString("Fechas en las que se puede estudiar (usá sólo estas fechas y horarios):\n")
 	examDay := startOfDay(in.Exam.StartsAt.In(loc))
 	for day := windowStart(in); !day.After(examDay); day = day.AddDate(0, 0, 1) {
-		var ranges []string
-		for _, s := range slots {
-			if s.Weekday == day.Weekday() {
-				ranges = append(ranges, clock(s.StartMinute)+" a "+clock(s.EndMinute))
-			}
-		}
-		if len(ranges) > 0 {
+		if ranges := studyRanges(in, day, slots); len(ranges) > 0 {
 			fmt.Fprintf(&b, "- %s (%s): %s\n", day.Format("2006-01-02"), weekdayNames[day.Weekday()], strings.Join(ranges, ", "))
 		}
 	}
@@ -133,6 +128,48 @@ func userPrompt(in app.ProposalInput) string {
 	}
 	return b.String()
 }
+
+// studyRanges devuelve las franjas de un día en las que todavía entra una
+// sesión entera. Hoy empiezan en el próximo cuarto de hora después del momento
+// actual, y el día del examen terminan cuando empieza el examen. Sin este
+// recorte, el modelo ve "hoy de 18:00 a 21:00" a las 19:06, propone una sesión
+// a las 18:00 y la propuesta se descarta por RN-11 (sesión en el pasado o que
+// termina después del examen).
+func studyRanges(in app.ProposalInput, day time.Time, slots []domain.Slot) []string {
+	earliest := ceilQuarter(in.Now.In(day.Location()))
+	latest := in.Exam.StartsAt.In(day.Location())
+	duration := time.Duration(sessionMinutes(in.Availability)) * time.Minute
+	var ranges []string
+	for _, s := range slots {
+		if s.Weekday != day.Weekday() {
+			continue
+		}
+		start := day.Add(time.Duration(s.StartMinute) * time.Minute)
+		end := day.Add(time.Duration(s.EndMinute) * time.Minute)
+		if start.Before(earliest) {
+			start = earliest
+		}
+		if end.After(latest) {
+			end = latest
+		}
+		if !end.After(start) || end.Sub(start) < duration {
+			continue
+		}
+		ranges = append(ranges, clock(minutesFrom(day, start))+" a "+clock(minutesFrom(day, end)))
+	}
+	return ranges
+}
+
+// ceilQuarter redondea hacia arriba al cuarto de hora, para no proponerle al
+// modelo horarios como 19:06.
+func ceilQuarter(t time.Time) time.Time {
+	const quarter = 15 * time.Minute
+	day := startOfDay(t)
+	elapsed := t.Sub(day)
+	return day.Add((elapsed + quarter - 1) / quarter * quarter)
+}
+
+func minutesFrom(day, t time.Time) int { return int(t.Sub(day) / time.Minute) }
 
 func modalityText(m domain.ExamModality) string {
 	switch m {
