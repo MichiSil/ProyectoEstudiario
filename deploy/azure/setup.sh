@@ -77,7 +77,7 @@ done <.env.example
 #     por uno al azar. db-init, mongo-init, minio-init y rabbitmq-init actualizan
 #     la contraseña del usuario en cada arranque, así que sirve también con datos.
 for var in PLANNER_DB_PASSWORD USERS_DB_PASSWORD FORUM_DB_PASSWORD NOTIFICATION_DB_PASSWORD \
-  FORUM_MINIO_SECRET_KEY FORUM_RABBITMQ_PASSWORD NOTIFICATION_RABBITMQ_PASSWORD \
+  FORUM_MINIO_SECRET_KEY PLANNER_MINIO_SECRET_KEY FORUM_RABBITMQ_PASSWORD NOTIFICATION_RABBITMQ_PASSWORD \
   USERS_RABBITMQ_PASSWORD JWT_SECRET INTERNAL_TOKEN GRAFANA_ADMIN_PASSWORD; do
   if [ "$(valor "$var")" = "$(valor "$var" .env.example)" ]; then
     poner "$var" "$(nuevo)"
