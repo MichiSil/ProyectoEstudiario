@@ -140,7 +140,7 @@ type fakeClub struct {
 	mu         sync.Mutex
 	down       bool
 	delay      time.Duration // demora de las lecturas (saldo y movimientos)
-	autoLink   bool // las vinculaciones se completan al instante
+	autoLink   bool          // las vinculaciones se completan al instante
 	registered map[string]bool
 	completed  map[string]bool
 	credited   map[string]int // eventId → puntos

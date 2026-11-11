@@ -37,9 +37,23 @@ func New(pool *pgxpool.Pool, ids app.IDGenerator) *Repository {
 }
 
 // Migrate aplica el esquema. Es idempotente.
+// Migrate aplica el esquema dentro de una transacción con un lock de la base:
+// si dos procesos arrancan a la vez (o dos paquetes de tests corren en
+// paralelo), el segundo espera al primero en lugar de aplicar los ALTER TABLE
+// al mismo tiempo, que pueden trabarse entre sí (deadlock).
 func (r *Repository) Migrate(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, schema)
-	return err
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op si ya se hizo commit
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('planner-schema'))`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, schema); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) Ping(ctx context.Context) error { return r.pool.Ping(ctx) }

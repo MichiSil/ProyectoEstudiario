@@ -84,8 +84,13 @@ func newSummary(category string) model.Summary {
 	}
 }
 
+// event arma un evento de prueba ya marcado como publicado: si el sistema está
+// levantado mientras corren estos tests, el relay de forum-service no lo manda
+// a RabbitMQ (sus datos son falsos y los consumidores lo mandarían a la DLQ).
 func event(t string) model.OutboxEvent {
-	return model.OutboxEvent{EventID: newID(), EventType: t, EventVersion: 1, OccurredAt: time.Now().UTC(), Producer: "forum-service", Data: map[string]any{"x": 1}}
+	now := time.Now().UTC()
+	return model.OutboxEvent{EventID: newID(), EventType: t, EventVersion: 1, OccurredAt: now, Producer: "forum-service",
+		Data: map[string]any{"x": 1}, PublishedAt: &now}
 }
 
 func TestDosModeracionesSimultaneasSoloGanaUna(t *testing.T) {
@@ -128,8 +133,8 @@ func TestDosModeracionesSimultaneasSoloGanaUna(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Outbox) != 1 || got.Outbox[0].PublishedAt != nil {
-		t.Errorf("outbox = %+v, se esperaba un único evento sin publicar", got.Outbox)
+	if len(got.Outbox) != 1 {
+		t.Errorf("outbox = %+v, se esperaba un único evento", got.Outbox)
 	}
 	if (got.Status == model.StatusApproved) != (got.Outbox[0].EventType == model.EventApproved) {
 		t.Errorf("el estado %q no coincide con el evento %q", got.Status, got.Outbox[0].EventType)

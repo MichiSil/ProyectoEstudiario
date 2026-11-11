@@ -65,7 +65,7 @@ No hay llamadas síncronas entre servicios propios: cada pedido del usuario lo r
 | api-gateway → planner-service | 5 s; **12 s** para pedir una propuesta de plan | Igual que la fila anterior | Igual que la fila anterior |
 | api-gateway → forum-service | 5 s; **20 s** para subir un PDF | Igual que la fila anterior | Igual que la fila anterior |
 | planner-service → proveedor de IA | **8 s de presupuesto total**: un intento de hasta 6 s y, como mucho, un reintento | 1 reintento, sólo si el primer intento falló rápido (error de conexión, `429` o `5xx`) y quedan al menos 3 s del presupuesto. Espera de 300 ms ± 20 %. | Se arma la propuesta con el motor de reglas (RN-09) y se marca `generatedBy: reglas` |
-| sistema de otro grupo → planner-service | planner-service responde en menos de **10 s** (8 s de la IA + motor de reglas) | Los decide el consumidor; le recomendamos timeout de 12 s y hasta 3 reintentos con la misma `Idempotency-Key` | Ver la tabla de errores del [contrato](../contracts/README.md#8-errores) |
+| sistema de otro grupo → planner-service | planner-service responde en menos de **10 s** (8 s de la IA + motor de reglas) | Los decide el consumidor; le recomendamos timeout de 12 s y hasta 3 reintentos con la misma `Idempotency-Key` | Ver la tabla de errores del [contrato](../contracts/README.md#9-errores) |
 
 Criterios detrás de los valores:
 
